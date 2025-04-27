@@ -1,0 +1,37 @@
+{
+  "ignoreDomains": [
+    "googletagmanager.com",
+    "googleapis.com",
+    "amung.us",
+    "cloudflare.com",
+    "facebook.net",
+    "histats.com",
+    "bootstrapcdn.com",
+    "cloudfront.net",
+    "google.com",
+    "gstatic.com"
+],
+ "sites": [
+    {
+    "url": "https://www.anandtech.com/",
+    "filterRegex": ".",
+    "resourceTypes": ["script", "xhr", "document"],
+    "reload": 1,
+    "timeout": 25000,
+    "delay": 5000,
+    "verbose": 1,
+    "interact": true
+  },
+  {
+    "url": "https://www.tomshardware.com/",
+    "filterRegex": ".",
+    "resourceTypes": ["all"],
+    "reload": 2,
+    "timeout": 25000,
+    "delay": 15000,
+    "verbose": 1,
+    "interact": true,
+    "fingerprint_protection": "random"
+  }
+ ]
+}
