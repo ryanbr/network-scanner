@@ -36,6 +36,10 @@ Options:
   --localhost                 Output as 127.0.0.1 domain.com
   --localhost-0.0.0.0         Output as 0.0.0.0 domain.com
   --help, -h                  Show this help menu
+
+Per-site options in config.json:
+  interact: true/false            Fake mouse move, click, hover (default: false)
+  isBrave: true/false              Fake Brave browser detection (default: false)
 `);
   process.exit(0);
 }
@@ -70,8 +74,17 @@ function getRootDomain(url) {
 
     let page;
     try {
+      const isBraveEnabled = site.isBrave === true;
       page = await browser.newPage();
       await page.setRequestInterception(true);
+      if (isBraveEnabled) {
+        await page.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, 'brave', {
+            get: () => ({ isBrave: () => Promise.resolve(true) })
+          });
+        });
+        if (forceDebug) console.log(`    [debug] isBrave faked`);
+      }
     } catch (err) {
       console.warn(`⚠ Failed to open page: ${err.message}`);
       continue;
