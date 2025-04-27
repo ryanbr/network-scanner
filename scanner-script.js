@@ -118,8 +118,27 @@ function getRootDomain(url) {
     });
 
     try {
-      await page.goto(site.url, { waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
-      await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
+const interactEnabled = site.interact === true;
+
+await page.goto(site.url, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
+
+if (interactEnabled) {
+  try {
+    const randomX = Math.floor(Math.random() * 500) + 50;
+    const randomY = Math.floor(Math.random() * 500) + 50;
+    await page.mouse.move(randomX, randomY, { steps: 10 });
+    await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
+    await page.mouse.click(randomX + 25, randomY + 25);
+    await page.hover('body');
+    if (forceDebug) console.log(`    [debug] Randomly interacted during loading at (${randomX}, ${randomY})`);
+  } catch (e) {
+    if (forceDebug) console.log(`    [debug] Interaction during load failed: ${e.message}`);
+  }
+}
+
+    await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
+    await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
+
       for (let i = 1; i < (site.reload || 1); i++) {
         if (!silentMode && site.reload > 1) console.log(`  → Reload ${i+1}/${site.reload}`);
         await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
