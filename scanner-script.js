@@ -96,8 +96,10 @@ function getRootDomain(url) {
 
       if (((allowFirstParty && !isThirdPartyRequest) || (allowThirdParty && isThirdPartyRequest)) && regexes.some(re => re.test(reqUrl))) {
         matchedDomains.add(reqDomain);
-        if (forceDebug || dumpUrls) {
+        if (forceDebug) {
           console.log(`    [debug] Request matched: ${reqUrl}`);
+        }
+        if (dumpUrls) {
           fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
         }
       }
