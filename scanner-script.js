@@ -41,7 +41,9 @@ Per-site options in config.json:
   isBrave: true/false               Fake Brave browser detection (default: false)
   userAgent: "chrome"|"firefox"|"safari"  Set custom desktop User-Agent (optional)
   blocked: [array]                  List of regex patterns to block network requests
-  delay: <milliseconds>             Delay after load/reload (default: 2000)`);
+  delay: <milliseconds>             Delay after load/reload (default: 2000)
+  reload: <number>                  Number of reloads after load (default: 1)
+  subDomains: 1/0                  Enable full subdomains per site (default: 0)`);
   process.exit(0);
 }
 
@@ -65,6 +67,7 @@ function getRootDomain(url) {
   for (const site of sites) {
     const allowFirstParty = site.firstParty === 1;
     const allowThirdParty = site.thirdParty === undefined || site.thirdParty === 1;
+    const perSiteSubDomains = site.subDomains === 1 ? true : subDomainsMode;
 
     if (site.firstParty === 0 && site.thirdParty === 0) {
       console.warn(`⚠ Skipping ${site.url} because both firstParty and thirdParty are explicitly disabled.`);
@@ -126,7 +129,7 @@ function getRootDomain(url) {
         return;
       }
 
-      const reqDomain = subDomainsMode ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
+      const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
       if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
         request.continue();
