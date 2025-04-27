@@ -83,8 +83,18 @@ function getRootDomain(url) {
 
     const matchedDomains = new Set();
 
+    const blockedRegexes = Array.isArray(site.blocked) ? site.blocked.map(pattern => new RegExp(pattern)) : [];
+
     page.on('request', request => {
       const reqUrl = request.url();
+
+      if (blockedRegexes.some(re => re.test(reqUrl))) {
+        if (forceDebug) {
+          console.log(`    [debug] Blocked: ${reqUrl}`);
+        }
+        request.abort();
+        return;
+      }
       const reqDomain = subDomainsMode ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
       if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
