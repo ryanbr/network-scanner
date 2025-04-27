@@ -1,4 +1,4 @@
-// thirdPartyScanner.js
+// Network scanner script
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
@@ -85,7 +85,7 @@ function getRootDomain(url) {
 
     page.on('request', request => {
       const reqUrl = request.url();
-      const reqDomain = getRootDomain(reqUrl);
+      const reqDomain = subDomainsMode ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
       if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
         request.continue();
