@@ -39,7 +39,9 @@ Options:
 Per-site options in config.json:
   interact: true/false             Fake mouse move, click, hover (default: false)
   isBrave: true/false               Fake Brave browser detection (default: false)
-  userAgent: "chrome"|"firefox"|"safari"  Set custom desktop User-Agent (optional)`);
+  userAgent: "chrome"|"firefox"|"safari"  Set custom desktop User-Agent (optional)
+  blocked: [array]                  List of regex patterns to block network requests
+  delay: <milliseconds>             Delay after load/reload (default: 2000)`);
   process.exit(0);
 }
 
@@ -164,13 +166,14 @@ function getRootDomain(url) {
         }
       }
 
+      const delayMs = site.delay || 2000;
       await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
-      await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
+      await new Promise(resolve => setTimeout(resolve, delayMs));
 
       for (let i = 1; i < (site.reload || 1); i++) {
         if (!silentMode && site.reload > 1) console.log(`  → Reload ${i + 1}/${site.reload}`);
         await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
-        await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
 
       await page.close();
