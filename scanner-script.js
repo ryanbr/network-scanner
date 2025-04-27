@@ -22,8 +22,7 @@ const localhostMode = args.includes('--localhost');
 const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 
 if (args.includes('--help') || args.includes('-h')) {
-  console.log(`
-Usage: node scanner-script.js [options]
+  console.log(`Usage: node scanner-script.js [options]
 
 Options:
   -o, --output <file>         Output file (default: adblock_rules.txt)
@@ -38,9 +37,9 @@ Options:
   --help, -h                  Show this help menu
 
 Per-site options in config.json:
-  interact: true/false            Fake mouse move, click, hover (default: false)
-  isBrave: true/false              Fake Brave browser detection (default: false)
-`);
+  interact: true/false             Fake mouse move, click, hover (default: false)
+  isBrave: true/false               Fake Brave browser detection (default: false)
+  userAgent: "chrome"|"firefox"|"safari"  Set custom desktop User-Agent (optional)`);
   process.exit(0);
 }
 
@@ -77,6 +76,23 @@ function getRootDomain(url) {
       const isBraveEnabled = site.isBrave === true;
       page = await browser.newPage();
       await page.setRequestInterception(true);
+
+      // Handle userAgent if specified
+      const userAgentOption = site.userAgent;
+      if (userAgentOption) {
+        const userAgents = {
+          chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
+          firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
+          safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+        };
+        const ua = userAgents[userAgentOption.toLowerCase()];
+        if (ua) {
+          await page.setUserAgent(ua);
+          if (forceDebug) console.log(`    [debug] User-Agent set to ${userAgentOption}`);
+        } else if (forceDebug) {
+          console.log(`    [debug] Unknown userAgent option: ${userAgentOption}`);
+        }
+      }
       if (isBraveEnabled) {
         await page.evaluateOnNewDocument(() => {
           Object.defineProperty(navigator, 'brave', {
@@ -95,7 +111,6 @@ function getRootDomain(url) {
       : [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))];
 
     const matchedDomains = new Set();
-
     const blockedRegexes = Array.isArray(site.blocked) ? site.blocked.map(pattern => new RegExp(pattern)) : [];
 
     page.on('request', request => {
@@ -108,6 +123,7 @@ function getRootDomain(url) {
         request.abort();
         return;
       }
+
       const reqDomain = subDomainsMode ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
       if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
@@ -131,32 +147,33 @@ function getRootDomain(url) {
     });
 
     try {
-const interactEnabled = site.interact === true;
+      const interactEnabled = site.interact === true;
+      await page.goto(site.url, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
 
-await page.goto(site.url, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
+      if (interactEnabled) {
+        try {
+          const randomX = Math.floor(Math.random() * 500) + 50;
+          const randomY = Math.floor(Math.random() * 500) + 50;
+          await page.mouse.move(randomX, randomY, { steps: 10 });
+          await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
+          await page.mouse.click(randomX + 25, randomY + 25);
+          await page.hover('body');
+          if (forceDebug) console.log(`    [debug] Randomly interacted during loading at (${randomX}, ${randomY})`);
+        } catch (e) {
+          if (forceDebug) console.log(`    [debug] Interaction during load failed: ${e.message}`);
+        }
+      }
 
-if (interactEnabled) {
-  try {
-    const randomX = Math.floor(Math.random() * 500) + 50;
-    const randomY = Math.floor(Math.random() * 500) + 50;
-    await page.mouse.move(randomX, randomY, { steps: 10 });
-    await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
-    await page.mouse.click(randomX + 25, randomY + 25);
-    await page.hover('body');
-    if (forceDebug) console.log(`    [debug] Randomly interacted during loading at (${randomX}, ${randomY})`);
-  } catch (e) {
-    if (forceDebug) console.log(`    [debug] Interaction during load failed: ${e.message}`);
-  }
-}
-
-    await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
-    await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
+      await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
+      await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
 
       for (let i = 1; i < (site.reload || 1); i++) {
-        if (!silentMode && site.reload > 1) console.log(`  → Reload ${i+1}/${site.reload}`);
+        if (!silentMode && site.reload > 1) console.log(`  → Reload ${i + 1}/${site.reload}`);
         await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
         await new Promise(resolve => setTimeout(resolve, site.delay || 2000));
       }
+
+      await page.close();
     } catch (err) {
       console.warn(`⚠ Failed to load: ${site.url} (${err.message})`);
     }
@@ -175,12 +192,7 @@ if (interactEnabled) {
       }
     });
 
-    siteRules.push({
-      url: site.url,
-      rules: siteMatchedDomains
-    });
-
-    if (page) await page.close();
+    siteRules.push({ url: site.url, rules: siteMatchedDomains });
   }
 
   const outputLines = [];
