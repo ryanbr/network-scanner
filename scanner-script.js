@@ -82,7 +82,7 @@ function getRootDomain(url) {
       console.warn(`⚠ Skipping ${site.url} because both firstParty and thirdParty are explicitly disabled.`);
       continue;
     }
-
+    let pageLoadFailed = false;
     if (!silentMode) console.log(`\nScanning: ${site.url}`);
 
     let page;
@@ -116,6 +116,7 @@ function getRootDomain(url) {
       }
     } catch (err) {
       console.warn(`⚠ Failed to open page: ${err.message}`);
+      pageLoadFailed = true;
       continue;
     }
 
@@ -175,20 +176,7 @@ function getRootDomain(url) {
       await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
       await new Promise(resolve => setTimeout(resolve, delayMs));
 
-      if (site.source === true) {
-        if (!fs.existsSync(SOURCES_FOLDER)) {
-          fs.mkdirSync(SOURCES_FOLDER);
-        }
-
-        const pageContent = await page.content();
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
-        const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}-source.txt`;
-        fs.writeFileSync(filename, pageContent);
-        if (!silentMode) console.log(`Saved page source to ${filename}`);
-      }
-
-      for (let i = 1; i < (site.reload || 1); i++) {
+       for (let i = 1; i < (site.reload || 1); i++) {
         if (!silentMode && site.reload > 1) console.log(`  → Reload ${i + 1}/${site.reload}`);
         await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
         await new Promise(resolve => setTimeout(resolve, delayMs));
@@ -197,18 +185,23 @@ function getRootDomain(url) {
       await page.close();
     } catch (err) {
       console.warn(`⚠ Failed to load: ${site.url} (${err.message})`);
-      if (site.source === true && page) {
-        if (!fs.existsSync(SOURCES_FOLDER)) {
-          fs.mkdirSync(SOURCES_FOLDER);
-        }
-        const pageContent = await page.content();
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
-        const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}-FAILED-source.txt`;
-        fs.writeFileSync(filename, pageContent);
-        if (!silentMode) console.log(`Saved (partial) page source to ${filename}`);
-      }
+      pageLoadFailed = true;
     }
+
+    if (site.source === true && page) {
+      if (!fs.existsSync(SOURCES_FOLDER)) {
+        fs.mkdirSync(SOURCES_FOLDER);
+      }
+      const pageContent = await page.content();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+      const statusLabel = pageLoadFailed ? '-FAILED' : '';
+      const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}${statusLabel}-source.txt`;
+      fs.writeFileSync(filename, pageContent);
+      if (forceDebug) console.log(`    [debug] Saved page source to ${filename}`);
+    }
+
+
 
     const siteMatchedDomains = [];
 
