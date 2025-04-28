@@ -6,6 +6,9 @@ const psl = require('psl');
 
 const args = process.argv.slice(2);
 
+// Constant for storing saved page sources
+const SOURCES_FOLDER = 'sources';
+
 let outputFile = 'adblock_rules.txt';
 const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
 if (outputIndex !== -1 && args[outputIndex + 1]) {
@@ -18,6 +21,7 @@ const silentMode = args.includes('--silent');
 const showTitles = args.includes('--titles');
 const dumpUrls = args.includes('--dumpurls');
 const subDomainsMode = args.includes('--sub-domains');
+
 const localhostMode = args.includes('--localhost');
 const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 
@@ -34,7 +38,7 @@ Options:
   --sub-domains                   Output full subdomains instead of collapsing
   --localhost                     Output as 127.0.0.1 domain.com
   --localhost-0.0.0.0             Output as 0.0.0.0 domain.com
-  --help, -h                      Show this help menu
+    --help, -h                      Show this help menu
 
 Per-site options in config.json:
   interact: true/false             Fake mouse move, click, hover (default: false)
@@ -45,7 +49,8 @@ Per-site options in config.json:
   reload: <number>                  Number of reloads after load (default: 1)
   subDomains: 1/0                   Enable full subdomains per site (default: 0)
   localhost: true/false             Output as 127.0.0.1 domain (default: false)
-  localhost_0_0_0_0: true/false     Output as 0.0.0.0 domain (default: false)`);
+  localhost_0_0_0_0: true/false     Output as 0.0.0.0 domain (default: false)
+  source: true/false                Save page HTML source after load (default: false)`);
   process.exit(0);
 }
 
@@ -170,6 +175,19 @@ function getRootDomain(url) {
       await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
       await new Promise(resolve => setTimeout(resolve, delayMs));
 
+      if (site.source === true) {
+        if (!fs.existsSync(SOURCES_FOLDER)) {
+          fs.mkdirSync(SOURCES_FOLDER);
+        }
+
+        const pageContent = await page.content();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}-source.txt`;
+        fs.writeFileSync(filename, pageContent);
+        if (!silentMode) console.log(`Saved page source to ${filename}`);
+      }
+
       for (let i = 1; i < (site.reload || 1); i++) {
         if (!silentMode && site.reload > 1) console.log(`  → Reload ${i + 1}/${site.reload}`);
         await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
@@ -179,6 +197,17 @@ function getRootDomain(url) {
       await page.close();
     } catch (err) {
       console.warn(`⚠ Failed to load: ${site.url} (${err.message})`);
+      if (site.source === true && page) {
+        if (!fs.existsSync(SOURCES_FOLDER)) {
+          fs.mkdirSync(SOURCES_FOLDER);
+        }
+        const pageContent = await page.content();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}-FAILED-source.txt`;
+        fs.writeFileSync(filename, pageContent);
+        if (!silentMode) console.log(`Saved (partial) page source to ${filename}`);
+      }
     }
 
     const siteMatchedDomains = [];
