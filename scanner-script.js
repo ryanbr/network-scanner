@@ -25,16 +25,16 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node scanner-script.js [options]
 
 Options:
-  -o, --output <file>         Output file (default: adblock_rules.txt)
-  --verbose                   Force verbose mode globally
-  --debug                     Force debug mode globally
-  --silent                    Suppress normal console logs
-  --titles                    Add ! <url> title before each site's group
-  --dumpurls                  Dump full matched URLs into matched_urls.log
-  --sub-domains               Output full subdomains instead of collapsing
-  --localhost                 Output as 127.0.0.1 domain.com
-  --localhost-0.0.0.0         Output as 0.0.0.0 domain.com
-  --help, -h                  Show this help menu
+  -o, --output <file>             Output file (default: adblock_rules.txt)
+  --verbose                       Force verbose mode globally
+  --debug                         Force debug mode globally
+  --silent                        Suppress normal console logs
+  --titles                        Add ! <url> title before each site's group
+  --dumpurls                      Dump full matched URLs into matched_urls.log
+  --sub-domains                   Output full subdomains instead of collapsing
+  --localhost                     Output as 127.0.0.1 domain.com
+  --localhost-0.0.0.0             Output as 0.0.0.0 domain.com
+  --help, -h                      Show this help menu
 
 Per-site options in config.json:
   interact: true/false             Fake mouse move, click, hover (default: false)
@@ -43,7 +43,9 @@ Per-site options in config.json:
   blocked: [array]                  List of regex patterns to block network requests
   delay: <milliseconds>             Delay after load/reload (default: 2000)
   reload: <number>                  Number of reloads after load (default: 1)
-  subDomains: 1/0                  Enable full subdomains per site (default: 0)`);
+  subDomains: 1/0                   Enable full subdomains per site (default: 0)
+  localhost: true/false             Output as 127.0.0.1 domain (default: false)
+  localhost_0_0_0_0: true/false     Output as 0.0.0.0 domain (default: false)`);
   process.exit(0);
 }
 
@@ -68,6 +70,8 @@ function getRootDomain(url) {
     const allowFirstParty = site.firstParty === 1;
     const allowThirdParty = site.thirdParty === undefined || site.thirdParty === 1;
     const perSiteSubDomains = site.subDomains === 1 ? true : subDomainsMode;
+    const siteLocalhost = site.localhost === true;
+    const siteLocalhostAlt = site.localhost_0_0_0_0 === true;
 
     if (site.firstParty === 0 && site.thirdParty === 0) {
       console.warn(`⚠ Skipping ${site.url} because both firstParty and thirdParty are explicitly disabled.`);
@@ -82,7 +86,6 @@ function getRootDomain(url) {
       page = await browser.newPage();
       await page.setRequestInterception(true);
 
-      // Handle userAgent if specified
       const userAgentOption = site.userAgent;
       if (userAgentOption) {
         const userAgents = {
@@ -122,9 +125,7 @@ function getRootDomain(url) {
       const reqUrl = request.url();
 
       if (blockedRegexes.some(re => re.test(reqUrl))) {
-        if (forceDebug) {
-          console.log(`    [debug] Blocked: ${reqUrl}`);
-        }
+        if (forceDebug) console.log(`    [debug] Blocked: ${reqUrl}`);
         request.abort();
         return;
       }
@@ -140,12 +141,8 @@ function getRootDomain(url) {
 
       if (((allowFirstParty && !isThirdPartyRequest) || (allowThirdParty && isThirdPartyRequest)) && regexes.some(re => re.test(reqUrl))) {
         matchedDomains.add(reqDomain);
-        if (forceDebug) {
-          console.log(`    [debug] Request matched: ${reqUrl}`);
-        }
-        if (dumpUrls) {
-          fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
-        }
+        if (forceDebug) console.log(`    [debug] Request matched: ${reqUrl}`);
+        if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
       }
 
       request.continue();
@@ -191,6 +188,10 @@ function getRootDomain(url) {
         if (localhostMode) {
           siteMatchedDomains.push(`127.0.0.1 ${domain}`);
         } else if (localhostModeAlt) {
+          siteMatchedDomains.push(`0.0.0.0 ${domain}`);
+        } else if (siteLocalhost && !siteLocalhostAlt) {
+          siteMatchedDomains.push(`127.0.0.1 ${domain}`);
+        } else if (siteLocalhostAlt && !siteLocalhost) {
           siteMatchedDomains.push(`0.0.0.0 ${domain}`);
         } else {
           siteMatchedDomains.push(`||${domain}^`);
