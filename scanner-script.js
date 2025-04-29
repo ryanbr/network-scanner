@@ -1,19 +1,17 @@
-// Network scanner script
+// === Network scanner script v0.8.0 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const args = process.argv.slice(2);
+const VERSION = '0.8.0';
 
-// Constant for storing saved page sources
+const args = process.argv.slice(2);
 const SOURCES_FOLDER = 'sources';
 
 let outputFile = 'adblock_rules.txt';
 const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
-if (outputIndex !== -1 && args[outputIndex + 1]) {
-  outputFile = args[outputIndex + 1];
-}
+if (outputIndex !== -1 && args[outputIndex + 1]) outputFile = args[outputIndex + 1];
 
 const forceVerbose = args.includes('--verbose');
 const forceDebug = args.includes('--debug');
@@ -21,38 +19,48 @@ const silentMode = args.includes('--silent');
 const showTitles = args.includes('--titles');
 const dumpUrls = args.includes('--dumpurls');
 const subDomainsMode = args.includes('--sub-domains');
-
 const localhostMode = args.includes('--localhost');
 const localhostModeAlt = args.includes('--localhost-0.0.0.0');
+const disableInteract = args.includes('--no-interact');
+
+if (args.includes('--version')) {
+  console.log(`scanner-script.js version ${VERSION}`);
+  process.exit(0);
+}
 
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node scanner-script.js [options]
 
 Options:
-  -o, --output <file>             Output file (default: adblock_rules.txt)
-  --verbose                       Force verbose mode globally
-  --debug                         Force debug mode globally
-  --silent                        Suppress normal console logs
-  --titles                        Add ! <url> title before each site's group
-  --dumpurls                      Dump full matched URLs into matched_urls.log
-  --sub-domains                   Output full subdomains instead of collapsing
-  --localhost                     Output as 127.0.0.1 domain.com
-  --localhost-0.0.0.0             Output as 0.0.0.0 domain.com
-    --help, -h                      Show this help menu
+  -o, --output <file>            Output file (default: adblock_rules.txt)
+  --verbose                      Force verbose mode globally
+  --debug                        Force debug mode globally
+  --silent                       Suppress normal console logs
+  --titles                       Add ! <url> title before each site's group
+  --dumpurls                     Dump matched URLs into matched_urls.log
+  --sub-domains                  Output full subdomains instead of collapsing to root
+  --localhost                    Output as 127.0.0.1 domain.com
+  --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
+  --no-interact                  Disable page interactions globally
+  --help, -h                     Show this help menu
+  --version                      Show script version
 
-Per-site options in config.json:
-  interact: true/false             Fake mouse move, click, hover (default: false)
-  isBrave: true/false               Fake Brave browser detection (default: false)
-  userAgent: "chrome"|"firefox"|"safari"  Set custom desktop User-Agent (optional)
-  blocked: [array]                  List of regex patterns to block network requests
-  delay: <milliseconds>             Delay after load/reload (default: 2000)
-  reload: <number>                  Number of reloads after load (default: 1)
-  subDomains: 1/0                   Enable full subdomains per site (default: 0)
-  localhost: true/false             Output as 127.0.0.1 domain (default: false)
-  localhost_0_0_0_0: true/false     Output as 0.0.0.0 domain (default: false)
-  source: true/false                Save page HTML source after load (default: false)
-  firstParty: true/false            Allow output of first-party network matches (default: false)
-  thirdParty: true/false            Allow matching third-party network items (default: true)`);
+Per-site config.json options:
+  url: "site" or ["site1", "site2"]   Single URL or list of URLs
+  filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
+  interact: true/false            Simulate mouse movements/clicks
+  isBrave: true/false             Spoof Brave browser detection
+  userAgent: "chrome"|"firefox"|"safari"  Custom desktop User-Agent
+  blocked: ["regex"]              Regex patterns to block requests
+  delay: <milliseconds>           Delay after load (default: 2000)
+  reload: <number>                Reload page n times after load (default: 1)
+  subDomains: 1/0                 Output full subdomains (default: 0)
+  localhost: true/false           Force localhost output (127.0.0.1)
+  localhost_0_0_0_0: true/false   Force localhost output (0.0.0.0)
+  source: true/false              Save page source HTML after load
+  firstParty: true/false          Allow first-party matches (default: false)
+  thirdParty: true/false          Allow third-party matches (default: true)
+`);
   process.exit(0);
 }
 
@@ -74,166 +82,128 @@ function getRootDomain(url) {
   const siteRules = [];
 
   for (const site of sites) {
-    const allowFirstParty = site.firstParty === 1;
-    const allowThirdParty = site.thirdParty === undefined || site.thirdParty === 1;
-    const perSiteSubDomains = site.subDomains === 1 ? true : subDomainsMode;
-    const siteLocalhost = site.localhost === true;
-    const siteLocalhostAlt = site.localhost_0_0_0_0 === true;
+    const urls = Array.isArray(site.url) ? site.url : [site.url];
 
-    if (site.firstParty === 0 && site.thirdParty === 0) {
-      console.warn(`⚠ Skipping ${site.url} because both firstParty and thirdParty are explicitly disabled.`);
-      continue;
-    }
-    let pageLoadFailed = false;
-    if (!silentMode) console.log(`\nScanning: ${site.url}`);
+    for (const currentUrl of urls) {
+      const allowFirstParty = site.firstParty === 1;
+      const allowThirdParty = site.thirdParty === undefined || site.thirdParty === 1;
+      const perSiteSubDomains = site.subDomains === 1 ? true : subDomainsMode;
+      const siteLocalhost = site.localhost === true;
+      const siteLocalhostAlt = site.localhost_0_0_0_0 === true;
 
-    let page;
-    try {
-      const isBraveEnabled = site.isBrave === true;
-      page = await browser.newPage();
-      await page.setRequestInterception(true);
+      if (site.firstParty === 0 && site.thirdParty === 0) {
+        console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
+        continue;
+      }
 
-      const userAgentOption = site.userAgent;
-      if (userAgentOption) {
-        const userAgents = {
-          chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-          firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
-          safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
-        };
-        const ua = userAgents[userAgentOption.toLowerCase()];
-        if (ua) {
-          await page.setUserAgent(ua);
-          if (forceDebug) console.log(`    [debug] User-Agent set to ${userAgentOption}`);
-        } else if (forceDebug) {
-          console.log(`    [debug] Unknown userAgent option: ${userAgentOption}`);
+      let page;
+      const matchedDomains = new Set();
+      let pageLoadFailed = false;
+
+      if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
+
+      try {
+        page = await browser.newPage();
+        await page.setRequestInterception(true);
+
+        if (site.userAgent) {
+          const userAgents = {
+            chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
+            firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
+            safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+          };
+          const ua = userAgents[site.userAgent.toLowerCase()];
+          if (ua) await page.setUserAgent(ua);
         }
-      }
-      if (isBraveEnabled) {
-        await page.evaluateOnNewDocument(() => {
-          Object.defineProperty(navigator, 'brave', {
-            get: () => ({ isBrave: () => Promise.resolve(true) })
+
+        if (site.isBrave) {
+          await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'brave', {
+              get: () => ({ isBrave: () => Promise.resolve(true) })
+            });
           });
-        });
-        if (forceDebug) console.log(`    [debug] isBrave faked`);
-      }
-    } catch (err) {
-      console.warn(`⚠ Failed to open page: ${err.message}`);
-      pageLoadFailed = true;
-      continue;
-    }
-
-    const regexes = Array.isArray(site.filterRegex)
-      ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
-      : [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))];
-
-    const matchedDomains = new Set();
-    const blockedRegexes = Array.isArray(site.blocked) ? site.blocked.map(pattern => new RegExp(pattern)) : [];
-
-    page.on('request', request => {
-      const reqUrl = request.url();
-
-      if (blockedRegexes.some(re => re.test(reqUrl))) {
-        if (forceDebug) console.log(`    [debug] Blocked: ${reqUrl}`);
-        request.abort();
-        return;
+        }
+      } catch (err) {
+        console.warn(`⚠ Failed to open page: ${err.message}`);
+        pageLoadFailed = true;
+        continue;
       }
 
-      const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
+      const regexes = Array.isArray(site.filterRegex)
+        ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
+        : [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))];
 
-      if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
+      const blockedRegexes = Array.isArray(site.blocked)
+        ? site.blocked.map(pattern => new RegExp(pattern))
+        : [];
+
+      page.on('request', request => {
+        const reqUrl = request.url();
+
+        if (blockedRegexes.some(re => re.test(reqUrl))) {
+          request.abort();
+          return;
+        }
+
+        const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
+
+        if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
+          request.continue();
+          return;
+        }
+
+        if (regexes.some(re => re.test(reqUrl))) {
+          matchedDomains.add(reqDomain);
+          if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
+        }
+
         request.continue();
-        return;
-      }
+      });
 
-      const isThirdPartyRequest = true;
+      try {
+        const interactEnabled = site.interact === true;
+        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
 
-      if (((allowFirstParty && !isThirdPartyRequest) || (allowThirdParty && isThirdPartyRequest)) && regexes.some(re => re.test(reqUrl))) {
-        matchedDomains.add(reqDomain);
-        if (forceDebug) console.log(`    [debug] Request matched: ${reqUrl}`);
-        if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
-      }
-
-      request.continue();
-    });
-
-    try {
-      const interactEnabled = site.interact === true;
-      await page.goto(site.url, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
-
-      if (interactEnabled) {
-        try {
+        if (interactEnabled && !disableInteract) {
           const randomX = Math.floor(Math.random() * 500) + 50;
           const randomY = Math.floor(Math.random() * 500) + 50;
           await page.mouse.move(randomX, randomY, { steps: 10 });
           await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
           await page.mouse.click(randomX + 25, randomY + 25);
           await page.hover('body');
-          if (forceDebug) console.log(`    [debug] Randomly interacted during loading at (${randomX}, ${randomY})`);
-        } catch (e) {
-          if (forceDebug) console.log(`    [debug] Interaction during load failed: ${e.message}`);
         }
-      }
 
-      const delayMs = site.delay || 2000;
-      await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
-      await new Promise(resolve => setTimeout(resolve, delayMs));
-
-       for (let i = 1; i < (site.reload || 1); i++) {
-        if (!silentMode && site.reload > 1) console.log(`  → Reload ${i + 1}/${site.reload}`);
-        await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
+        const delayMs = site.delay || 2000;
+        await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
         await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
 
-      await page.close();
-    } catch (err) {
-      console.warn(`⚠ Failed to load: ${site.url} (${err.message})`);
-      pageLoadFailed = true;
-    }
-
-     if (site.source === true && page) {
-      try {
-         let pageContent;
-         try {
-           pageContent = await page.content();
-        } catch (e) {
-          if (forceDebug) console.log(`    [debug] First attempt to fetch page content failed: ${e.message}`);
-          // Retry once after 100ms
-          await new Promise(resolve => setTimeout(resolve, 100));
-          pageContent = await page.content();
+        for (let i = 1; i < (site.reload || 1); i++) {
+          await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
+          await new Promise(resolve => setTimeout(resolve, delayMs));
         }
 
-         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-         const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
-         const statusLabel = pageLoadFailed ? '-FAILED' : '';
-         const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}${statusLabel}-source.txt`;
-         fs.writeFileSync(filename, pageContent);
-         if (forceDebug) console.log(`Saved page source to ${filename}`);
-
-       } catch (e) {
-        if (forceDebug) console.log(`    [debug] Skipped saving source for ${site.url} after retry: ${e.message}`);
-       }
-    }
-
-
-    const siteMatchedDomains = [];
-
-    matchedDomains.forEach(domain => {
-      if (domain.length > 6 && domain.includes('.')) {
-        if (localhostMode) {
-          siteMatchedDomains.push(`127.0.0.1 ${domain}`);
-        } else if (localhostModeAlt) {
-          siteMatchedDomains.push(`0.0.0.0 ${domain}`);
-        } else if (siteLocalhost && !siteLocalhostAlt) {
-          siteMatchedDomains.push(`127.0.0.1 ${domain}`);
-        } else if (siteLocalhostAlt && !siteLocalhost) {
-          siteMatchedDomains.push(`0.0.0.0 ${domain}`);
-        } else {
-          siteMatchedDomains.push(`||${domain}^`);
-        }
+        await page.close();
+      } catch (err) {
+        console.warn(`⚠ Failed to load: ${currentUrl} (${err.message})`);
+        pageLoadFailed = true;
       }
-    });
 
-    siteRules.push({ url: site.url, rules: siteMatchedDomains });
+      const siteMatchedDomains = [];
+
+      matchedDomains.forEach(domain => {
+        if (domain.length > 6 && domain.includes('.')) {
+          if (localhostMode || siteLocalhost) {
+            siteMatchedDomains.push(`127.0.0.1 ${domain}`);
+          } else if (localhostModeAlt || siteLocalhostAlt) {
+            siteMatchedDomains.push(`0.0.0.0 ${domain}`);
+          } else {
+            siteMatchedDomains.push(`||${domain}^`);
+          }
+        }
+      });
+
+      siteRules.push({ url: currentUrl, rules: siteMatchedDomains });
+    }
   }
 
   const outputLines = [];
