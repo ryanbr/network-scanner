@@ -245,7 +245,7 @@ function getRootDomain(url) {
     }
   }
 
-  fs.writeFileSync(outputFile, outputLines.join('\n'));
+  fs.writeFileSync(outputFile, outputLines.join('\n') + '\n');
 
   if (!silentMode) console.log(`Adblock rules saved to ${outputFile}`);
 
