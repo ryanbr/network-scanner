@@ -1,10 +1,13 @@
-// === Network scanner script v0.8.0 ===
+// === Network scanner script v0.8.1 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
+
+const DEFAULT_PLATFORM = 'Win32';
+const DEFAULT_TIMEZONE = 'America/New_York';
 
 const args = process.argv.slice(2);
 const SOURCES_FOLDER = 'sources';
@@ -60,6 +63,7 @@ Per-site config.json options:
   source: true/false              Save page source HTML after load
   firstParty: true/false          Allow first-party matches (default: false)
   thirdParty: true/false          Allow third-party matches (default: true)
+  fingerprint_protection: true/false/"random"  Enable fingerprint spoofing
 `);
   process.exit(0);
 }
@@ -77,6 +81,20 @@ function getRootDomain(url) {
   }
 }
 
+function getRandomFingerprint() {
+  return {
+    deviceMemory: Math.random() < 0.5 ? 4 : 8,
+    hardwareConcurrency: [2, 4, 8][Math.floor(Math.random() * 3)],
+    screen: {
+      width: 360 + Math.floor(Math.random() * 400),
+      height: 640 + Math.floor(Math.random() * 500),
+      colorDepth: 24
+    },
+    platform: 'Linux x86_64',
+    timezone: 'UTC'
+  };
+}
+
 (async () => {
   const browser = await puppeteer.launch({ headless: true, protocolTimeout: 180000 });
   const siteRules = [];
@@ -90,6 +108,7 @@ function getRootDomain(url) {
       const perSiteSubDomains = site.subDomains === 1 ? true : subDomainsMode;
       const siteLocalhost = site.localhost === true;
       const siteLocalhostAlt = site.localhost_0_0_0_0 === true;
+      const fingerprintSetting = site.fingerprint_protection || false;
 
       if (site.firstParty === 0 && site.thirdParty === 0) {
         console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
@@ -107,6 +126,7 @@ function getRootDomain(url) {
         await page.setRequestInterception(true);
 
         if (site.userAgent) {
+          if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${site.userAgent}`);
           const userAgents = {
             chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
             firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
@@ -117,19 +137,46 @@ function getRootDomain(url) {
         }
 
         if (site.isBrave) {
+          if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
           await page.evaluateOnNewDocument(() => {
             Object.defineProperty(navigator, 'brave', {
               get: () => ({ isBrave: () => Promise.resolve(true) })
             });
           });
         }
+
+        if (fingerprintSetting) {
+          if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
+          const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
+            deviceMemory: 8,
+            hardwareConcurrency: 4,
+            screen: { width: 1920, height: 1080, colorDepth: 24 },
+            platform: DEFAULT_PLATFORM,
+            timezone: DEFAULT_TIMEZONE
+          };
+
+          await page.evaluateOnNewDocument(({ spoof }) => {
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
+            Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
+            Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
+            Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
+            Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
+            Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
+              resolvedOptions() {
+                return { timeZone: spoof.timezone };
+              }
+            };
+          }, { spoof });
+        }
+
       } catch (err) {
         console.warn(`⚠ Failed to open page: ${err.message}`);
         pageLoadFailed = true;
         continue;
       }
 
-      const regexes = Array.isArray(site.filterRegex)
+            const regexes = Array.isArray(site.filterRegex)
         ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
         : [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))];
 
@@ -154,7 +201,7 @@ function getRootDomain(url) {
 
         if (regexes.some(re => re.test(reqUrl))) {
           matchedDomains.add(reqDomain);
-          if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
+          if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}`);
         }
 
         request.continue();
@@ -165,6 +212,7 @@ function getRootDomain(url) {
         await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
 
         if (interactEnabled && !disableInteract) {
+          if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
           const randomX = Math.floor(Math.random() * 500) + 50;
           const randomY = Math.floor(Math.random() * 500) + 50;
           await page.mouse.move(randomX, randomY, { steps: 10 });
