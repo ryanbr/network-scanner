@@ -50,7 +50,9 @@ Per-site options in config.json:
   subDomains: 1/0                   Enable full subdomains per site (default: 0)
   localhost: true/false             Output as 127.0.0.1 domain (default: false)
   localhost_0_0_0_0: true/false     Output as 0.0.0.0 domain (default: false)
-  source: true/false                Save page HTML source after load (default: false)`);
+  source: true/false                Save page HTML source after load (default: false)
+  firstParty: true/false            Allow output of first-party network matches (default: false)
+  thirdParty: true/false            Allow matching third-party network items (default: true)`);
   process.exit(0);
 }
 
@@ -188,19 +190,29 @@ function getRootDomain(url) {
       pageLoadFailed = true;
     }
 
-    if (site.source === true && page) {
-      if (!fs.existsSync(SOURCES_FOLDER)) {
-        fs.mkdirSync(SOURCES_FOLDER);
-      }
-      const pageContent = await page.content();
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
-      const statusLabel = pageLoadFailed ? '-FAILED' : '';
-      const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}${statusLabel}-source.txt`;
-      fs.writeFileSync(filename, pageContent);
-      if (forceDebug) console.log(`    [debug] Saved page source to ${filename}`);
-    }
+     if (site.source === true && page) {
+      try {
+         let pageContent;
+         try {
+           pageContent = await page.content();
+        } catch (e) {
+          if (forceDebug) console.log(`    [debug] First attempt to fetch page content failed: ${e.message}`);
+          // Retry once after 100ms
+          await new Promise(resolve => setTimeout(resolve, 100));
+          pageContent = await page.content();
+        }
 
+         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+         const safeUrl = site.url.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+         const statusLabel = pageLoadFailed ? '-FAILED' : '';
+         const filename = `${SOURCES_FOLDER}/${safeUrl}-${timestamp}${statusLabel}-source.txt`;
+         fs.writeFileSync(filename, pageContent);
+         if (forceDebug) console.log(`Saved page source to ${filename}`);
+
+       } catch (e) {
+        if (forceDebug) console.log(`    [debug] Skipped saving source for ${site.url} after retry: ${e.message}`);
+       }
+    }
 
 
     const siteMatchedDomains = [];
