@@ -177,8 +177,10 @@ function getRandomFingerprint() {
       }
 
             const regexes = Array.isArray(site.filterRegex)
-        ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
-        : [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))];
+  ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
+  : site.filterRegex
+    ? [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
+    : [];
 
       const blockedRegexes = Array.isArray(site.blocked)
         ? site.blocked.map(pattern => new RegExp(pattern))
