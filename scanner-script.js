@@ -77,6 +77,9 @@ try {
     console.error(`❌ Config file not found: ${configPath}`);
     process.exit(1);
   }
+  if (forceDebug && configPath !== 'config.json') {
+  console.log(`[debug] Using custom config file: ${configPath}`);
+}
   const raw = fs.readFileSync(configPath, 'utf8');
   config = JSON.parse(raw);
 } catch (e) {
