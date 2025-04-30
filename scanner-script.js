@@ -1,10 +1,10 @@
-// === Network scanner script v0.8.1 ===
+// === Network scanner script v0.8.2 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.1';
+const VERSION = '0.8.2';
 
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
@@ -45,6 +45,7 @@ Options:
   --localhost                    Output as 127.0.0.1 domain.com
   --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
   --no-interact                  Disable page interactions globally
+  --custom-json <file>           Use a custom config JSON file instead of config.json
   --help, -h                     Show this help menu
   --version                      Show script version
 
@@ -68,7 +69,20 @@ Per-site config.json options:
   process.exit(0);
 }
 
-const config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
+const configPathIndex = args.findIndex(arg => arg === '--custom-json');
+const configPath = (configPathIndex !== -1 && args[configPathIndex + 1]) ? args[configPathIndex + 1] : 'config.json';
+let config;
+try {
+  if (!fs.existsSync(configPath)) {
+    console.error(`❌ Config file not found: ${configPath}`);
+    process.exit(1);
+  }
+  const raw = fs.readFileSync(configPath, 'utf8');
+  config = JSON.parse(raw);
+} catch (e) {
+  console.error(`❌ Failed to load config file (${configPath}):`, e.message);
+  process.exit(1);
+}
 const { sites = [], ignoreDomains = [] } = config;
 
 function getRootDomain(url) {
