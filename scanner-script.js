@@ -1,15 +1,16 @@
-// === Network scanner script v0.8.2 ===
+// === Network scanner script v0.8.3 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.2';
+const VERSION = '0.8.3';
 
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
 
 const args = process.argv.slice(2);
+const headfulMode = args.includes('--headful');
 const SOURCES_FOLDER = 'sources';
 
 let outputFile = 'adblock_rules.txt';
@@ -46,25 +47,28 @@ Options:
   --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
   --no-interact                  Disable page interactions globally
   --custom-json <file>           Use a custom config JSON file instead of config.json
+  --headful                      Launch browser with GUI (not headless)
   --help, -h                     Show this help menu
   --version                      Show script version
 
 Per-site config.json options:
-  url: "site" or ["site1", "site2"]   Single URL or list of URLs
+  url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
-  interact: true/false            Simulate mouse movements/clicks
-  isBrave: true/false             Spoof Brave browser detection
-  userAgent: "chrome"|"firefox"|"safari"  Custom desktop User-Agent
-  blocked: ["regex"]              Regex patterns to block requests
-  delay: <milliseconds>           Delay after load (default: 2000)
-  reload: <number>                Reload page n times after load (default: 1)
-  subDomains: 1/0                 Output full subdomains (default: 0)
-  localhost: true/false           Force localhost output (127.0.0.1)
-  localhost_0_0_0_0: true/false   Force localhost output (0.0.0.0)
-  source: true/false              Save page source HTML after load
-  firstParty: true/false          Allow first-party matches (default: false)
-  thirdParty: true/false          Allow third-party matches (default: true)
-  fingerprint_protection: true/false/"random"  Enable fingerprint spoofing
+  blocked: ["regex"]                          Regex patterns to block requests
+  interact: true/false                         Simulate mouse movements/clicks
+  isBrave: true/false                          Spoof Brave browser detection
+  userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
+  delay: <milliseconds>                        Delay after load (default: 2000)
+  reload: <number>                             Reload page n times after load (default: 1)
+  subDomains: 1/0                              Output full subdomains (default: 0)
+  localhost: true/false                        Force localhost output (127.0.0.1)
+  localhost_0_0_0_0: true/false                Force localhost output (0.0.0.0)
+  source: true/false                           Save page source HTML after load
+  firstParty: true/false                       Allow first-party matches (default: false)
+  thirdParty: true/false                       Allow third-party matches (default: true)
+  screenshot: true/false                       Capture screenshot on load failure
+  headful: true/false                          Launch browser with GUI for this site
+  fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"  Enable fingerprint spoofing
 `);
   process.exit(0);
 }
@@ -113,7 +117,11 @@ function getRandomFingerprint() {
 }
 
 (async () => {
-  const browser = await puppeteer.launch({ headless: true, protocolTimeout: 180000 });
+  const perSiteHeadful = sites.some(site => site.headful === true);
+  const launchHeadless = !(headfulMode || perSiteHeadful);
+  const browser = await puppeteer.launch({ headless: launchHeadless, protocolTimeout: 300000 });
+  if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
+  if (forceDebug) console.log(`[debug] Launching browser with headless: ${!headfulMode}`);
   const siteRules = [];
 
   for (const site of sites) {
@@ -172,19 +180,23 @@ function getRandomFingerprint() {
             timezone: DEFAULT_TIMEZONE
           };
 
-          await page.evaluateOnNewDocument(({ spoof }) => {
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
-            Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
-            Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
-            Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
-            Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
-            Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
-              resolvedOptions() {
-                return { timeZone: spoof.timezone };
-              }
-            };
-          }, { spoof });
+          try {
+            await page.evaluateOnNewDocument(({ spoof }) => {
+              Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
+              Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
+              Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
+              Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
+              Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
+              Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
+              Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
+                resolvedOptions() {
+                  return { timeZone: spoof.timezone };
+                }
+              };
+            }, { spoof });
+          } catch (err) {
+            console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
+          }
         }
 
       } catch (err) {
@@ -204,6 +216,7 @@ function getRandomFingerprint() {
         : [];
 
       page.on('request', request => {
+        if (forceDebug) console.log('[debug request]', request.url());
         const reqUrl = request.url();
 
         if (blockedRegexes.some(re => re.test(reqUrl))) {
@@ -228,7 +241,7 @@ function getRandomFingerprint() {
 
       try {
         const interactEnabled = site.interact === true;
-        await page.goto(currentUrl, { waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
+        await page.goto(currentUrl, { waitUntil: 'load', timeout: site.timeout || 40000 });
 
         if (interactEnabled && !disableInteract) {
           if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
@@ -245,13 +258,25 @@ function getRandomFingerprint() {
         await new Promise(resolve => setTimeout(resolve, delayMs));
 
         for (let i = 1; i < (site.reload || 1); i++) {
-          await page.reload({ waitUntil: 'networkidle2', timeout: site.timeout || 30000 });
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
           await new Promise(resolve => setTimeout(resolve, delayMs));
         }
 
         await page.close();
       } catch (err) {
         console.warn(`⚠ Failed to load: ${currentUrl} (${err.message})`);
+        if (site.screenshot === true && page) {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+          const filename = `${safeUrl}-${timestamp}.jpg`;
+          try {
+            await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
+            if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
+          } catch (err) {
+            console.warn(`[screenshot failed] ${currentUrl}: ${err.message}`);
+          }
+          if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
+        }
         pageLoadFailed = true;
       }
 
