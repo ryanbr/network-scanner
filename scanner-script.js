@@ -1,10 +1,10 @@
-// === Network scanner script v0.8.3 ===
+// === Network scanner script v0.8.4 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.3';
+const VERSION = '0.8.4';
 
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
@@ -13,7 +13,7 @@ const args = process.argv.slice(2);
 const headfulMode = args.includes('--headful');
 const SOURCES_FOLDER = 'sources';
 
-let outputFile = 'adblock_rules.txt';
+let outputFile = null;
 const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
 if (outputIndex !== -1 && args[outputIndex + 1]) outputFile = args[outputIndex + 1];
 
@@ -36,7 +36,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node scanner-script.js [options]
 
 Options:
-  -o, --output <file>            Output file (default: adblock_rules.txt)
+  -o, --output <file>            Output file for rules. If omitted, prints to console
   --verbose                      Force verbose mode globally
   --debug                        Force debug mode globally
   --silent                       Suppress normal console logs
