@@ -1,10 +1,10 @@
-// === Network scanner script v0.8.5 ===
+// === Network scanner script v0.8.6 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.5';
+const VERSION = '0.8.6';
 
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
@@ -32,6 +32,7 @@ const subDomainsMode = args.includes('--sub-domains');
 const localhostMode = args.includes('--localhost');
 const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 const disableInteract = args.includes('--no-interact');
+const plainOutput = args.includes('--plain');
 
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
@@ -54,6 +55,7 @@ Options:
   --no-interact                  Disable page interactions globally
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
+  --plain                        Output just domains (no adblock formatting)
   --help, -h                     Show this help menu
   --version                      Show script version
 
@@ -290,12 +292,15 @@ function getRandomFingerprint() {
 
       matchedDomains.forEach(domain => {
         if (domain.length > 6 && domain.includes('.')) {
+          const sitePlain = site.plain === true || site.plain === undefined ? false : site.plain;
+          const usePlain = plainOutput || sitePlain;
+
           if (localhostMode || siteLocalhost) {
-            siteMatchedDomains.push(`127.0.0.1 ${domain}`);
+            siteMatchedDomains.push(usePlain ? domain : `127.0.0.1 ${domain}`);
           } else if (localhostModeAlt || siteLocalhostAlt) {
-            siteMatchedDomains.push(`0.0.0.0 ${domain}`);
+            siteMatchedDomains.push(usePlain ? domain : `0.0.0.0 ${domain}`);
           } else {
-            siteMatchedDomains.push(`||${domain}^`);
+            siteMatchedDomains.push(usePlain ? domain : `||${domain}^`);
           }
         }
       });

@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v0.8.5) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v0.8.6) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -32,6 +32,7 @@ A Puppeteer-based tool (v0.8.5) for scanning websites to find third-party (or op
 | `--sub-domains`             | Output full subdomains (default collapses) |
 | `--localhost`               | Output format as `127.0.0.1 domain.com` |
 | `--localhost-0.0.0.0`       | Output format as `0.0.0.0 domain.com` |
+| `--plain`                   | Output non formated domain.com` |
 | `--help`, `-h`              | Show help menu |
 
 ---
@@ -91,6 +92,7 @@ Example:
 | `firstParty`         | `0` or `1` | `0` | Match first-party requests |
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
+| `plain`              | `true` or `false` | `false` | Output nonformated domain urls |
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
 
 ---
