@@ -1,10 +1,10 @@
-// === Network scanner script v0.8.4 ===
+// === Network scanner script v0.8.5 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.4';
+const VERSION = '0.8.5';
 
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
@@ -90,7 +90,7 @@ try {
   console.error(`❌ Failed to load config file (${configPath}):`, e.message);
   process.exit(1);
 }
-const { sites = [], ignoreDomains = [] } = config;
+const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
 function getRootDomain(url) {
   try {
