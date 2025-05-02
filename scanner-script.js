@@ -1,10 +1,10 @@
-// === Network scanner script v0.8.6 ===
+// === Network scanner script v0.8.7 ===
 
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
-const VERSION = '0.8.6';
+const VERSION = '0.8.7';
 
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
@@ -33,6 +33,9 @@ const localhostMode = args.includes('--localhost');
 const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
+const enableCDP = args.includes('--cdp');
+let globalCDP = enableCDP;
+const globalEvalOnDoc = args.includes('--eval-on-doc');
 
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
@@ -56,6 +59,8 @@ Options:
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
+  --cdp                          Enable Chrome DevTools Protocol logging
+  --eval-on-doc                 Globally enable evaluateOnNewDocument()
   --help, -h                     Show this help menu
   --version                      Show script version
 
@@ -77,6 +82,8 @@ Per-site config.json options:
   screenshot: true/false                       Capture screenshot on load failure
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
+  evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page
+  cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
 `);
   process.exit(0);
 }
@@ -90,8 +97,8 @@ try {
     process.exit(1);
   }
   if (forceDebug && configPath !== 'config.json') {
-  console.log(`[debug] Using custom config file: ${configPath}`);
-}
+    console.log(`[debug] Using custom config file: ${configPath}`);
+  }
   const raw = fs.readFileSync(configPath, 'utf8');
   config = JSON.parse(raw);
 } catch (e) {
@@ -99,6 +106,14 @@ try {
   process.exit(1);
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
+
+// Override CDP if enabled per site
+if (!enableCDP) {
+  globalCDP = sites.some(site => site.cdp === true);
+  const cdpSites = sites.filter(site => site.cdp === true).map(site => site.url);
+  if (forceDebug && globalCDP) console.log('[debug] CDP enabled via config.json for sites:', cdpSites);
+  if (forceDebug && globalCDP) console.log('[debug] CDP enabled via config.json');
+}
 
 function getRootDomain(url) {
   try {
@@ -130,6 +145,39 @@ function getRandomFingerprint() {
   const browser = await puppeteer.launch({ headless: launchHeadless, protocolTimeout: 300000 });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${!headfulMode}`);
+
+  if (globalCDP && forceDebug) {
+    const [page] = await browser.pages();
+    const cdpSession = await page.target().createCDPSession();
+    await cdpSession.send('Network.enable');
+    cdpSession.on('Network.requestWillBeSent', (params) => {
+      console.log(`[cdp] Request: ${params.request.url}`);
+    });
+  }
+
+  for (const site of sites) {
+    const shouldInjectEval = site.evaluateOnNewDocument === true || globalEvalOnDoc;
+    if (forceDebug && shouldInjectEval) console.log('[debug] evaluateOnNewDocument enabled for', site.url);
+        if (shouldInjectEval) {
+      if (forceDebug) console.log(`[debug] evaluateOnNewDocument enabled for ${site.url}`);
+      await browser.newPage().then(page => {
+        page.evaluateOnNewDocument(() => {
+          const originalFetch = window.fetch;
+          window.fetch = (...args) => {
+            console.log('[evalOnDoc][fetch]', args[0]);
+            return originalFetch.apply(this, args);
+          };
+
+          const originalXHR = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function (method, url) {
+            console.log('[evalOnDoc][xhr]', url);
+            return originalXHR.apply(this, arguments);
+          };
+        });
+      });
+    }
+  }
+
   const siteRules = [];
 
   for (const site of sites) {
@@ -152,7 +200,8 @@ function getRandomFingerprint() {
       const matchedDomains = new Set();
       let pageLoadFailed = false;
 
-      if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
+      if (!silentMode) console.log(`
+Scanning: ${currentUrl}`);
 
       try {
         page = await browser.newPage();
@@ -206,48 +255,42 @@ function getRandomFingerprint() {
             console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
           }
         }
+      
+        const regexes = Array.isArray(site.filterRegex)
+          ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
+          : site.filterRegex
+            ? [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
+            : [];
 
-      } catch (err) {
-        console.warn(`⚠ Failed to open page: ${err.message}`);
-        pageLoadFailed = true;
-        continue;
-      }
+        const blockedRegexes = Array.isArray(site.blocked)
+          ? site.blocked.map(pattern => new RegExp(pattern))
+          : [];
 
-            const regexes = Array.isArray(site.filterRegex)
-  ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
-  : site.filterRegex
-    ? [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
-    : [];
+        page.on('request', request => {
+          if (forceDebug) console.log('[debug request]', request.url());
+          const reqUrl = request.url();
 
-      const blockedRegexes = Array.isArray(site.blocked)
-        ? site.blocked.map(pattern => new RegExp(pattern))
-        : [];
+          if (blockedRegexes.some(re => re.test(reqUrl))) {
+            request.abort();
+            return;
+          }
 
-      page.on('request', request => {
-        if (forceDebug) console.log('[debug request]', request.url());
-        const reqUrl = request.url();
+          const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
-        if (blockedRegexes.some(re => re.test(reqUrl))) {
-          request.abort();
-          return;
-        }
+          if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
+            request.continue();
+            return;
+          }
 
-        const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
+          if (regexes.some(re => re.test(reqUrl))) {
+            matchedDomains.add(reqDomain);
+            if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}
+`);
+          }
 
-        if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
           request.continue();
-          return;
-        }
+        });
 
-        if (regexes.some(re => re.test(reqUrl))) {
-          matchedDomains.add(reqDomain);
-          if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}`);
-        }
-
-        request.continue();
-      });
-
-      try {
         const interactEnabled = site.interact === true;
         await page.goto(currentUrl, { waitUntil: 'load', timeout: site.timeout || 40000 });
 
@@ -283,7 +326,6 @@ function getRandomFingerprint() {
           } catch (err) {
             console.warn(`[screenshot failed] ${currentUrl}: ${err.message}`);
           }
-          if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
         }
         pageLoadFailed = true;
       }
@@ -310,7 +352,6 @@ function getRandomFingerprint() {
   }
 
   const outputLines = [];
-
   for (const { url, rules } of siteRules) {
     if (rules.length > 0) {
       if (showTitles) outputLines.push(`! ${url}`);
@@ -318,9 +359,13 @@ function getRandomFingerprint() {
     }
   }
 
+if (outputFile) {
   fs.writeFileSync(outputFile, outputLines.join('\n') + '\n');
-
   if (!silentMode) console.log(`Adblock rules saved to ${outputFile}`);
+} else {
+  console.log(outputLines.join('\n'));
+}
+
 
   await browser.close();
   process.exit(0);
