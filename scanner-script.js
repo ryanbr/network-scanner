@@ -10,6 +10,12 @@ const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
 
 const args = process.argv.slice(2);
+
+// 🆕 Default to --help if no arguments are provided
+if (args.length === 0) {
+  args.push('--help');
+}
+
 const headfulMode = args.includes('--headful');
 const SOURCES_FOLDER = 'sources';
 
@@ -68,7 +74,7 @@ Per-site config.json options:
   thirdParty: true/false                       Allow third-party matches (default: true)
   screenshot: true/false                       Capture screenshot on load failure
   headful: true/false                          Launch browser with GUI for this site
-  fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"  Enable fingerprint spoofing
+  fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
 `);
   process.exit(0);
 }
