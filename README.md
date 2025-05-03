@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v0.8.6) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v0.8.7) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -33,6 +33,8 @@ A Puppeteer-based tool (v0.8.6) for scanning websites to find third-party (or op
 | `--localhost`               | Output format as `127.0.0.1 domain.com` |
 | `--localhost-0.0.0.0`       | Output format as `0.0.0.0 domain.com` |
 | `--plain`                   | Output non formated domain.com` |
+| `--cdp`                    | Enable Chrome DevTools Protocol logging |
+| `--eval-on-doc`           | Inject JS fetch/XHR interception globally |
 | `--help`, `-h`              | Show help menu |
 
 ---
@@ -94,6 +96,8 @@ Example:
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
 | `plain`              | `true` or `false` | `false` | Output nonformated domain urls |
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
+| `evaluateOnNewDocument`    | `true` or `false` | `false` | Inject JS fetch/XHR logging on page load |
+| `cdp`                     | `true` or `false` | `false` | Enable Chrome DevTools Protocol logging per site |
 
 ---
 
@@ -105,3 +109,4 @@ Example:
 - If a site's `blocked` field is missing, no extra blocking is applied.
 
 ---
+
