@@ -151,7 +151,9 @@ function getRandomFingerprint() {
     const cdpSession = await page.target().createCDPSession();
     await cdpSession.send('Network.enable');
     cdpSession.on('Network.requestWillBeSent', (params) => {
-      console.log(`[cdp] Request: ${params.request.url}`);
+      const { url, method } = params.request;
+      const initiator = params.initiator ? params.initiator.type : 'unknown';
+      console.log(`[cdp] ${method} ${url} (initiator: ${initiator})`);
     });
   }
 
