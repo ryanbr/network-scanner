@@ -24,6 +24,7 @@ This document provides detailed explanations for each option available in the `c
 | `interact`               | Boolean                                | false   | Simulate mouse movement/clicks on page            |
 | `isBrave`                | Boolean                                | false   | Spoof `navigator.brave` to bypass Brave detection |
 | `userAgent`              | String (`chrome`, `firefox`, `safari`) | –       | Spoof User-Agent string                           |
+| `timeout`                | Number (ms)                            | 40000   | Max time to wait before aborting page load        |
 | `delay`                  | Number (ms)                            | 2000    | Delay after page load before evaluating requests  |
 | `reload`                 | Number                                 | 1       | How many times to reload the page                 |
 | `subDomains`             | Number (0 or 1)                        | 0       | Output full subdomains if set to 1                |
@@ -106,9 +107,13 @@ Injects spoofed browser characteristics (like screen size, platform, memory, CPU
 
 Injects JS into the page before any script runs. Overrides `fetch()` and `XMLHttpRequest` to log third-party requests made from within the page’s JavaScript.
 
+### `timeout`
+
+Maximum time (in milliseconds) the browser should wait when loading a page before timing out. Default is 40000ms (40 seconds). Increase this if scanning slow-loading sites.
+
 ### `cdp`
 
-Enables Chrome DevTools Protocol for full visibility of network requests, including types like `HEAD`, WebSockets, preloads, and others missed by Puppeteer.
+Enables Chrome DevTools Protocol for full visibility of network requests, including types like `HEAD`, WebSockets, preloads, and others missed by Puppeteer. for full visibility of network requests, including types like `HEAD`, WebSockets, preloads, and others missed by Puppeteer.
 
 ---
 
