@@ -43,4 +43,6 @@
     "verbose": 1,
     "interact": true,
     "fingerprint_protection": "random"
+  }
+ ]
 }
