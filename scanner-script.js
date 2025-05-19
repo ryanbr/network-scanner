@@ -269,7 +269,20 @@ Scanning: ${currentUrl}`);
           ? site.blocked.map(pattern => new RegExp(pattern))
           : [];
 
+        const pageUrl = currentUrl;
         page.on('request', request => {
+          const checkedUrl = request.url();
+          const isFirstParty = new URL(checkedUrl).hostname === new URL(pageUrl).hostname;
+
+          if (isFirstParty && site.firstParty === false) {
+            request.continue();
+            return;
+          }
+
+          if (!isFirstParty && site.thirdParty === false) {
+            request.continue();
+            return;
+          }
           if (forceDebug) console.log('[debug request]', request.url());
           const reqUrl = request.url();
 
@@ -295,7 +308,15 @@ Scanning: ${currentUrl}`);
         });
 
         const interactEnabled = site.interact === true;
+        try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: site.timeout || 40000 });
+        console.log(`[info] Loaded: ${currentUrl}`);
+        await page.evaluate(() => {
+          console.log('Safe to evaluate on loaded page.');
+        });
+      } catch (err) {
+        console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
+      }
 
         if (interactEnabled && !disableInteract) {
           if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
