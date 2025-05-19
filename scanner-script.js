@@ -142,7 +142,8 @@ function getRandomFingerprint() {
 (async () => {
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
-  const browser = await puppeteer.launch({ headless: launchHeadless, protocolTimeout: 300000 });
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox'], headless: launchHeadless, protocolTimeout: 300000 });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${!headfulMode}`);
 
