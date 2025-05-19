@@ -1,20 +1,15 @@
 {
   "name": "network-scanner",
-  "version": "1.0.0",
+  "version": "0.8.7",
   "description": "A Puppeteer-based tool (v0.8.7) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.",
   "main": "scanner-script.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node scanner-script.js"
   },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/ryanbr/network-scanner.git"
+  "dependencies": {
+    "puppeteer": "^21.3.8",
+    "psl": "^1.9.0"
   },
-  "keywords": [],
   "author": "",
-  "license": "ISC",
-  "bugs": {
-    "url": "https://github.com/ryanbr/network-scanner/issues"
-  },
-  "homepage": "https://github.com/ryanbr/network-scanner#readme"
+  "license": "GPL-3.0"
 }
