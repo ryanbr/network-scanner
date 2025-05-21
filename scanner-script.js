@@ -6,8 +6,10 @@ const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.8.7'; // Script version
+const VERSION = '0.8.8'; // Script version
 
+// get startTime
+const startTime = Date.now();
 // Default values for fingerprint spoofing if not set to 'random'
 const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
@@ -506,7 +508,19 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
   } else {
     console.log(outputLines.join('\n')); // Print to console if no output file.
   }
-
+  
   await browser.close(); // Close the browser instance.
+  // show time taken
+  const endTime = Date.now();
+  const durationMs = endTime - startTime;
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (!silentMode) {
+    console.log(`Scan completed in ${hours}h ${minutes}m ${seconds}s`);
+  }
+  // Exit
   process.exit(0); // Exit script successfully.
 })();
