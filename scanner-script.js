@@ -1,4 +1,4 @@
-// === Network scanner script v0.8.7 ===
+// === Network scanner script v0.8.9 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 const puppeteer = require('puppeteer');
@@ -6,7 +6,7 @@ const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.8.8'; // Script version
+const VERSION = '0.8.9'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -355,6 +355,15 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
             ? [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
             : [];
 
+        // verbose logging, pattern matching
+        if (site.verbose === 1 && site.filterRegex) {
+          const patterns = Array.isArray(site.filterRegex) ? site.filterRegex : [site.filterRegex];
+          console.log(`[info] Regex patterns for ${currentUrl}:`);
+          patterns.forEach((pattern, idx) => {
+            console.log(`  [${idx + 1}] ${pattern}`);
+          });
+        }
+
         // Compile blocked request patterns from config into RegExp objects.
         const blockedRegexes = Array.isArray(site.blocked)
           ? site.blocked.map(pattern => new RegExp(pattern))
@@ -396,11 +405,16 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
             return;
           }
 
-          // If URL matches any `regexes`, add its domain to `matchedDomains`.
-          if (regexes.some(re => re.test(reqUrl))) {
-            matchedDomains.add(reqDomain);
-            // If `dumpUrls` is enabled, append the full matched URL to a log file.
-            if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
+          // show verbose logging if enabled
+          for (const re of regexes) {
+            if (re.test(reqUrl)) {
+              matchedDomains.add(reqDomain);
+              if (site.verbose === 1) {
+                console.log(`[match] ${reqUrl} matched regex: ${re}`);
+              }
+              if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
+              break;
+            }
           }
 
           request.continue(); // Allow all other requests to proceed.
