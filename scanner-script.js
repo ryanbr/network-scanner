@@ -146,6 +146,12 @@ function getRandomFingerprint() {
     args: ['--no-sandbox', '--disable-setuid-sandbox'], headless: launchHeadless, protocolTimeout: 300000 });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${!headfulMode}`);
+ 
+  let siteCounter = 0;
+  const totalUrls = sites.reduce((sum, site) => {
+    const urls = Array.isArray(site.url) ? site.url.length : 1;
+    return sum + urls;
+  }, 0); 
 
   if (globalCDP && forceDebug) {
     const [page] = await browser.pages();
@@ -185,7 +191,7 @@ function getRandomFingerprint() {
 
   for (const site of sites) {
     const urls = Array.isArray(site.url) ? site.url : [site.url];
-
+    
     for (const currentUrl of urls) {
       const allowFirstParty = site.firstParty === 1;
       const allowThirdParty = site.thirdParty === undefined || site.thirdParty === 1;
@@ -310,7 +316,8 @@ Scanning: ${currentUrl}`);
         const interactEnabled = site.interact === true;
         try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: site.timeout || 40000 });
-        console.log(`[info] Loaded: ${currentUrl}`);
+        siteCounter++;
+        console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
         await page.evaluate(() => {
           console.log('Safe to evaluate on loaded page.');
         });
