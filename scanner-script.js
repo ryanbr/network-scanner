@@ -1,7 +1,7 @@
 // === Network scanner script v0.9.2 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
-const pLimit = require('p-limit');
+// const pLimit = require('p-limit'); // REMOVED - Will be dynamically imported
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
@@ -17,6 +17,7 @@ const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
 
 // --- Command-Line Argument Parsing ---
+// ... (rest of the argument parsing code remains unchanged) ...
 const args = process.argv.slice(2);
 
 if (args.length === 0) {
@@ -99,6 +100,7 @@ Per-site config.json options:
 }
 
 // --- Configuration File Loading ---
+// ... (Configuration file loading code remains unchanged) ...
 const configPathIndex = args.findIndex(arg => arg === '--custom-json');
 const configPath = (configPathIndex !== -1 && args[configPathIndex + 1]) ? args[configPathIndex + 1] : 'config.json';
 let config;
@@ -118,6 +120,7 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
+
 // --- Global CDP Override Logic --- [COMMENT RE-ADDED]
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
@@ -128,6 +131,10 @@ const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
 /**
  * Extracts the root domain from a given URL string using the psl library.
+ * For example, for 'http://sub.example.com/path', it returns 'example.com'.
+ *
+ * @param {string} url - The URL string to parse.
+ * @returns {string} The root domain, or the original hostname if parsing fails (e.g., for IP addresses or invalid URLs), or an empty string on error.
  */
 function getRootDomain(url) {
   try {
@@ -141,6 +148,19 @@ function getRootDomain(url) {
 
 /**
  * Generates an object with randomized browser fingerprint values.
+ * This is used to spoof various navigator and screen properties to make
+ * the headless browser instance appear more like a regular user's browser
+ * and potentially bypass some fingerprint-based bot detection.
+ *
+ * @returns {object} An object containing the spoofed fingerprint properties:
+ * @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
+ * @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
+ * @property {object} screen - Randomized screen dimensions and color depth.
+ * @property {number} screen.width - Randomized screen width.
+ * @property {number} screen.height - Randomized screen height.
+ * @property {number} screen.colorDepth - Fixed color depth (24).
+ * @property {string} platform - Fixed platform string ('Linux x86_64').
+ * @property {string} timezone - Fixed timezone ('UTC').
  */
 function getRandomFingerprint() {
   return {
@@ -157,8 +177,11 @@ function getRandomFingerprint() {
 }
 
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
+// This is the main entry point and execution block for the network scanner script.
 (async () => {
-  const limit = pLimit(MAX_CONCURRENT_SITES);
+  // Dynamically import p-limit as it's an ES Module
+  const pLimit = (await import('p-limit')).default; // ADDED dynamic import
+  const limit = pLimit(MAX_CONCURRENT_SITES); // MOVED initialization here
 
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
@@ -184,13 +207,18 @@ function getRandomFingerprint() {
 
 
   // --- Global evaluateOnNewDocument for Fetch/XHR Interception ---
-  // This section remains as is, running before concurrent URL processing. Its original flaw persists.
+  // This loop attempts to set up fetch/XHR interception for sites that require it.
+  // NOTE: As per analysis, this `evaluateOnNewDocument` is applied to a temporary page
+  // created here (`browser.newPage().then(...)`) which is NOT the page used for actual site navigation later.
+  // This means the interception defined here likely won't apply as intended to the target pages.
   for (const site of sites) {
     const shouldInjectEval = site.evaluateOnNewDocument === true || globalEvalOnDoc;
     if (shouldInjectEval) {
       if (forceDebug) console.log(`[debug] evaluateOnNewDocument pre-injection attempt for ${site.url}`);
       await browser.newPage().then(page => {
-        page.evaluateOnNewDocument(() => {
+        page.evaluateOnNewDocument(() => { // Script to intercept fetch and XHR.
+          // This script attempts to intercept and log Fetch and XHR requests
+          // from within the page context at the earliest possible moment.
           const originalFetch = window.fetch;
           window.fetch = (...args) => {
             console.log('[evalOnDoc][fetch]', args[0]);
@@ -207,6 +235,21 @@ function getRandomFingerprint() {
     }
   }
 
+  /**
+   * Processes a single URL: navigates to it, applies configurations (spoofing, interception),
+   * monitors network requests, and extracts domains based on matching filterRegex.
+   *
+   * @param {string} currentUrl - The URL to scan.
+   * @param {object} siteConfig - The configuration object for this specific site/URL from config.json.
+   * It includes options like filterRegex, blocked patterns, interaction settings, etc.
+   * @param {import('puppeteer').Browser} browserInstance - The shared Puppeteer browser instance.
+   * @returns {Promise<object>} A promise that resolves to an object containing the scan results for the URL.
+   * The object has the following properties:
+   * - `url` {string}: The URL that was processed.
+   * - `rules` {string[]}: An array of formatted strings (rules or plain domains) derived from matched domains.
+   * - `success` {boolean}: True if the page was loaded and processed successfully, false otherwise.
+   * - `skipped` {boolean} (optional): True if the URL was skipped due to configuration (e.g., firstParty and thirdParty both disabled).
+   */
   async function processUrl(currentUrl, siteConfig, browserInstance) {
     const allowFirstParty = siteConfig.firstParty === 1;
     const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === 1;
@@ -229,6 +272,8 @@ function getRandomFingerprint() {
       page = await browserInstance.newPage();
 
       // --- Per-Page CDP Setup ---
+      // Attaches a Chrome DevTools Protocol session to the current page if enabled globally or by site config.
+      // This allows for more granular network event logging specific to this page.
       const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
       if (cdpLoggingNeededForPage) {
         if (forceDebug) {
@@ -336,6 +381,13 @@ function getRandomFingerprint() {
         ? siteConfig.blocked.map(pattern => new RegExp(pattern))
         : [];
 
+      // --- page.on('request', ...) Handler: Core Network Request Logic ---
+      // This handler is triggered for every network request made by the page.
+      // It decides whether to allow, block, or process the request based on:
+      // - First-party/third-party status and site configuration.
+      // - URL matching against blocklists (`blockedRegexes`).
+      // - URL matching against filter patterns (`regexes`) for domain extraction.
+      // - Global `ignoreDomains` list.
       page.on('request', request => {
         const checkedUrl = request.url();
         const isFirstParty = new URL(checkedUrl).hostname === new URL(currentUrl).hostname;
