@@ -88,6 +88,7 @@ Per-site config.json options:
   delay: <milliseconds>                        Delay after load (default: 2000)
   reload: <number>                             Reload page n times after load (default: 1)
   forcereload: true/false                      Force an additional reload after reloads
+  clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
   subDomains: 1/0                              Output full subdomains (default: 0)
   localhost: true/false                        Force localhost output (127.0.0.1)
   localhost_0_0_0_0: true/false                Force localhost output (0.0.0.0)
@@ -295,6 +296,23 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
         page = await browser.newPage(); // Create a new page for the current URL.
         await page.setRequestInterception(true); // Enable request interception.
 
+        // Clear site data before navigating if enabled
+        if (site.clear_sitedata === true) {
+          try {
+            const client = await page.target().createCDPSession();
+            await client.send('Network.clearBrowserCookies');
+            await client.send('Network.clearBrowserCache');
+            await page.evaluate(() => {
+              localStorage.clear();
+              sessionStorage.clear();
+              indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
+            });
+            if (forceDebug) console.log(`[debug] Cleared site data for ${currentUrl}`);
+          } catch (err) {
+            console.warn(`[clear_sitedata failed] ${currentUrl}: ${err.message}`);
+          }
+        }
+
         // Apply User-Agent spoofing if specified in site config.
         if (site.userAgent) {
           if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${site.userAgent}`);
@@ -454,6 +472,22 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
 
         // Reload the page multiple times if specified in site config.
         for (let i = 1; i < (site.reload || 1); i++) { // Default is 1 (no extra reloads).
+         if (site.clear_sitedata === true) { // If true, clear site data
+           try {
+             const client = await page.target().createCDPSession();
+             await client.send('Network.clearBrowserCookies');
+             await client.send('Network.clearBrowserCache');
+             await page.evaluate(() => {
+               localStorage.clear();
+               sessionStorage.clear();
+               indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
+             });
+             if (forceDebug) console.log(`[debug] Cleared site data before reload #${i + 1} for ${currentUrl}`);
+           } catch (err) {
+             console.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${err.message}`);
+           }
+         }
+
           await page.reload({ waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
           await new Promise(resolve => setTimeout(resolve, delayMs)); // Wait after each reload.
         }

@@ -57,6 +57,7 @@ Example:
       "resourceTypes": ["script", "xhr", "image"],
       "reload": 2,
       "forcereload": true,
+      "clear_sitedata": true,
       "delay": 5000,
       "timeout": 30000,
       "verbose": 1,
@@ -87,6 +88,7 @@ Example:
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |
 | `forcereload`        | `true` or `false` | `false` | Force page reload |
+| `site_cleardata`     | `true` or `false` | `false` | Clear site data before loading |
 | `delay`              | Milliseconds | `2000` | Wait time after loading/reloading |
 | `timeout`            | Milliseconds | `30000` | Timeout for page load |
 | `verbose`            | `0` or `1` | `0` | Enable verbose output per site |
