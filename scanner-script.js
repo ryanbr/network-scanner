@@ -1,12 +1,14 @@
-// === Network scanner script v0.9.0 ===
+// === Network scanner script v0.9.1 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
+const pLimit = require('p-limit'); // ADDED for concurrency control
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.0'; // Script version
+const VERSION = '0.9.1'; // Script version
+const MAX_CONCURRENT_SITES = 4; // ADDED: Concurrency limit for scanning
 
 // get startTime
 const startTime = Date.now();
@@ -105,39 +107,26 @@ Per-site config.json options:
 }
 
 // --- Configuration File Loading ---
-// Determine path to config.json, allowing override with --custom-json flag.
 const configPathIndex = args.findIndex(arg => arg === '--custom-json');
 const configPath = (configPathIndex !== -1 && args[configPathIndex + 1]) ? args[configPathIndex + 1] : 'config.json';
 let config;
 try {
-  // Check if the configuration file exists.
   if (!fs.existsSync(configPath)) {
     console.error(`❌ Config file not found: ${configPath}`);
-    process.exit(1); // Exit if config file is missing.
+    process.exit(1);
   }
-  // Log if a custom config file is being used (in debug mode).
   if (forceDebug && configPath !== 'config.json') {
     console.log(`[debug] Using custom config file: ${configPath}`);
   }
-  // Read and parse the JSON configuration file.
   const raw = fs.readFileSync(configPath, 'utf8');
   config = JSON.parse(raw);
 } catch (e) {
-  // Handle errors during file loading or JSON parsing.
   console.error(`❌ Failed to load config file (${configPath}):`, e.message);
   process.exit(1);
 }
-// Destructure essential properties from config, providing defaults if they are missing.
-// sites: array of site objects to scan.
-// ignoreDomains: array of domain strings to ignore during scanning.
-// globalBlocked: array of regex strings for requests to block globally (applied if site doesn't override).
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
 // --- Global CDP Override Logic ---
-// If globalCDP is not already enabled by the --cdp flag,
-// check if any site in config.json has `cdp: true`. If so, enable globalCDP.
-// This allows site-specific config to trigger CDP logging for the entire session.
-// Note: Analysis suggests CDP should ideally be managed per-page for comprehensive logging.
 if (!enableCDP) {
   globalCDP = sites.some(site => site.cdp === true);
   if (forceDebug && globalCDP) {
@@ -170,14 +159,14 @@ function getRootDomain(url) { // Utility function to get the main domain part of
  * and potentially bypass some fingerprint-based bot detection.
  *
  * @returns {object} An object containing the spoofed fingerprint properties:
- *   @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
- *   @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
- *   @property {object} screen - Randomized screen dimensions and color depth.
- *     @property {number} screen.width - Randomized screen width.
- *     @property {number} screen.height - Randomized screen height.
- *     @property {number} screen.colorDepth - Fixed color depth (24).
- *   @property {string} platform - Fixed platform string ('Linux x86_64').
- *   @property {string} timezone - Fixed timezone ('UTC').
+ * @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
+ * @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
+ * @property {object} screen - Randomized screen dimensions and color depth.
+ * @property {number} screen.width - Randomized screen width.
+ * @property {number} screen.height - Randomized screen height.
+ * @property {number} screen.colorDepth - Fixed color depth (24).
+ * @property {string} platform - Fixed platform string ('Linux x86_64').
+ * @property {string} timezone - Fixed timezone ('UTC').
  */
 function getRandomFingerprint() { // Utility function to generate randomized fingerprint data.
   return {
@@ -194,12 +183,11 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
 }
 
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
-// This is where the main script logic resides.
 (async () => {
+  const limit = pLimit(MAX_CONCURRENT_SITES); // ADDED: Initialize p-limit for concurrency control
+
   // --- Puppeteer Browser Launch Configuration ---
-  // Check if any site-specific config requests headful, otherwise use global headfulMode.
   const perSiteHeadful = sites.some(site => site.headful === true);
-  // Launch headless unless global --headful or any site-specific headful is true.
   const launchHeadless = !(headfulMode || perSiteHeadful);
   const browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'], // Common args for CI/Docker environments.
@@ -208,9 +196,9 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
   });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
  
-  // --- Site Processing Counter Setup ---
-  let siteCounter = 0; // Counts successfully loaded sites.
-  // Calculate total number of URLs to be processed for progress tracking.
+  let siteCounter = 0; // This counter is for the [info] Loaded log line.
+                       // It will be incremented non-atomically by concurrent tasks.
+                       // The final accurate count of successful loads is `successfulPageLoads`.
   const totalUrls = sites.reduce((sum, site) => {
     const urls = Array.isArray(site.url) ? site.url.length : 1;
     return sum + urls;
@@ -218,8 +206,7 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
 
   // --- Global CDP (Chrome DevTools Protocol) Session ---
   // NOTE: This CDP session is attached to the initial browser page (e.g., about:blank).
-  // For comprehensive network logging per scanned site, a CDP session should ideally be
-  // created for each new page context. This current setup might miss some site-specific requests.
+  // This section remains as is, running before concurrent URL processing.
   if (globalCDP && forceDebug) {
     const [page] = await browser.pages(); // Get the initial page.
     const cdpSession = await page.target().createCDPSession();
@@ -232,347 +219,314 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
   }
 
   // --- Global evaluateOnNewDocument for Fetch/XHR Interception ---
-  // This loop attempts to set up fetch/XHR interception for sites that require it.
-  // NOTE: As per analysis, this `evaluateOnNewDocument` is applied to a temporary page
-  // created here (`browser.newPage().then(...)`) which is NOT the page used for actual site navigation later.
-  // This means the interception defined here likely won't apply as intended to the target pages.
-  // This should be refactored to apply to the correct page context during site processing.
+  // NOTE: As per analysis, this `evaluateOnNewDocument` is applied to a temporary page...
+  // This section remains as is, running before concurrent URL processing. Its original flaw persists.
   for (const site of sites) {
     const shouldInjectEval = site.evaluateOnNewDocument === true || globalEvalOnDoc;
-    if (shouldInjectEval) { // Redundant debug log here was removed in previous analysis.
+    if (shouldInjectEval) {
       if (forceDebug) console.log(`[debug] evaluateOnNewDocument pre-injection attempt for ${site.url}`);
-      await browser.newPage().then(page => { // Creates a new, temporary page.
-        page.evaluateOnNewDocument(() => { // Script to intercept fetch and XHR.
+      await browser.newPage().then(page => {
+        page.evaluateOnNewDocument(() => {
           const originalFetch = window.fetch;
           window.fetch = (...args) => {
-            console.log('[evalOnDoc][fetch]', args[0]); // Log fetch requests.
+            console.log('[evalOnDoc][fetch]', args[0]);
             return originalFetch.apply(this, args);
           };
-
           const originalXHR = XMLHttpRequest.prototype.open;
           XMLHttpRequest.prototype.open = function (method, url) {
-            console.log('[evalOnDoc][xhr]', url); // Log XHR requests.
+            console.log('[evalOnDoc][xhr]', url);
             return originalXHR.apply(this, arguments);
           };
         });
-        // This temporary page is not explicitly closed here or reused.
       });
     }
   }
 
-  const siteRules = []; // Array to store generated rules for all sites.
+  // Function to process a single URL. Encapsulates the original per-URL logic.
+  async function processUrl(currentUrl, siteConfig, browserInstance) {
+    const allowFirstParty = siteConfig.firstParty === 1;
+    const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === 1;
+    const perSiteSubDomains = siteConfig.subDomains === 1 ? true : subDomainsMode;
+    const siteLocalhost = siteConfig.localhost === true;
+    const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
+    const fingerprintSetting = siteConfig.fingerprint_protection || false;
 
-  // --- Main Site Loop: Iterate through each site configuration from config.json ---
-  for (const site of sites) {
-    // A single site entry in config can have one or multiple URLs.
-    const urls = Array.isArray(site.url) ? site.url : [site.url];
-    
-    // --- Inner URL Loop: Process each URL for the current site configuration ---
-    for (const currentUrl of urls) {
-      // --- Per-URL Variable Setup: Configure behavior for the current scan ---
-      const allowFirstParty = site.firstParty === 1; // Match first-party requests if true.
-      // Match third-party requests if true or undefined (default is true).
-      const allowThirdParty = site.thirdParty === undefined || site.thirdParty === 1;
-      // Use site-specific subdomain settings, else fallback to global subDomainsMode.
-      const perSiteSubDomains = site.subDomains === 1 ? true : subDomainsMode;
-      const siteLocalhost = site.localhost === true; // Format output as 127.0.0.1 for this site.
-      const siteLocalhostAlt = site.localhost_0_0_0_0 === true; // Format as 0.0.0.0.
-      const fingerprintSetting = site.fingerprint_protection || false; // Fingerprint spoofing setting.
+    if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
+      console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
+      return { url: currentUrl, rules: [], success: false, skipped: true };
+    }
 
-      // Skip if both first-party and third-party are disabled for this site.
-      if (site.firstParty === 0 && site.thirdParty === 0) {
-        console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
-        continue;
+    let page;
+    const matchedDomains = new Set();
+
+    if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
+
+    try {
+      page = await browserInstance.newPage();
+      await page.setRequestInterception(true);
+
+      if (siteConfig.clear_sitedata === true) {
+        try {
+          const client = await page.target().createCDPSession();
+          await client.send('Network.clearBrowserCookies');
+          await client.send('Network.clearBrowserCache');
+          await page.evaluate(() => {
+            localStorage.clear();
+            sessionStorage.clear();
+            indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
+          });
+          if (forceDebug) console.log(`[debug] Cleared site data for ${currentUrl}`);
+        } catch (err) {
+          console.warn(`[clear_sitedata failed] ${currentUrl}: ${err.message}`);
+        }
       }
 
-      let page; // Will hold the Puppeteer page object.
-      const matchedDomains = new Set(); // Store unique matched domains for this URL.
-      let pageLoadFailed = false; // Flag to track if page loading fails.
+      if (siteConfig.userAgent) {
+        if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${siteConfig.userAgent}`);
+        const userAgents = {
+          chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
+          firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
+          safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+        };
+        const ua = userAgents[siteConfig.userAgent.toLowerCase()];
+        if (ua) await page.setUserAgent(ua);
+      }
 
-      if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
-
-      try {
-        // --- Page Setup & Spoofing ---
-        page = await browser.newPage(); // Create a new page for the current URL.
-        await page.setRequestInterception(true); // Enable request interception.
-
-        // Clear site data before navigating if enabled
-        if (site.clear_sitedata === true) {
-          try {
-            const client = await page.target().createCDPSession();
-            await client.send('Network.clearBrowserCookies');
-            await client.send('Network.clearBrowserCache');
-            await page.evaluate(() => {
-              localStorage.clear();
-              sessionStorage.clear();
-              indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
-            });
-            if (forceDebug) console.log(`[debug] Cleared site data for ${currentUrl}`);
-          } catch (err) {
-            console.warn(`[clear_sitedata failed] ${currentUrl}: ${err.message}`);
-          }
-        }
-
-        // Apply User-Agent spoofing if specified in site config.
-        if (site.userAgent) {
-          if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${site.userAgent}`);
-          const userAgents = { // Predefined User-Agent strings.
-            chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-            firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
-            safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
-          };
-          const ua = userAgents[site.userAgent.toLowerCase()];
-          if (ua) await page.setUserAgent(ua);
-        }
-
-        // Apply Brave browser detection spoofing if specified.
-        if (site.isBrave) {
-          if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
-          // Inject script to make navigator.brave appear available.
-          await page.evaluateOnNewDocument(() => {
-            Object.defineProperty(navigator, 'brave', {
-              get: () => ({ isBrave: () => Promise.resolve(true) })
-            });
+      if (siteConfig.isBrave) {
+        if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
+        await page.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, 'brave', {
+            get: () => ({ isBrave: () => Promise.resolve(true) })
           });
+        });
+      }
+
+      if (fingerprintSetting) {
+        if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
+        const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
+          deviceMemory: 8, hardwareConcurrency: 4,
+          screen: { width: 1920, height: 1080, colorDepth: 24 },
+          platform: DEFAULT_PLATFORM, timezone: DEFAULT_TIMEZONE
+        };
+        try {
+          await page.evaluateOnNewDocument(({ spoof }) => {
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
+            Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
+            Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
+            Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
+            Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
+            Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
+              resolvedOptions() { return { timeZone: spoof.timezone }; }
+            };
+          }, { spoof });
+        } catch (err) {
+          console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
         }
-
-        // Apply Fingerprint Protection if specified.
-        if (fingerprintSetting) {
-          if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
-          // Use random fingerprint or predefined defaults.
-          const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
-            deviceMemory: 8, hardwareConcurrency: 4,
-            screen: { width: 1920, height: 1080, colorDepth: 24 },
-            platform: DEFAULT_PLATFORM, timezone: DEFAULT_TIMEZONE
-          };
-
-          try {
-            // Inject script to override various navigator and screen properties.
-            await page.evaluateOnNewDocument(({ spoof }) => {
-              Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
-              Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
-              Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
-              Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
-              Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
-              Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
-              Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
-                resolvedOptions() { return { timeZone: spoof.timezone }; }
-              };
-            }, { spoof });
-          } catch (err) {
-            console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
-          }
-        }
-      
-        // --- Regex Compilation for Filtering and Blocking ---
-        // Compile filterRegex strings from config into RegExp objects.
-        // Handles single regex string or an array of regex strings.
-        // Removes leading/trailing slashes if present (e.g. "/regex/").
-        const regexes = Array.isArray(site.filterRegex)
-          ? site.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
-          : site.filterRegex
-            ? [new RegExp(site.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
-            : [];
-
-        // verbose logging, pattern matching
-        if (site.verbose === 1 && site.filterRegex) {
-          const patterns = Array.isArray(site.filterRegex) ? site.filterRegex : [site.filterRegex];
-          console.log(`[info] Regex patterns for ${currentUrl}:`);
-          patterns.forEach((pattern, idx) => {
-            console.log(`  [${idx + 1}] ${pattern}`);
-          });
-        }
-
-        // Compile blocked request patterns from config into RegExp objects.
-        const blockedRegexes = Array.isArray(site.blocked)
-          ? site.blocked.map(pattern => new RegExp(pattern))
+      }
+    
+      const regexes = Array.isArray(siteConfig.filterRegex)
+        ? siteConfig.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
+        : siteConfig.filterRegex
+          ? [new RegExp(siteConfig.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
           : [];
 
-        // --- page.on('request', ...) Handler: Core Network Request Logic ---
-        const pageUrl = currentUrl; // Reference to the current page's URL for first-party checks.
-        page.on('request', request => {
-          const checkedUrl = request.url();
-          // Determine if the request is first-party relative to the page's main URL.
-          const isFirstParty = new URL(checkedUrl).hostname === new URL(pageUrl).hostname;
-
-          // Skip first-party requests if first-party matching is disabled for the site.
-          if (isFirstParty && site.firstParty === false) {
-            request.continue();
-            return;
-          }
-          // Skip third-party requests if third-party matching is disabled for the site.
-          if (!isFirstParty && site.thirdParty === false) {
-            request.continue();
-            return;
-          }
-
-          if (forceDebug) console.log('[debug request]', request.url());
-          const reqUrl = request.url();
-
-          // Abort requests that match any of the `blockedRegexes`.
-          if (blockedRegexes.some(re => re.test(reqUrl))) {
-            request.abort();
-            return;
-          }
-
-          // Extract domain: full hostname or root domain based on `perSiteSubDomains`.
-          const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
-
-          // Ignore if domain is empty or matches any entry in `ignoreDomains`.
-          if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
-            request.continue();
-            return;
-          }
-
-          // show verbose logging if enabled
-          for (const re of regexes) {
-            if (re.test(reqUrl)) {
-              matchedDomains.add(reqDomain);
-              if (site.verbose === 1) {
-                console.log(`[match] ${reqUrl} matched regex: ${re}`);
-              }
-              if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
-              break;
-            }
-          }
-
-          request.continue(); // Allow all other requests to proceed.
+      if (siteConfig.verbose === 1 && siteConfig.filterRegex) {
+        const patterns = Array.isArray(siteConfig.filterRegex) ? siteConfig.filterRegex : [siteConfig.filterRegex];
+        console.log(`[info] Regex patterns for ${currentUrl}:`);
+        patterns.forEach((pattern, idx) => {
+          console.log(`  [${idx + 1}] ${pattern}`);
         });
+      }
 
-        // --- Page Navigation and Interaction ---
-        const interactEnabled = site.interact === true;
-        try {
-          // Navigate to the current URL.
-          await page.goto(currentUrl, { waitUntil: 'load', timeout: site.timeout || 40000 });
-          siteCounter++; // Increment successful load counter.
-          console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
-          // Simple evaluation to confirm page context is accessible.
-          await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
-        } catch (err) {
-          console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
-          // Note: pageLoadFailed will be set in the outer catch if this throws.
+      const blockedRegexes = Array.isArray(siteConfig.blocked)
+        ? siteConfig.blocked.map(pattern => new RegExp(pattern))
+        : [];
+
+      page.on('request', request => {
+        const checkedUrl = request.url();
+        const isFirstParty = new URL(checkedUrl).hostname === new URL(currentUrl).hostname;
+
+        if (isFirstParty && siteConfig.firstParty === false) {
+          request.continue();
+          return;
+        }
+        if (!isFirstParty && siteConfig.thirdParty === false) {
+          request.continue();
+          return;
         }
 
-        // Simulate user interaction if enabled for the site and not globally disabled.
-        if (interactEnabled && !disableInteract) {
-          if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
-          // Perform random mouse movements and a click.
-          const randomX = Math.floor(Math.random() * 500) + 50;
-          const randomY = Math.floor(Math.random() * 500) + 50;
-          await page.mouse.move(randomX, randomY, { steps: 10 });
-          await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
-          await page.mouse.click(randomX + 25, randomY + 25);
-          await page.hover('body'); // Hover over body to potentially trigger events.
+        if (forceDebug) console.log('[debug request]', request.url());
+        const reqUrl = request.url();
+
+        if (blockedRegexes.some(re => re.test(reqUrl))) {
+          request.abort();
+          return;
         }
 
-        // Wait for network to be idle and then an additional fixed delay.
-        const delayMs = site.delay || 2000; // Site-specific delay or default 2s.
-        await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
-        // Reload the page multiple times if specified in site config.
-        for (let i = 1; i < (site.reload || 1); i++) { // Default is 1 (no extra reloads).
-         if (site.clear_sitedata === true) { // If true, clear site data
-           try {
-             const client = await page.target().createCDPSession();
-             await client.send('Network.clearBrowserCookies');
-             await client.send('Network.clearBrowserCache');
-             await page.evaluate(() => {
-               localStorage.clear();
-               sessionStorage.clear();
-               indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
-             });
-             if (forceDebug) console.log(`[debug] Cleared site data before reload #${i + 1} for ${currentUrl}`);
-           } catch (err) {
-             console.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${err.message}`);
-           }
+        if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
+          request.continue();
+          return;
+        }
+
+        for (const re of regexes) {
+          if (re.test(reqUrl)) {
+            matchedDomains.add(reqDomain);
+            if (siteConfig.verbose === 1) {
+              console.log(`[match] ${reqUrl} matched regex: ${re}`);
+            }
+            if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
+            break;
+          }
+        }
+        request.continue();
+      });
+
+      const interactEnabled = siteConfig.interact === true;
+      try {
+        await page.goto(currentUrl, { waitUntil: 'load', timeout: siteConfig.timeout || 40000 });
+        siteCounter++; // Non-atomic increment for the log line's progress indication.
+        console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
+        await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
+      } catch (err) {
+        console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
+        throw err; // Re-throw to be caught by processUrl's main try-catch
+      }
+
+      if (interactEnabled && !disableInteract) {
+        if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
+        const randomX = Math.floor(Math.random() * 500) + 50;
+        const randomY = Math.floor(Math.random() * 500) + 50;
+        await page.mouse.move(randomX, randomY, { steps: 10 });
+        await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
+        await page.mouse.click(randomX + 25, randomY + 25);
+        await page.hover('body');
+      }
+
+      const delayMs = siteConfig.delay || 2000;
+      await page.waitForNetworkIdle({ idleTime: 2000, timeout: siteConfig.timeout || 30000 });
+      await new Promise(resolve => setTimeout(resolve, delayMs));
+
+      for (let i = 1; i < (siteConfig.reload || 1); i++) {
+       if (siteConfig.clear_sitedata === true) {
+         try {
+           const client = await page.target().createCDPSession();
+           await client.send('Network.clearBrowserCookies');
+           await client.send('Network.clearBrowserCache');
+           await page.evaluate(() => {
+             localStorage.clear();
+             sessionStorage.clear();
+             indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
+           });
+           if (forceDebug) console.log(`[debug] Cleared site data before reload #${i + 1} for ${currentUrl}`);
+         } catch (err) {
+           console.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${err.message}`);
          }
+       }
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: siteConfig.timeout || 30000 });
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
 
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
-          await new Promise(resolve => setTimeout(resolve, delayMs)); // Wait after each reload.
-        }
-
-        // Force an extra reload if specified "Shift reload website"
-        if (site.forcereload === true) {
-          if (forceDebug) console.log(`[debug] Forcing extra reload (cache disabled) for ${currentUrl}`);
+      if (siteConfig.forcereload === true) {
+        if (forceDebug) console.log(`[debug] Forcing extra reload (cache disabled) for ${currentUrl}`);
         try {
           await page.setCacheEnabled(false);
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: siteConfig.timeout || 30000 });
           await new Promise(resolve => setTimeout(resolve, delayMs));
           await page.setCacheEnabled(true);
         } catch (err) {
           console.warn(`[forcereload failed] ${currentUrl}: ${err.message}`);
         }
-       }
-
-        await page.close(); // Close the page after processing.
-      } catch (err) { // --- Error Handling for Page Load/Processing ---
-        console.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`);
-        // If screenshot on failure is enabled and page object exists.
-        if (site.screenshot === true && page) {
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
-          const filename = `${safeUrl}-${timestamp}.jpg`;
-          try {
-            // Take a full-page screenshot.
-            await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
-            if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
-          } catch (errSc) {
-            console.warn(`[screenshot failed] ${currentUrl}: ${errSc.message}`);
-          }
-        }
-        pageLoadFailed = true; // Mark that this page failed.
-        if (page && !page.isClosed()) await page.close(); // Ensure page is closed on error.
       }
 
-      // --- Output Formatting for Matched Domains ---
-      const siteMatchedDomains = []; // Store formatted rules for this specific URL.
-      matchedDomains.forEach(domain => {
-        // Basic validation for domain string.
-        if (domain.length > 6 && domain.includes('.')) {
-          // Determine if plain output (just domain) or adblock rule format is needed.
-          // site.plain defaults to false if undefined. True only if explicitly site.plain: true.
-          const sitePlainSetting = site.plain === true;
-          // Use plainOutput if global flag is set OR if site-specific plain is true.
-          const usePlain = plainOutput || sitePlainSetting;
+      await page.close();
 
-          // Format based on localhost flags or standard adblock syntax.
-          if (localhostMode || siteLocalhost) { // 127.0.0.1 format
-            siteMatchedDomains.push(usePlain ? domain : `127.0.0.1 ${domain}`);
-          } else if (localhostModeAlt || siteLocalhostAlt) { // 0.0.0.0 format
-            siteMatchedDomains.push(usePlain ? domain : `0.0.0.0 ${domain}`);
-          } else { // Standard adblocker format (e.g., ||domain.com^)
-            siteMatchedDomains.push(usePlain ? domain : `||${domain}^`);
+      const formattedRules = [];
+      matchedDomains.forEach(domain => {
+        if (domain.length > 6 && domain.includes('.')) {
+          const sitePlainSetting = siteConfig.plain === true;
+          const usePlain = plainOutput || sitePlainSetting;
+          if (localhostMode || siteLocalhost) {
+            formattedRules.push(usePlain ? domain : `127.0.0.1 ${domain}`);
+          } else if (localhostModeAlt || siteLocalhostAlt) {
+            formattedRules.push(usePlain ? domain : `0.0.0.0 ${domain}`);
+          } else {
+            formattedRules.push(usePlain ? domain : `||${domain}^`);
           }
         }
       });
+      return { url: currentUrl, rules: formattedRules, success: true };
 
-      // Store the rules collected for this URL along with the URL itself.
-      siteRules.push({ url: currentUrl, rules: siteMatchedDomains });
+    } catch (err) {
+      console.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`);
+      if (siteConfig.screenshot === true && page) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
+        const filename = `${safeUrl}-${timestamp}.jpg`;
+        try {
+          await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
+          if (forceDebug) console.lge.isClosed()) await page.close();
+      return { url: currentUrl, rules: [], success: false };
+    }
+  } // --- End of processUrl function ---
+
+  // --- Main Task Scheduling Loop ---
+  const allProcessingTasks = [];
+  for (const site of sites) {
+    const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
+    for (const currentUrl of urlsToProcess) {
+      allProcessingTasks.push(limit(() => processUrl(currentUrl, site, browser)));
     }
   }
+
+  // --- Wait for all tasks to complete and gather results ---
+  if (!silentMode && allProcessingTasks.length > 0) {
+    console.log(`\nProcessing ${allProcessingTasks.length} URLs with concurrency ${MAX_CONCURRENT_SITES}...`);
+  }
+  const results = await Promise.all(allProcessingTasks);
+
+  // --- Aggregate results ---
+  const finalSiteRules = [];
+  let successfulPageLoads = 0;
+
+  results.forEach(result => {
+    // Ensure result is valid before accessing its properties
+    if (result) {
+        if (result.success) {
+            successfulPageLoads++;
+        }
+        if (result.rules && result.rules.length > 0) {
+            finalSiteRules.push({ url: result.url, rules: result.rules });
+        }
+        // Skipped sites are already logged within processUrl, no further action here.
+    }
+  });
+  
+  // Update siteCounter to the accurate count for the final summary log.
+  // The siteCounter used in processUrl's [info] Loaded log is for immediate, non-atomic feedback.
+  siteCounter = successfulPageLoads;
+
 
   // --- Final Output Aggregation & Writing ---
-  const outputLines = []; // Array to hold all lines for the final output.
-  // Iterate through rules collected from all scanned URLs.
-  for (const { url, rules } of siteRules) {
-    if (rules.length > 0) { // Only process if there are rules for this URL.
-      // Add a title comment (e.g., "! https://example.com") if showTitles is enabled.
+  const outputLines = [];
+  for (const { url, rules } of finalSiteRules) {
+    if (rules.length > 0) {
       if (showTitles) outputLines.push(`! ${url}`);
-      outputLines.push(...rules); // Add the actual rules.
+      outputLines.push(...rules);
     }
   }
 
-  // Write the aggregated rules to the specified output file or to the console.
   if (outputFile) {
     fs.writeFileSync(outputFile, outputLines.join('\n') + '\n');
-    if (!silentMode) console.log(`Adblock rules saved to ${outputFile}`);
+    if (!silentMode) console.log(`\nAdblock rules saved to ${outputFile}`);
   } else {
-    console.log(outputLines.join('\n')); // Print to console if no output file.
+    if (outputLines.length > 0) console.log("\n--- Generated Rules ---");
+    console.log(outputLines.join('\n'));
   }
   
-  await browser.close(); // Close the browser instance.
-  // show time taken
+  await browser.close();
   const endTime = Date.now();
   const durationMs = endTime - startTime;
   const totalSeconds = Math.floor(durationMs / 1000);
@@ -581,8 +535,8 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
   const seconds = totalSeconds % 60;
 
   if (!silentMode) {
-    console.log(`Scan completed in ${hours}h ${minutes}m ${seconds}s`);
+    // Use the accurate siteCounter (successfulPageLoads) for the summary.
+    console.log(`\nScan completed. ${siteCounter} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
   }
-  // Exit
-  process.exit(0); // Exit script successfully.
+  process.exit(0);
 })();
