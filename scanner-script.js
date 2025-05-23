@@ -1,14 +1,14 @@
-// === Network scanner script v0.9.1 ===
+// === Network scanner script v0.9.2 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
-const pLimit = require('p-limit'); // ADDED for concurrency control
+const pLimit = require('p-limit');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.1'; // Script version
-const MAX_CONCURRENT_SITES = 4; // ADDED: Concurrency limit for scanning
+const VERSION = '0.9.2'; // Script version
+const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
 const startTime = Date.now();
@@ -17,47 +17,39 @@ const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
 
 // --- Command-Line Argument Parsing ---
-// process.argv contains node path, script path, then arguments. slice(2) gets just the arguments.
 const args = process.argv.slice(2);
 
-// If no command-line arguments are given, default to showing the help menu.
 if (args.length === 0) {
   args.push('--help');
 }
 
-// Check for --headful flag to run browser with GUI.
 const headfulMode = args.includes('--headful');
-const SOURCES_FOLDER = 'sources'; // Declared, but not actively used in the provided script.
+const SOURCES_FOLDER = 'sources';
 
-// Parse --output or -o argument for specifying the output file.
 let outputFile = null;
 const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
 if (outputIndex !== -1 && args[outputIndex + 1]) {
-  outputFile = args[outputIndex + 1]; // Assign the filename provided after the flag.
+  outputFile = args[outputIndex + 1];
 }
 
-// Boolean flags for various script behaviors.
-const forceVerbose = args.includes('--verbose'); // Enables detailed logging.
-const forceDebug = args.includes('--debug');     // Enables even more detailed debug logging.
-const silentMode = args.includes('--silent');   // Suppresses most console output.
-const showTitles = args.includes('--titles');   // Adds URL titles as comments in the output.
-const dumpUrls = args.includes('--dumpurls');   // Logs all matched URLs to 'matched_urls.log'.
-const subDomainsMode = args.includes('--sub-domains'); // Outputs full subdomains instead of root domains.
-const localhostMode = args.includes('--localhost'); // Formats output for /etc/hosts (127.0.0.1).
-const localhostModeAlt = args.includes('--localhost-0.0.0.0'); // Formats output for /etc/hosts (0.0.0.0).
-const disableInteract = args.includes('--no-interact'); // Disables all simulated page interactions.
-const plainOutput = args.includes('--plain');     // Outputs matched domains without adblock syntax.
-const enableCDP = args.includes('--cdp');         // Enables Chrome DevTools Protocol logging globally.
-let globalCDP = enableCDP; // Initialize globalCDP state; may be overridden by site config.
-const globalEvalOnDoc = args.includes('--eval-on-doc'); // Enables evaluateOnNewDocument for all sites.
+const forceVerbose = args.includes('--verbose');
+const forceDebug = args.includes('--debug');
+const silentMode = args.includes('--silent');
+const showTitles = args.includes('--titles');
+const dumpUrls = args.includes('--dumpurls');
+const subDomainsMode = args.includes('--sub-domains');
+const localhostMode = args.includes('--localhost');
+const localhostModeAlt = args.includes('--localhost-0.0.0.0');
+const disableInteract = args.includes('--no-interact');
+const plainOutput = args.includes('--plain');
+const enableCDP = args.includes('--cdp');
+const globalEvalOnDoc = args.includes('--eval-on-doc');
 
-// Handle --version flag: print version and exit.
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
   process.exit(0);
 }
 
-// Handle --help or -h flag: print usage instructions and exit.
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node scanner-script.js [options]
 
@@ -75,7 +67,7 @@ Options:
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
-  --cdp                          Enable Chrome DevTools Protocol logging
+  --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --eval-on-doc                 Globally enable evaluateOnNewDocument()
   --help, -h                     Show this help menu
   --version                      Show script version
@@ -126,100 +118,72 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
-// --- Global CDP Override Logic ---
-if (!enableCDP) {
-  globalCDP = sites.some(site => site.cdp === true);
-  if (forceDebug && globalCDP) {
-    const cdpSites = sites.filter(site => site.cdp === true).map(site => site.url);
-    console.log('[debug] CDP enabled via config.json for sites:', cdpSites.join(', '));
-  }
-}
+// --- Global CDP Override Logic --- [COMMENT RE-ADDED]
+// If globalCDP is not already enabled by the --cdp flag,
+// check if any site in config.json has `cdp: true`. If so, enable globalCDP.
+// This allows site-specific config to trigger CDP logging for the entire session.
+// Note: Analysis suggests CDP should ideally be managed per-page for comprehensive logging.
+// (The code block that utilized this logic for a global CDP variable has been removed
+// as CDP is now handled per-page based on 'enableCDP' and 'siteConfig.cdp')
 
 /**
  * Extracts the root domain from a given URL string using the psl library.
- * For example, for 'http://sub.example.com/path', it returns 'example.com'.
- *
- * @param {string} url - The URL string to parse.
- * @returns {string} The root domain, or the original hostname if parsing fails (e.g., for IP addresses or invalid URLs), or an empty string on error.
  */
-function getRootDomain(url) { // Utility function to get the main domain part of a URL.
+function getRootDomain(url) {
   try {
-    const { hostname } = new URL(url); // Extract hostname from URL.
-    const parsed = psl.parse(hostname); // Use psl library to parse the hostname.
-    return parsed.domain || hostname; // Return the parsed domain or the original hostname if psl fails.
+    const { hostname } = new URL(url);
+    const parsed = psl.parse(hostname);
+    return parsed.domain || hostname;
   } catch {
-    return ''; // Return empty string if URL parsing fails.
+    return '';
   }
 }
 
 /**
  * Generates an object with randomized browser fingerprint values.
- * This is used to spoof various navigator and screen properties to make
- * the headless browser instance appear more like a regular user's browser
- * and potentially bypass some fingerprint-based bot detection.
- *
- * @returns {object} An object containing the spoofed fingerprint properties:
- * @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
- * @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
- * @property {object} screen - Randomized screen dimensions and color depth.
- * @property {number} screen.width - Randomized screen width.
- * @property {number} screen.height - Randomized screen height.
- * @property {number} screen.colorDepth - Fixed color depth (24).
- * @property {string} platform - Fixed platform string ('Linux x86_64').
- * @property {string} timezone - Fixed timezone ('UTC').
  */
-function getRandomFingerprint() { // Utility function to generate randomized fingerprint data.
+function getRandomFingerprint() {
   return {
-    deviceMemory: Math.random() < 0.5 ? 4 : 8, // Randomly pick 4 or 8 GB RAM.
-    hardwareConcurrency: [2, 4, 8][Math.floor(Math.random() * 3)], // Randomly pick 2, 4, or 8 cores.
-    screen: { // Randomize screen dimensions to mimic common mobile/desktop sizes.
-      width: 360 + Math.floor(Math.random() * 400),  // Base width + random addition.
-      height: 640 + Math.floor(Math.random() * 500), // Base height + random addition.
-      colorDepth: 24 // Standard color depth.
+    deviceMemory: Math.random() < 0.5 ? 4 : 8,
+    hardwareConcurrency: [2, 4, 8][Math.floor(Math.random() * 3)],
+    screen: {
+      width: 360 + Math.floor(Math.random() * 400),
+      height: 640 + Math.floor(Math.random() * 500),
+      colorDepth: 24
     },
-    platform: 'Linux x86_64', // Fixed platform.
-    timezone: 'UTC' // Fixed timezone.
+    platform: 'Linux x86_64',
+    timezone: 'UTC'
   };
 }
 
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 (async () => {
-  const limit = pLimit(MAX_CONCURRENT_SITES); // ADDED: Initialize p-limit for concurrency control
+  const limit = pLimit(MAX_CONCURRENT_SITES);
 
-  // --- Puppeteer Browser Launch Configuration ---
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
   const browser = await puppeteer.launch({
-    args: ['--no-sandbox', '--disable-setuid-sandbox'], // Common args for CI/Docker environments.
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
     headless: launchHeadless,
-    protocolTimeout: 300000 // Set a higher protocol timeout (5 minutes).
+    protocolTimeout: 300000
   });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
  
-  let siteCounter = 0; // This counter is for the [info] Loaded log line.
-                       // It will be incremented non-atomically by concurrent tasks.
-                       // The final accurate count of successful loads is `successfulPageLoads`.
+  let siteCounter = 0;
   const totalUrls = sites.reduce((sum, site) => {
     const urls = Array.isArray(site.url) ? site.url.length : 1;
     return sum + urls;
   }, 0);
 
-  // --- Global CDP (Chrome DevTools Protocol) Session ---
+  // --- Global CDP (Chrome DevTools Protocol) Session --- [COMMENT RE-ADDED]
   // NOTE: This CDP session is attached to the initial browser page (e.g., about:blank).
-  // This section remains as is, running before concurrent URL processing.
-  if (globalCDP && forceDebug) {
-    const [page] = await browser.pages(); // Get the initial page.
-    const cdpSession = await page.target().createCDPSession();
-    await cdpSession.send('Network.enable'); // Enable network request monitoring.
-    cdpSession.on('Network.requestWillBeSent', (params) => { // Log requests.
-      const { url, method } = params.request;
-      const initiator = params.initiator ? params.initiator.type : 'unknown';
-      console.log(`[cdp] ${method} ${url} (initiator: ${initiator})`);
-    });
-  }
+  // For comprehensive network logging per scanned site, a CDP session should ideally be
+  // created for each new page context. This current setup might miss some site-specific requests.
+  // (The code block for this initial global CDP session has been removed.
+  // CDP is now handled on a per-page basis within processUrl if enabled.)
+
 
   // --- Global evaluateOnNewDocument for Fetch/XHR Interception ---
-  // NOTE: As per analysis, this `evaluateOnNewDocument` is applied to a temporary page...
   // This section remains as is, running before concurrent URL processing. Its original flaw persists.
   for (const site of sites) {
     const shouldInjectEval = site.evaluateOnNewDocument === true || globalEvalOnDoc;
@@ -232,6 +196,7 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
             console.log('[evalOnDoc][fetch]', args[0]);
             return originalFetch.apply(this, args);
           };
+
           const originalXHR = XMLHttpRequest.prototype.open;
           XMLHttpRequest.prototype.open = function (method, url) {
             console.log('[evalOnDoc][xhr]', url);
@@ -242,7 +207,6 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
     }
   }
 
-  // Function to process a single URL. Encapsulates the original per-URL logic.
   async function processUrl(currentUrl, siteConfig, browserInstance) {
     const allowFirstParty = siteConfig.firstParty === 1;
     const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === 1;
@@ -263,6 +227,35 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
 
     try {
       page = await browserInstance.newPage();
+
+      // --- Per-Page CDP Setup ---
+      const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
+      if (cdpLoggingNeededForPage) {
+        if (forceDebug) {
+            if (enableCDP) {
+                console.log(`[debug] CDP logging globally enabled by --cdp, applying to page: ${currentUrl}`);
+            } else if (siteConfig.cdp === true) {
+                console.log(`[debug] CDP logging enabled for page ${currentUrl} via site-specific 'cdp: true' config.`);
+            }
+        }
+        try {
+            const cdpSession = await page.target().createCDPSession();
+            await cdpSession.send('Network.enable');
+            cdpSession.on('Network.requestWillBeSent', (params) => {
+                const { url: requestUrl, method } = params.request;
+                const initiator = params.initiator ? params.initiator.type : 'unknown';
+                let hostnameForLog = 'unknown-host';
+                try {
+                    hostnameForLog = new URL(currentUrl).hostname;
+                } catch (_) { /* ignore if currentUrl is invalid for URL parsing */ }
+                console.log(`[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`);
+            });
+        } catch (cdpErr) {
+            console.warn(`[warn][cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`);
+        }
+      }
+      // --- End of Per-Page CDP Setup ---
+
       await page.setRequestInterception(true);
 
       if (siteConfig.clear_sitedata === true) {
@@ -387,12 +380,12 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
       const interactEnabled = siteConfig.interact === true;
       try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: siteConfig.timeout || 40000 });
-        siteCounter++; // Non-atomic increment for the log line's progress indication.
+        siteCounter++;
         console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
         await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
       } catch (err) {
         console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
-        throw err; // Re-throw to be caught by processUrl's main try-catch
+        throw err;
       }
 
       if (interactEnabled && !disableInteract) {
@@ -467,12 +460,16 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
         const filename = `${safeUrl}-${timestamp}.jpg`;
         try {
           await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
-          if (forceDebug) console.lge.isClosed()) await page.close();
+          if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
+        } catch (errSc) {
+          console.warn(`[screenshot failed] ${currentUrl}: ${errSc.message}`);
+        }
+      }
+      if (page && !page.isClosed()) await page.close();
       return { url: currentUrl, rules: [], success: false };
     }
-  } // --- End of processUrl function ---
+  }
 
-  // --- Main Task Scheduling Loop ---
   const allProcessingTasks = [];
   for (const site of sites) {
     const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
@@ -481,18 +478,15 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
     }
   }
 
-  // --- Wait for all tasks to complete and gather results ---
   if (!silentMode && allProcessingTasks.length > 0) {
     console.log(`\nProcessing ${allProcessingTasks.length} URLs with concurrency ${MAX_CONCURRENT_SITES}...`);
   }
   const results = await Promise.all(allProcessingTasks);
 
-  // --- Aggregate results ---
   const finalSiteRules = [];
   let successfulPageLoads = 0;
 
   results.forEach(result => {
-    // Ensure result is valid before accessing its properties
     if (result) {
         if (result.success) {
             successfulPageLoads++;
@@ -500,16 +494,11 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
         if (result.rules && result.rules.length > 0) {
             finalSiteRules.push({ url: result.url, rules: result.rules });
         }
-        // Skipped sites are already logged within processUrl, no further action here.
     }
   });
   
-  // Update siteCounter to the accurate count for the final summary log.
-  // The siteCounter used in processUrl's [info] Loaded log is for immediate, non-atomic feedback.
   siteCounter = successfulPageLoads;
 
-
-  // --- Final Output Aggregation & Writing ---
   const outputLines = [];
   for (const { url, rules } of finalSiteRules) {
     if (rules.length > 0) {
@@ -535,7 +524,6 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
   const seconds = totalSeconds % 60;
 
   if (!silentMode) {
-    // Use the accurate siteCounter (successfulPageLoads) for the summary.
     console.log(`\nScan completed. ${siteCounter} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
   }
   process.exit(0);
