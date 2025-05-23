@@ -1,13 +1,13 @@
-// === Network scanner script v0.9.2 ===
+// === Network scanner script v0.9.3 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
-// const pLimit = require('p-limit'); // REMOVED - Will be dynamically imported
+// const pLimit = require('p-limit'); // Will be dynamically imported
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.2'; // Script version
+const VERSION = '0.9.3'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -17,7 +17,6 @@ const DEFAULT_PLATFORM = 'Win32';
 const DEFAULT_TIMEZONE = 'America/New_York';
 
 // --- Command-Line Argument Parsing ---
-// ... (rest of the argument parsing code remains unchanged) ...
 const args = process.argv.slice(2);
 
 if (args.length === 0) {
@@ -44,7 +43,7 @@ const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
-const globalEvalOnDoc = args.includes('--eval-on-doc');
+const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
@@ -69,7 +68,7 @@ Options:
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
-  --eval-on-doc                 Globally enable evaluateOnNewDocument()
+  --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
 
@@ -93,14 +92,13 @@ Per-site config.json options:
   screenshot: true/false                       Capture screenshot on load failure
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
-  evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page
+  evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
 `);
   process.exit(0);
 }
 
 // --- Configuration File Loading ---
-// ... (Configuration file loading code remains unchanged) ...
 const configPathIndex = args.findIndex(arg => arg === '--custom-json');
 const configPath = (configPathIndex !== -1 && args[configPathIndex + 1]) ? args[configPathIndex + 1] : 'config.json';
 let config;
@@ -120,8 +118,7 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
-
-// --- Global CDP Override Logic --- [COMMENT RE-ADDED]
+// --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
 // This allows site-specific config to trigger CDP logging for the entire session.
@@ -179,9 +176,8 @@ function getRandomFingerprint() {
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
-  // Dynamically import p-limit as it's an ES Module
-  const pLimit = (await import('p-limit')).default; // ADDED dynamic import
-  const limit = pLimit(MAX_CONCURRENT_SITES); // MOVED initialization here
+  const pLimit = (await import('p-limit')).default;
+  const limit = pLimit(MAX_CONCURRENT_SITES);
 
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
@@ -198,7 +194,7 @@ function getRandomFingerprint() {
     return sum + urls;
   }, 0);
 
-  // --- Global CDP (Chrome DevTools Protocol) Session --- [COMMENT RE-ADDED]
+  // --- Global CDP (Chrome DevTools Protocol) Session --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
   // NOTE: This CDP session is attached to the initial browser page (e.g., about:blank).
   // For comprehensive network logging per scanned site, a CDP session should ideally be
   // created for each new page context. This current setup might miss some site-specific requests.
@@ -207,33 +203,9 @@ function getRandomFingerprint() {
 
 
   // --- Global evaluateOnNewDocument for Fetch/XHR Interception ---
-  // This loop attempts to set up fetch/XHR interception for sites that require it.
-  // NOTE: As per analysis, this `evaluateOnNewDocument` is applied to a temporary page
-  // created here (`browser.newPage().then(...)`) which is NOT the page used for actual site navigation later.
-  // This means the interception defined here likely won't apply as intended to the target pages.
-  for (const site of sites) {
-    const shouldInjectEval = site.evaluateOnNewDocument === true || globalEvalOnDoc;
-    if (shouldInjectEval) {
-      if (forceDebug) console.log(`[debug] evaluateOnNewDocument pre-injection attempt for ${site.url}`);
-      await browser.newPage().then(page => {
-        page.evaluateOnNewDocument(() => { // Script to intercept fetch and XHR.
-          // This script attempts to intercept and log Fetch and XHR requests
-          // from within the page context at the earliest possible moment.
-          const originalFetch = window.fetch;
-          window.fetch = (...args) => {
-            console.log('[evalOnDoc][fetch]', args[0]);
-            return originalFetch.apply(this, args);
-          };
+  // REMOVED: The old flawed global loop for evaluateOnNewDocument (Fetch/XHR interception) is removed.
+  // This functionality is now correctly implemented within the processUrl function on the actual target page.
 
-          const originalXHR = XMLHttpRequest.prototype.open;
-          XMLHttpRequest.prototype.open = function (method, url) {
-            console.log('[evalOnDoc][xhr]', url);
-            return originalXHR.apply(this, arguments);
-          };
-        });
-      });
-    }
-  }
 
   /**
    * Processes a single URL: navigates to it, applies configurations (spoofing, interception),
@@ -241,14 +213,8 @@ function getRandomFingerprint() {
    *
    * @param {string} currentUrl - The URL to scan.
    * @param {object} siteConfig - The configuration object for this specific site/URL from config.json.
-   * It includes options like filterRegex, blocked patterns, interaction settings, etc.
    * @param {import('puppeteer').Browser} browserInstance - The shared Puppeteer browser instance.
-   * @returns {Promise<object>} A promise that resolves to an object containing the scan results for the URL.
-   * The object has the following properties:
-   * - `url` {string}: The URL that was processed.
-   * - `rules` {string[]}: An array of formatted strings (rules or plain domains) derived from matched domains.
-   * - `success` {boolean}: True if the page was loaded and processed successfully, false otherwise.
-   * - `skipped` {boolean} (optional): True if the URL was skipped due to configuration (e.g., firstParty and thirdParty both disabled).
+   * @returns {Promise<object>} A promise that resolves to an object containing scan results.
    */
   async function processUrl(currentUrl, siteConfig, browserInstance) {
     const allowFirstParty = siteConfig.firstParty === 1;
@@ -271,9 +237,41 @@ function getRandomFingerprint() {
     try {
       page = await browserInstance.newPage();
 
+      // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
+      // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
+      const shouldInjectEvalForPage = siteConfig.evaluateOnNewDocument === true || globalEvalOnDoc;
+      if (shouldInjectEvalForPage) {
+          if (forceDebug) {
+              if (globalEvalOnDoc) {
+                  console.log(`[debug][evalOnDoc] Global Fetch/XHR interception enabled, applying to: ${currentUrl}`);
+              } else { // siteConfig.evaluateOnNewDocument must be true
+                  console.log(`[debug][evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`);
+              }
+          }
+          try {
+              await page.evaluateOnNewDocument(() => {
+                  // This script intercepts and logs Fetch and XHR requests
+                  // from within the page context at the earliest possible moment.
+                  const originalFetch = window.fetch;
+                  window.fetch = (...args) => {
+                      console.log('[evalOnDoc][fetch]', args[0]); // Log fetch requests
+                      return originalFetch.apply(this, args);
+                  };
+
+                  const originalXHROpen = XMLHttpRequest.prototype.open;
+                  XMLHttpRequest.prototype.open = function (method, xhrUrl) { // Renamed 'url' to 'xhrUrl' to avoid conflict
+                      console.log('[evalOnDoc][xhr]', xhrUrl); // Log XHR requests
+                      return originalXHROpen.apply(this, arguments);
+                  };
+              });
+          } catch (evalErr) {
+              console.warn(`[warn][evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`);
+          }
+      }
+      // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
+
+
       // --- Per-Page CDP Setup ---
-      // Attaches a Chrome DevTools Protocol session to the current page if enabled globally or by site config.
-      // This allows for more granular network event logging specific to this page.
       const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
       if (cdpLoggingNeededForPage) {
         if (forceDebug) {
@@ -330,6 +328,7 @@ function getRandomFingerprint() {
         if (ua) await page.setUserAgent(ua);
       }
 
+      // --- evaluateOnNewDocument for Brave Spoofing (existing) ---
       if (siteConfig.isBrave) {
         if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
         await page.evaluateOnNewDocument(() => {
@@ -339,6 +338,7 @@ function getRandomFingerprint() {
         });
       }
 
+      // --- evaluateOnNewDocument for Fingerprint Protection (existing) ---
       if (fingerprintSetting) {
         if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
         const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
@@ -512,11 +512,13 @@ function getRandomFingerprint() {
         const filename = `${safeUrl}-${timestamp}.jpg`;
         try {
           await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
+          // Corrected line below
           if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
         } catch (errSc) {
           console.warn(`[screenshot failed] ${currentUrl}: ${errSc.message}`);
         }
       }
+      // Corrected line below: This 'if' statement must be separate and correctly formatted
       if (page && !page.isClosed()) await page.close();
       return { url: currentUrl, rules: [], success: false };
     }
