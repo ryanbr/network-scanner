@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v0.8.7) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v0.9.0) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -56,6 +56,7 @@ Example:
       "filterRegex": "ads|analytics",
       "resourceTypes": ["script", "xhr", "image"],
       "reload": 2,
+      "forcereload": true,
       "delay": 5000,
       "timeout": 30000,
       "verbose": 1,
@@ -85,6 +86,7 @@ Example:
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |
+| `forcereload`        | `true` or `false` | `false` | Force page reload |
 | `delay`              | Milliseconds | `2000` | Wait time after loading/reloading |
 | `timeout`            | Milliseconds | `30000` | Timeout for page load |
 | `verbose`            | `0` or `1` | `0` | Enable verbose output per site |

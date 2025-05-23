@@ -1,4 +1,4 @@
-// === Network scanner script v0.8.9 ===
+// === Network scanner script v0.9.0 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 const puppeteer = require('puppeteer');
@@ -6,7 +6,7 @@ const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.8.9'; // Script version
+const VERSION = '0.9.0'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -87,6 +87,7 @@ Per-site config.json options:
   userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
   delay: <milliseconds>                        Delay after load (default: 2000)
   reload: <number>                             Reload page n times after load (default: 1)
+  forcereload: true/false                      Force an additional reload after reloads
   subDomains: 1/0                              Output full subdomains (default: 0)
   localhost: true/false                        Force localhost output (127.0.0.1)
   localhost_0_0_0_0: true/false                Force localhost output (0.0.0.0)
@@ -456,6 +457,19 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
           await page.reload({ waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
           await new Promise(resolve => setTimeout(resolve, delayMs)); // Wait after each reload.
         }
+
+        // Force an extra reload if specified "Shift reload website"
+        if (site.forcereload === true) {
+          if (forceDebug) console.log(`[debug] Forcing extra reload (cache disabled) for ${currentUrl}`);
+        try {
+          await page.setCacheEnabled(false);
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: site.timeout || 30000 });
+          await new Promise(resolve => setTimeout(resolve, delayMs));
+          await page.setCacheEnabled(true);
+        } catch (err) {
+          console.warn(`[forcereload failed] ${currentUrl}: ${err.message}`);
+        }
+       }
 
         await page.close(); // Close the page after processing.
       } catch (err) { // --- Error Handling for Page Load/Processing ---
