@@ -85,7 +85,7 @@ Per-site config.json options:
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
   userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
-  delay: <milliseconds>                        Delay after load (default: 2000)
+  delay: <milliseconds>                        Delay after load (default: 4000)
   reload: <number>                             Reload page n times after load (default: 1)
   forcereload: true/false                      Force an additional reload after reloads
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
@@ -466,8 +466,8 @@ function getRandomFingerprint() { // Utility function to generate randomized fin
         }
 
         // Wait for network to be idle and then an additional fixed delay.
-        const delayMs = site.delay || 2000; // Site-specific delay or default 2s.
-        await page.waitForNetworkIdle({ idleTime: 2000, timeout: site.timeout || 30000 });
+        const delayMs = site.delay || 4000; // Site-specific delay or default 2s.
+        await page.waitForNetworkIdle({ idleTime: 4000, timeout: site.timeout || 30000 });
         await new Promise(resolve => setTimeout(resolve, delayMs));
 
         // Reload the page multiple times if specified in site config.
