@@ -93,6 +93,7 @@ Per-site config.json options:
   screenshot: true/false                       Capture screenshot on load failure
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
+  cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
 `);
@@ -479,6 +480,31 @@ function getRandomFingerprint() {
       try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: siteConfig.timeout || 40000 });
         siteCounter++;
+
+        // Handle Cloudflare phishing warning if enabled
+        if (cloudflarePhishBypass) {
+          if (forceDebug) console.log(`[debug] Checking for Cloudflare phishing warning on ${currentUrl}`);
+          try {
+            // Wait a moment for the warning page to load
+            await page.waitForTimeout(2000);
+
+            // Check if we're on a Cloudflare phishing warning page
+            const isPhishingWarning = await page.evaluate(() => {
+              return document.body.textContent.includes('This website has been reported for potential phishing') ||
+                     document.title.includes('Attention Required') ||
+                     document.querySelector('a[href*="continue"]') !== null;
+            });
+
+            if (isPhishingWarning) {
+              if (forceDebug) console.log(`[debug] Cloudflare phishing warning detected, attempting to bypass`);
+              await page.click('a[href*="continue"]', { timeout: 5000 });
+              await page.waitForNavigation({ waitUntil: 'load', timeout: 30000 });
+            }
+          } catch (bypassErr) {
+            if (forceDebug) console.log(`[debug] Cloudflare bypass attempt failed: ${bypassErr.message}`);
+          }
+        }
+
         console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
         await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
       } catch (err) {
