@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.3 ===
+// === Network scanner script v0.9.4 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -7,7 +7,7 @@ const fs = require('fs');
 const psl = require('psl');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.3'; // Script version
+const VERSION = '0.9.4'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -234,13 +234,19 @@ function getRandomFingerprint() {
       return { url: currentUrl, rules: [], success: false, skipped: true };
     }
 
-    let page;
+    let page = null;
+    let cdpSession = null;
     const matchedDomains = new Set();
+    const timeout = siteConfig.timeout || 30000;
 
     if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
 
     try {
       page = await browserInstance.newPage();
+      
+      // Set consistent timeouts for the page
+      page.setDefaultTimeout(timeout);
+      page.setDefaultNavigationTimeout(timeout);
 
       // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
       // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
@@ -311,7 +317,7 @@ function getRandomFingerprint() {
             }
         }
         try {
-            const cdpSession = await page.target().createCDPSession();
+            cdpSession = await page.target().createCDPSession();
             await cdpSession.send('Network.enable');
             cdpSession.on('Network.requestWillBeSent', (params) => {
                 const { url: requestUrl, method } = params.request;
@@ -323,6 +329,7 @@ function getRandomFingerprint() {
                 console.log(`[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`);
             });
         } catch (cdpErr) {
+            cdpSession = null; // Reset on failure
             console.warn(`[warn][cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`);
         }
       }
@@ -332,17 +339,24 @@ function getRandomFingerprint() {
 
       if (siteConfig.clear_sitedata === true) {
         try {
-          const client = await page.target().createCDPSession();
-          await client.send('Network.clearBrowserCookies');
-          await client.send('Network.clearBrowserCache');
+          let clearDataSession = null;
+          try {
+            clearDataSession = await page.target().createCDPSession();
+            await clearDataSession.send('Network.clearBrowserCookies');
+            await clearDataSession.send('Network.clearBrowserCache');
+          } finally {
+            if (clearDataSession) {
+              try { await clearDataSession.detach(); } catch (detachErr) { /* ignore */ }
+            }
+          }
           await page.evaluate(() => {
             localStorage.clear();
             sessionStorage.clear();
             indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
           });
           if (forceDebug) console.log(`[debug] Cleared site data for ${currentUrl}`);
-        } catch (err) {
-          console.warn(`[clear_sitedata failed] ${currentUrl}: ${err.message}`);
+        } catch (clearErr) {
+          console.warn(`[clear_sitedata failed] ${currentUrl}: ${clearErr.message}`);
         }
       }
 
@@ -481,7 +495,7 @@ function getRandomFingerprint() {
       }
 
       try {
-        await page.goto(currentUrl, { waitUntil: 'load', timeout: siteConfig.timeout || 40000 });
+        await page.goto(currentUrl, { waitUntil: 'load', timeout: timeout });
         siteCounter++;
 
         // Handle Cloudflare phishing warning if enabled
@@ -595,26 +609,33 @@ function getRandomFingerprint() {
       }
 
       const delayMs = siteConfig.delay || 4000;
-      await page.waitForNetworkIdle({ idleTime: 4000, timeout: siteConfig.timeout || 30000 });
+      await page.waitForNetworkIdle({ idleTime: 4000, timeout: timeout });
       await new Promise(resolve => setTimeout(resolve, delayMs));
 
       for (let i = 1; i < (siteConfig.reload || 1); i++) {
        if (siteConfig.clear_sitedata === true) {
          try {
-           const client = await page.target().createCDPSession();
-           await client.send('Network.clearBrowserCookies');
-           await client.send('Network.clearBrowserCache');
+           let reloadClearSession = null;
+           try {
+             reloadClearSession = await page.target().createCDPSession();
+             await reloadClearSession.send('Network.clearBrowserCookies');
+             await reloadClearSession.send('Network.clearBrowserCache');
+           } finally {
+             if (reloadClearSession) {
+               try { await reloadClearSession.detach(); } catch (detachErr) { /* ignore */ }
+             }
+           }
            await page.evaluate(() => {
              localStorage.clear();
              sessionStorage.clear();
              indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
            });
            if (forceDebug) console.log(`[debug] Cleared site data before reload #${i + 1} for ${currentUrl}`);
-         } catch (err) {
-           console.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${err.message}`);
+         } catch (reloadClearErr) {
+           console.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${reloadClearErr.message}`);
          }
        }
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: siteConfig.timeout || 30000 });
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
         await new Promise(resolve => setTimeout(resolve, delayMs));
       }
 
@@ -622,15 +643,13 @@ function getRandomFingerprint() {
         if (forceDebug) console.log(`[debug] Forcing extra reload (cache disabled) for ${currentUrl}`);
         try {
           await page.setCacheEnabled(false);
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: siteConfig.timeout || 30000 });
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
           await new Promise(resolve => setTimeout(resolve, delayMs));
           await page.setCacheEnabled(true);
-        } catch (err) {
-          console.warn(`[forcereload failed] ${currentUrl}: ${err.message}`);
+        } catch (forceReloadErr) {
+          console.warn(`[forcereload failed] ${currentUrl}: ${forceReloadErr.message}`);
         }
       }
-
-      await page.close();
 
       const formattedRules = [];
       matchedDomains.forEach(domain => {
@@ -656,15 +675,32 @@ function getRandomFingerprint() {
         const filename = `${safeUrl}-${timestamp}.jpg`;
         try {
           await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
-          // Corrected line below
+
           if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
-        } catch (errSc) {
-          console.warn(`[screenshot failed] ${currentUrl}: ${errSc.message}`);
+        } catch (screenshotErr) {
+          console.warn(`[screenshot failed] ${currentUrl}: ${screenshotErr.message}`);
         }
       }
-      // Corrected line below: This 'if' statement must be separate and correctly formatted
-      if (page && !page.isClosed()) await page.close();
       return { url: currentUrl, rules: [], success: false };
+    } finally {
+      // Guaranteed resource cleanup - this runs regardless of success or failure
+      if (cdpSession) {
+        try {
+          await cdpSession.detach();
+          if (forceDebug) console.log(`[debug] CDP session detached for ${currentUrl}`);
+        } catch (cdpCleanupErr) {
+          if (forceDebug) console.log(`[debug] Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`);
+        }
+      }
+      
+      if (page && !page.isClosed()) {
+        try {
+          await page.close();
+          if (forceDebug) console.log(`[debug] Page closed for ${currentUrl}`);
+        } catch (pageCloseErr) {
+          if (forceDebug) console.log(`[debug] Failed to close page for ${currentUrl}: ${pageCloseErr.message}`);
+        }
+      }
     }
   }
 
