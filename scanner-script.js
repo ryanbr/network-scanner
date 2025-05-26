@@ -225,6 +225,7 @@ function getRandomFingerprint() {
     const siteLocalhost = siteConfig.localhost === true;
     const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
     const fingerprintSetting = siteConfig.fingerprint_protection || false;
+    const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
 
     if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
       console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
