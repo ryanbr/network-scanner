@@ -100,6 +100,7 @@ Example:
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
 | `plain`              | `true` or `false` | `false` | Output nonformated domain urls |
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
+| `css_blocked`        | Array | - | css cosmetics to block during scanning |
 | `evaluateOnNewDocument`    | `true` or `false` | `false` | Inject JS fetch/XHR logging on page load |
 | `cdp`                     | `true` or `false` | `false` | Enable Chrome DevTools Protocol logging per site |
 

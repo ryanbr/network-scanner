@@ -28,6 +28,7 @@
     "addtoany.com",
     "cutcaptcha.net",
     "yahoo.com",
+    "doubleclick.net",
     "youtube.com",
     "tmdb.org",
     "google-analytics.com"
@@ -41,6 +42,8 @@
     "timeout": 25000,
     "delay": 5000,
     "verbose": 1,
+    "blocked": ["somedomain.com", "anotherdomain.com"],
+    "css_blocked": ["#advertisement", ".ad-banner", "[data-ad-slot]", "div[class*='sponsored']"],
     "interact": true
   },
   {

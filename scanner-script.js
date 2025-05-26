@@ -76,6 +76,7 @@ Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
   blocked: ["regex"]                          Regex patterns to block requests
+  css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
   userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
@@ -270,6 +271,30 @@ function getRandomFingerprint() {
       }
       // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
 
+      // --- CSS Element Blocking Setup ---
+      const cssBlockedSelectors = siteConfig.css_blocked;
+      if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
+        if (forceDebug) console.log(`[debug] CSS element blocking enabled for ${currentUrl}: ${cssBlockedSelectors.join(', ')}`);
+        try {
+          await page.evaluateOnNewDocument(({ selectors }) => {
+            // Inject CSS to hide blocked elements
+            const style = document.createElement('style');
+            style.type = 'text/css';
+            const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
+            style.innerHTML = cssRules;
+            
+            // Add the style as soon as DOM is available
+            if (document.head) {
+              document.head.appendChild(style);
+            } else {
+              document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+            }
+          }, { selectors: cssBlockedSelectors });
+        } catch (cssErr) {
+          console.warn(`[warn][css_blocked] Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`);
+        }
+      }
+      // --- END: CSS Element Blocking Setup ---
 
       // --- Per-Page CDP Setup ---
       const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
@@ -430,6 +455,27 @@ function getRandomFingerprint() {
       });
 
       const interactEnabled = siteConfig.interact === true;
+      
+      // --- Runtime CSS Element Blocking (Fallback) ---
+      // Apply CSS blocking after page load as a fallback in case evaluateOnNewDocument didn't work
+      if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
+        try {
+          await page.evaluate((selectors) => {
+            const existingStyle = document.querySelector('#css-blocker-runtime');
+            if (!existingStyle) {
+              const style = document.createElement('style');
+              style.id = 'css-blocker-runtime';
+              style.type = 'text/css';
+              const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
+              style.innerHTML = cssRules;
+              document.head.appendChild(style);
+            }
+          }, cssBlockedSelectors);
+        } catch (cssRuntimeErr) {
+          console.warn(`[warn][css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`);
+        }
+      }
+
       try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: siteConfig.timeout || 40000 });
         siteCounter++;
