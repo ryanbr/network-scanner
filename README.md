@@ -96,6 +96,7 @@ Example:
 | `interact`           | `true` or `false` | `false` | Simulate user interaction (hover, click) |
 | `fingerprint_protection` | `true`, `false`, `random` | `false` | Enable navigator/device spoofing |
 | `cloudflare_phish`   | `true` or `false` | `false` | Enable Cloudflare Phishing Warning bypass |
+| `cloudflare_bypass`  | `true` or `false` | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
 | `firstParty`         | `0` or `1` | `0` | Match first-party requests |
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |

@@ -94,6 +94,7 @@ Per-site config.json options:
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
+  cloudflare_bypass: true/false               Auto-solve Cloudflare "Verify you are human" challenges (default: false)
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
 `);
@@ -226,6 +227,7 @@ function getRandomFingerprint() {
     const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
     const fingerprintSetting = siteConfig.fingerprint_protection || false;
     const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
+    const cloudflareBypass = siteConfig.cloudflare_bypass === true;
 
     if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
       console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
@@ -503,6 +505,75 @@ function getRandomFingerprint() {
             }
           } catch (bypassErr) {
             if (forceDebug) console.log(`[debug] Cloudflare bypass attempt failed: ${bypassErr.message}`);
+          }
+        }
+
+        // Handle Cloudflare "Verify you are human" challenge if enabled
+        if (cloudflareBypass) {
+          if (forceDebug) console.log(`[debug] Checking for Cloudflare verification challenge on ${currentUrl}`);
+          try {
+            // Wait for potential Cloudflare challenge to appear
+            await page.waitForTimeout(3000);
+
+            // Check if we're on a Cloudflare challenge page
+            const isChallengePresent = await page.evaluate(() => {
+              return document.title.includes('Just a moment') ||
+                     document.body.textContent.includes('Checking your browser') ||
+                     document.body.textContent.includes('Verify you are human') ||
+                     document.querySelector('input[type="checkbox"]#challenge-form') !== null ||
+                     document.querySelector('.cf-challenge-running') !== null ||
+                     document.querySelector('[data-ray]') !== null;
+            });
+
+            if (isChallengePresent) {
+              if (forceDebug) console.log(`[debug] Cloudflare challenge detected, attempting to solve`);
+
+              // Look for the verification checkbox
+              const checkboxSelector = 'input[type="checkbox"]#challenge-form, input[type="checkbox"][name="cf_captcha_kind"], .cf-turnstile input[type="checkbox"], iframe[src*="challenges.cloudflare.com"]';
+
+              try {
+                // Wait for checkbox to be available
+                await page.waitForSelector(checkboxSelector, { timeout: 10000 });
+ 
+                // Simulate human-like mouse movement before clicking
+                const checkbox = await page.$(checkboxSelector);
+                if (checkbox) {
+                  const box = await checkbox.boundingBox();
+                  if (box) {
+                    // Move mouse in a natural pattern
+                    await page.mouse.move(box.x - 50, box.y - 50);
+                    await page.waitForTimeout(Math.random() * 500 + 200);
+                    await page.mouse.move(box.x + box.width/2, box.y + box.height/2, { steps: 5 });
+                    await page.waitForTimeout(Math.random() * 300 + 100);
+
+                    // Click the checkbox
+                    await checkbox.click();
+                    if (forceDebug) console.log(`[debug] Clicked Cloudflare verification checkbox`);
+
+                    // Wait for challenge to complete
+                    await page.waitForTimeout(5000);
+
+                    // Check if we need to wait for redirect or if challenge is solved
+                    await page.waitForFunction(() => {
+                      return !document.body.textContent.includes('Checking your browser') &&
+                             !document.body.textContent.includes('Just a moment');
+                    }, { timeout: 30000 });
+                  }
+                }
+              } catch (checkboxErr) {
+                if (forceDebug) console.log(`[debug] Checkbox interaction failed, trying alternative approach: ${checkboxErr.message}`);
+
+                // Alternative: try clicking anywhere on the challenge form
+                try {
+                  await page.click('.cf-challenge-running, [data-ray], .cf-turnstile', { timeout: 5000 });
+                  await page.waitForTimeout(5000);
+                } catch (altErr) {
+                  if (forceDebug) console.log(`[debug] Alternative click approach also failed: ${altErr.message}`);
+                }
+              }
+            }
+          } catch (challengeErr) {
+            if (forceDebug) console.log(`[debug] Cloudflare challenge bypass failed: ${challengeErr.message}`);
           }
         }
 
