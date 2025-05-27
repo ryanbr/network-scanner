@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.6 ===
+// === Network scanner script v0.9.7 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -10,9 +10,10 @@ const { blockedManager } = require('./lib/blocked'); // Import the adblock modul
 const { fingerprintManager } = require('./lib/fingerprint'); // Import the fingerprint module
 const { cssBlocker } = require('./lib/css-blocker'); // Import the CSS blocker module
 const { cloudflareBypass } = require('./lib/cloudflare-bypass'); // Import the Cloudflare bypass module
+const { pageInjector } = require('./lib/page-injector'); // Import the page injector module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.6'; // Script version
+const VERSION = '0.9.7'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -151,6 +152,9 @@ cssBlocker.initialize(forceDebug);
 // --- Initialize Cloudflare Bypass ---
 cloudflareBypass.initialize(forceDebug);
 
+// --- Initialize Page Injector ---
+pageInjector.initialize(forceDebug);
+
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
 // This allows site-specific config to trigger CDP logging for the entire session.
@@ -261,38 +265,8 @@ function getRootDomain(url) {
       page.setDefaultTimeout(timeout);
       page.setDefaultNavigationTimeout(timeout);
 
-      // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
-      // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
-      const shouldInjectEvalForPage = siteConfig.evaluateOnNewDocument === true || globalEvalOnDoc;
-      if (shouldInjectEvalForPage) {
-          if (forceDebug) {
-              if (globalEvalOnDoc) {
-                  console.log(`[debug][evalOnDoc] Global Fetch/XHR interception enabled, applying to: ${currentUrl}`);
-              } else { // siteConfig.evaluateOnNewDocument must be true
-                  console.log(`[debug][evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`);
-              }
-          }
-          try {
-              await page.evaluateOnNewDocument(() => {
-                  // This script intercepts and logs Fetch and XHR requests
-                  // from within the page context at the earliest possible moment.
-                  const originalFetch = window.fetch;
-                  window.fetch = (...args) => {
-                      console.log('[evalOnDoc][fetch]', args[0]); // Log fetch requests
-                      return originalFetch.apply(this, args);
-                  };
-
-                  const originalXHROpen = XMLHttpRequest.prototype.open;
-                  XMLHttpRequest.prototype.open = function (method, xhrUrl) { // Renamed 'url' to 'xhrUrl' to avoid conflict
-                      console.log('[evalOnDoc][xhr]', xhrUrl); // Log XHR requests
-                      return originalXHROpen.apply(this, arguments);
-                  };
-              });
-          } catch (evalErr) {
-              console.warn(`[warn][evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`);
-          }
-      }
-      // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
+      // Apply page script injections using page injector module
+      await pageInjector.applyPageInjections(page, siteConfig, globalEvalOnDoc, currentUrl);
 
       // Apply CSS element blocking using CSS blocker module
       await cssBlocker.applyPreLoadBlocking(page, siteConfig.css_blocked, currentUrl);
@@ -547,6 +521,10 @@ function getRootDomain(url) {
       if (page && !page.isClosed()) {
         try {
           await page.close();
+
+          // Clean up page injector tracking
+          pageInjector.cleanupPage(page);
+
           if (forceDebug) console.log(`[debug] Page closed for ${currentUrl}`);
         } catch (pageCloseErr) {
           if (forceDebug) console.log(`[debug] Failed to close page for ${currentUrl}: ${pageCloseErr.message}`);
