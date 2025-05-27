@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.8 ===
+// === Network scanner script v0.9.9 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -12,9 +12,10 @@ const { cssBlocker } = require('./lib/css-blocker'); // Import the CSS blocker m
 const { cloudflareBypass } = require('./lib/cloudflare-bypass'); // Import the Cloudflare bypass module
 const { pageInjector } = require('./lib/page-injector'); // Import the page injector module
 const { interactionSimulator } = require('./lib/interaction-simulator'); // Import the interaction simulator module
+const { cdpManager } = require('./lib/cdp-manager'); // Import the CDP manager module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.8'; // Script version
+const VERSION = '0.9.9'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -159,6 +160,9 @@ pageInjector.initialize(forceDebug);
 // --- Initialize Interaction Simulator ---
 interactionSimulator.initialize(forceDebug);
 
+// --- Initialize CDP Manager ---
+cdpManager.initialize(forceDebug);
+
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
 // This allows site-specific config to trigger CDP logging for the entire session.
@@ -275,34 +279,9 @@ function getRootDomain(url) {
       // Apply CSS element blocking using CSS blocker module
       await cssBlocker.applyPreLoadBlocking(page, siteConfig.css_blocked, currentUrl);
 
-      // --- Per-Page CDP Setup ---
-      const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
-      if (cdpLoggingNeededForPage) {
-        if (forceDebug) {
-            if (enableCDP) {
-                console.log(`[debug] CDP logging globally enabled by --cdp, applying to page: ${currentUrl}`);
-            } else if (siteConfig.cdp === true) {
-                console.log(`[debug] CDP logging enabled for page ${currentUrl} via site-specific 'cdp: true' config.`);
-            }
-        }
-        try {
-            cdpSession = await page.target().createCDPSession();
-            await cdpSession.send('Network.enable');
-            cdpSession.on('Network.requestWillBeSent', (params) => {
-                const { url: requestUrl, method } = params.request;
-                const initiator = params.initiator ? params.initiator.type : 'unknown';
-                let hostnameForLog = 'unknown-host';
-                try {
-                    hostnameForLog = new URL(currentUrl).hostname;
-                } catch (_) { /* ignore if currentUrl is invalid for URL parsing */ }
-                console.log(`[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`);
-            });
-        } catch (cdpErr) {
-            cdpSession = null; // Reset on failure
-            console.warn(`[warn][cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`);
-        }
-      }
-      // --- End of Per-Page CDP Setup ---
+      // Apply CDP monitoring using CDP manager module
+      const cdpResult = await cdpManager.applyCDPMonitoring(page, enableCDP, siteConfig, currentUrl);
+      cdpSession = cdpResult.session; // Keep reference for cleanup
 
       await page.setRequestInterception(true);
 
@@ -506,15 +485,10 @@ function getRootDomain(url) {
       return { url: currentUrl, rules: [], success: false };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
-      if (cdpSession) {
-        try {
-          await cdpSession.detach();
-          if (forceDebug) console.log(`[debug] CDP session detached for ${currentUrl}`);
-        } catch (cdpCleanupErr) {
-          if (forceDebug) console.log(`[debug] Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`);
-        }
-      }
-      
+
+      // Clean up CDP session using CDP manager
+      await cdpManager.cleanupCDPSession(page, cdpSession);
+
       if (page && !page.isClosed()) {
         try {
           await page.close();
