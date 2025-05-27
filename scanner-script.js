@@ -6,11 +6,12 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 // 
-const { blockedManager } = require('./lib/blocked');
+const { blockedManager } = require('./lib/blocked'); // Import the adblock module
 const { fingerprintManager } = require('./lib/fingerprint'); // Import the fingerprint module
+const { cssBlocker } = require('./lib/css-blocker'); // Import the CSS blocker module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.4'; // Script version
+const VERSION = '0.9.5'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -142,6 +143,9 @@ blockedManager.initialize(allGlobalBlocked, forceDebug);
 
 // --- Initialize Fingerprint Manager ---
 fingerprintManager.initialize(forceDebug);
+
+// --- Initialize CSS Blocker ---
+cssBlocker.initialize(forceDebug);
 
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
@@ -286,30 +290,8 @@ function getRootDomain(url) {
       }
       // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
 
-      // --- CSS Element Blocking Setup ---
-      const cssBlockedSelectors = siteConfig.css_blocked;
-      if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
-        if (forceDebug) console.log(`[debug] CSS element blocking enabled for ${currentUrl}: ${cssBlockedSelectors.join(', ')}`);
-        try {
-          await page.evaluateOnNewDocument(({ selectors }) => {
-            // Inject CSS to hide blocked elements
-            const style = document.createElement('style');
-            style.type = 'text/css';
-            const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
-            style.innerHTML = cssRules;
-            
-            // Add the style as soon as DOM is available
-            if (document.head) {
-              document.head.appendChild(style);
-            } else {
-              document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
-            }
-          }, { selectors: cssBlockedSelectors });
-        } catch (cssErr) {
-          console.warn(`[warn][css_blocked] Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`);
-        }
-      }
-      // --- END: CSS Element Blocking Setup ---
+      // Apply CSS element blocking using CSS blocker module
+      await cssBlocker.applyPreLoadBlocking(page, siteConfig.css_blocked, currentUrl);
 
       // --- Per-Page CDP Setup ---
       const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
@@ -446,25 +428,8 @@ function getRootDomain(url) {
 
       const interactEnabled = siteConfig.interact === true;
       
-      // --- Runtime CSS Element Blocking (Fallback) ---
-      // Apply CSS blocking after page load as a fallback in case evaluateOnNewDocument didn't work
-      if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
-        try {
-          await page.evaluate((selectors) => {
-            const existingStyle = document.querySelector('#css-blocker-runtime');
-            if (!existingStyle) {
-              const style = document.createElement('style');
-              style.id = 'css-blocker-runtime';
-              style.type = 'text/css';
-              const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
-              style.innerHTML = cssRules;
-              document.head.appendChild(style);
-            }
-          }, cssBlockedSelectors);
-        } catch (cssRuntimeErr) {
-          console.warn(`[warn][css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`);
-        }
-      }
+      // Apply runtime CSS blocking as fallback using CSS blocker module
+      await cssBlocker.applyRuntimeBlocking(page, siteConfig.css_blocked, currentUrl);
 
       try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: timeout });
