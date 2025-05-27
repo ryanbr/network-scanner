@@ -1,10 +1,13 @@
-// === Network scanner script v0.9.4 ===
+// === Network scanner script v0.9.5 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
+// 
+const { blockedManager } = require('./lib/blocked');
+const { fingerprintManager } = require('./lib/fingerprint'); // Import the fingerprint module
 
 // --- Script Configuration & Constants ---
 const VERSION = '0.9.4'; // Script version
@@ -12,9 +15,6 @@ const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
 const startTime = Date.now();
-// Default values for fingerprint spoofing if not set to 'random'
-const DEFAULT_PLATFORM = 'Win32';
-const DEFAULT_TIMEZONE = 'America/New_York';
 
 // --- Command-Line Argument Parsing ---
 const args = process.argv.slice(2);
@@ -45,6 +45,13 @@ const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 
+// New argument for external blocked patterns file
+let blockedPatternsFile = null;
+const blockedFileIndex = args.findIndex(arg => arg === '--blocked-file');
+if (blockedFileIndex !== -1 && args[blockedFileIndex + 1]) {
+  blockedPatternsFile = args[blockedFileIndex + 1];
+}
+
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
   process.exit(0);
@@ -65,6 +72,7 @@ Options:
   --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
   --no-interact                  Disable page interactions globally
   --custom-json <file>           Use a custom config JSON file instead of config.json
+  --blocked-file <file>          Load additional blocked patterns from external file
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
@@ -121,7 +129,20 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
-// --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
+// --- Initialize Blocked Manager ---
+// Load additional blocked patterns from external file if specified
+let externalBlockedPatterns = [];
+if (blockedPatternsFile) {
+  externalBlockedPatterns = blockedManager.constructor.loadFromFile(blockedPatternsFile);
+}
+
+// Combine global blocked patterns from config and external file
+const allGlobalBlocked = [...globalBlocked, ...externalBlockedPatterns];
+blockedManager.initialize(allGlobalBlocked, forceDebug);
+
+// --- Initialize Fingerprint Manager ---
+fingerprintManager.initialize(forceDebug);
+
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
 // This allows site-specific config to trigger CDP logging for the entire session.
@@ -144,36 +165,6 @@ function getRootDomain(url) {
   } catch {
     return '';
   }
-}
-
-/**
- * Generates an object with randomized browser fingerprint values.
- * This is used to spoof various navigator and screen properties to make
- * the headless browser instance appear more like a regular user's browser
- * and potentially bypass some fingerprint-based bot detection.
- *
- * @returns {object} An object containing the spoofed fingerprint properties:
- * @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
- * @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
- * @property {object} screen - Randomized screen dimensions and color depth.
- * @property {number} screen.width - Randomized screen width.
- * @property {number} screen.height - Randomized screen height.
- * @property {number} screen.colorDepth - Fixed color depth (24).
- * @property {string} platform - Fixed platform string ('Linux x86_64').
- * @property {string} timezone - Fixed timezone ('UTC').
- */
-function getRandomFingerprint() {
-  return {
-    deviceMemory: Math.random() < 0.5 ? 4 : 8,
-    hardwareConcurrency: [2, 4, 8][Math.floor(Math.random() * 3)],
-    screen: {
-      width: 360 + Math.floor(Math.random() * 400),
-      height: 640 + Math.floor(Math.random() * 500),
-      colorDepth: 24
-    },
-    platform: 'Linux x86_64',
-    timezone: 'UTC'
-  };
 }
 
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
@@ -374,50 +365,17 @@ function getRandomFingerprint() {
         }
       }
 
-      if (siteConfig.userAgent) {
-        if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${siteConfig.userAgent}`);
-        const userAgents = {
-          chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-          firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
-          safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
-        };
-        const ua = userAgents[siteConfig.userAgent.toLowerCase()];
-        if (ua) await page.setUserAgent(ua);
-      }
+      // Apply user agent spoofing using fingerprint manager
+      await fingerprintManager.applyUserAgent(page, siteConfig.userAgent, currentUrl);
 
-      // --- evaluateOnNewDocument for Brave Spoofing (existing) ---
+      // Apply Brave spoofing using fingerprint manager
       if (siteConfig.isBrave) {
-        if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
-        await page.evaluateOnNewDocument(() => {
-          Object.defineProperty(navigator, 'brave', {
-            get: () => ({ isBrave: () => Promise.resolve(true) })
-          });
-        });
+       await fingerprintManager.applyBraveSpoofing(page, currentUrl);
       }
 
-      // --- evaluateOnNewDocument for Fingerprint Protection (existing) ---
+      // Apply fingerprint protection using fingerprint manager
       if (fingerprintSetting) {
-        if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
-        const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
-          deviceMemory: 8, hardwareConcurrency: 4,
-          screen: { width: 1920, height: 1080, colorDepth: 24 },
-          platform: DEFAULT_PLATFORM, timezone: DEFAULT_TIMEZONE
-        };
-        try {
-          await page.evaluateOnNewDocument(({ spoof }) => {
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
-            Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
-            Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
-            Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
-            Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
-            Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
-              resolvedOptions() { return { timeZone: spoof.timezone }; }
-            };
-          }, { spoof });
-        } catch (err) {
-          console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
-        }
+       await fingerprintManager.applyFingerprint(page, fingerprintSetting, currentUrl);
       }
     
       const regexes = Array.isArray(siteConfig.filterRegex)
@@ -434,9 +392,8 @@ function getRandomFingerprint() {
         });
       }
 
-      const blockedRegexes = Array.isArray(siteConfig.blocked)
-        ? siteConfig.blocked.map(pattern => new RegExp(pattern))
-        : [];
+      // Compile site-specific blocked patterns using the blocked manager
+      const siteBlockedRegexes = blockedManager.compileSitePatterns(siteConfig.blocked);
 
       // --- page.on('request', ...) Handler: Core Network Request Logic ---
       // This handler is triggered for every network request made by the page.
@@ -461,7 +418,8 @@ function getRandomFingerprint() {
         if (forceDebug) console.log('[debug request]', request.url());
         const reqUrl = request.url();
 
-        if (blockedRegexes.some(re => re.test(reqUrl))) {
+        // Use the blocked manager to check if URL should be blocked
+        if (blockedManager.shouldBlock(reqUrl, siteBlockedRegexes)) {
           request.abort();
           return;
         }
