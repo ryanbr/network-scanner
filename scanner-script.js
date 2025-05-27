@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.7 ===
+// === Network scanner script v0.9.8 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -11,9 +11,10 @@ const { fingerprintManager } = require('./lib/fingerprint'); // Import the finge
 const { cssBlocker } = require('./lib/css-blocker'); // Import the CSS blocker module
 const { cloudflareBypass } = require('./lib/cloudflare-bypass'); // Import the Cloudflare bypass module
 const { pageInjector } = require('./lib/page-injector'); // Import the page injector module
+const { interactionSimulator } = require('./lib/interaction-simulator'); // Import the interaction simulator module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.7'; // Script version
+const VERSION = '0.9.8'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -154,6 +155,9 @@ cloudflareBypass.initialize(forceDebug);
 
 // --- Initialize Page Injector ---
 pageInjector.initialize(forceDebug);
+
+// --- Initialize Interaction Simulator ---
+interactionSimulator.initialize(forceDebug);
 
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
@@ -423,15 +427,8 @@ function getRootDomain(url) {
        throw err;
      }     
 
-      if (interactEnabled && !disableInteract) {
-        if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
-        const randomX = Math.floor(Math.random() * 500) + 50;
-        const randomY = Math.floor(Math.random() * 500) + 50;
-        await page.mouse.move(randomX, randomY, { steps: 10 });
-        await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
-        await page.mouse.click(randomX + 25, randomY + 25);
-        await page.hover('body');
-      }
+      // Perform interaction simulation using interaction simulator module
+      await interactionSimulator.performBasicInteraction(page, interactEnabled, disableInteract, currentUrl);
 
       const delayMs = siteConfig.delay || 4000;
       await page.waitForNetworkIdle({ idleTime: 4000, timeout: timeout });
