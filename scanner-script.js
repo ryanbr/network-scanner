@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.5 ===
+// === Network scanner script v0.9.6 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -9,9 +9,10 @@ const psl = require('psl');
 const { blockedManager } = require('./lib/blocked'); // Import the adblock module
 const { fingerprintManager } = require('./lib/fingerprint'); // Import the fingerprint module
 const { cssBlocker } = require('./lib/css-blocker'); // Import the CSS blocker module
+const { cloudflareBypass } = require('./lib/cloudflare-bypass'); // Import the Cloudflare bypass module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.5'; // Script version
+const VERSION = '0.9.6'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -146,6 +147,9 @@ fingerprintManager.initialize(forceDebug);
 
 // --- Initialize CSS Blocker ---
 cssBlocker.initialize(forceDebug);
+
+// --- Initialize Cloudflare Bypass ---
+cloudflareBypass.initialize(forceDebug);
 
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
@@ -435,105 +439,15 @@ function getRootDomain(url) {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: timeout });
         siteCounter++;
 
-        // Handle Cloudflare phishing warning if enabled
-        if (cloudflarePhishBypass) {
-          if (forceDebug) console.log(`[debug] Checking for Cloudflare phishing warning on ${currentUrl}`);
-          try {
-            // Wait a moment for the warning page to load
-            await page.waitForTimeout(2000);
-
-            // Check if we're on a Cloudflare phishing warning page
-            const isPhishingWarning = await page.evaluate(() => {
-              return document.body.textContent.includes('This website has been reported for potential phishing') ||
-                     document.title.includes('Attention Required') ||
-                     document.querySelector('a[href*="continue"]') !== null;
-            });
-
-            if (isPhishingWarning) {
-              if (forceDebug) console.log(`[debug] Cloudflare phishing warning detected, attempting to bypass`);
-              await page.click('a[href*="continue"]', { timeout: 5000 });
-              await page.waitForNavigation({ waitUntil: 'load', timeout: 30000 });
-            }
-          } catch (bypassErr) {
-            if (forceDebug) console.log(`[debug] Cloudflare bypass attempt failed: ${bypassErr.message}`);
-          }
-        }
-
-        // Handle Cloudflare "Verify you are human" challenge if enabled
-        if (cloudflareBypass) {
-          if (forceDebug) console.log(`[debug] Checking for Cloudflare verification challenge on ${currentUrl}`);
-          try {
-            // Wait for potential Cloudflare challenge to appear
-            await page.waitForTimeout(3000);
-
-            // Check if we're on a Cloudflare challenge page
-            const isChallengePresent = await page.evaluate(() => {
-              return document.title.includes('Just a moment') ||
-                     document.body.textContent.includes('Checking your browser') ||
-                     document.body.textContent.includes('Verify you are human') ||
-                     document.querySelector('input[type="checkbox"]#challenge-form') !== null ||
-                     document.querySelector('.cf-challenge-running') !== null ||
-                     document.querySelector('[data-ray]') !== null;
-            });
-
-            if (isChallengePresent) {
-              if (forceDebug) console.log(`[debug] Cloudflare challenge detected, attempting to solve`);
-
-              // Look for the verification checkbox
-              const checkboxSelector = 'input[type="checkbox"]#challenge-form, input[type="checkbox"][name="cf_captcha_kind"], .cf-turnstile input[type="checkbox"], iframe[src*="challenges.cloudflare.com"]';
-
-              try {
-                // Wait for checkbox to be available
-                await page.waitForSelector(checkboxSelector, { timeout: 10000 });
- 
-                // Simulate human-like mouse movement before clicking
-                const checkbox = await page.$(checkboxSelector);
-                if (checkbox) {
-                  const box = await checkbox.boundingBox();
-                  if (box) {
-                    // Move mouse in a natural pattern
-                    await page.mouse.move(box.x - 50, box.y - 50);
-                    await page.waitForTimeout(Math.random() * 500 + 200);
-                    await page.mouse.move(box.x + box.width/2, box.y + box.height/2, { steps: 5 });
-                    await page.waitForTimeout(Math.random() * 300 + 100);
-
-                    // Click the checkbox
-                    await checkbox.click();
-                    if (forceDebug) console.log(`[debug] Clicked Cloudflare verification checkbox`);
-
-                    // Wait for challenge to complete
-                    await page.waitForTimeout(5000);
-
-                    // Check if we need to wait for redirect or if challenge is solved
-                    await page.waitForFunction(() => {
-                      return !document.body.textContent.includes('Checking your browser') &&
-                             !document.body.textContent.includes('Just a moment');
-                    }, { timeout: 30000 });
-                  }
-                }
-              } catch (checkboxErr) {
-                if (forceDebug) console.log(`[debug] Checkbox interaction failed, trying alternative approach: ${checkboxErr.message}`);
-
-                // Alternative: try clicking anywhere on the challenge form
-                try {
-                  await page.click('.cf-challenge-running, [data-ray], .cf-turnstile', { timeout: 5000 });
-                  await page.waitForTimeout(5000);
-                } catch (altErr) {
-                  if (forceDebug) console.log(`[debug] Alternative click approach also failed: ${altErr.message}`);
-                }
-              }
-            }
-          } catch (challengeErr) {
-            if (forceDebug) console.log(`[debug] Cloudflare challenge bypass failed: ${challengeErr.message}`);
-          }
-        }
-
-        console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
-        await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
-      } catch (err) {
-        console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
-        throw err;
-      }
+       // Handle Cloudflare protection using cloudflare bypass module
+       await cloudflareBypass.handleCloudflareProtection(page, cloudflarePhishBypass, cloudflareBypass, currentUrl);
+       
+       console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
+       await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
+     } catch (err) {
+       console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
+       throw err;
+     }     
 
       if (interactEnabled && !disableInteract) {
         if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
