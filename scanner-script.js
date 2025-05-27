@@ -1,26 +1,20 @@
-// === Network scanner script v0.9.10 ===
+// === Network scanner script v0.9.4 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
-// 
-const { blockedManager } = require('./lib/blocked'); // Import the adblock module
-const { fingerprintManager } = require('./lib/fingerprint'); // Import the fingerprint module
-const { cssBlocker } = require('./lib/css-blocker'); // Import the CSS blocker module
-const { cloudflareBypass } = require('./lib/cloudflare-bypass'); // Import the Cloudflare bypass module
-const { pageInjector } = require('./lib/page-injector'); // Import the page injector module
-const { interactionSimulator } = require('./lib/interaction-simulator'); // Import the interaction simulator module
-const { cdpManager } = require('./lib/cdp-manager'); // Import the CDP manager module
-const { processManager } = require('./lib/process-manager'); // Import the process manager module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.10'; // Script version
-const MAX_CONCURRENT_SITES = 4;
+const VERSION = '0.9.4'; // Script version
+const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
 const startTime = Date.now();
+// Default values for fingerprint spoofing if not set to 'random'
+const DEFAULT_PLATFORM = 'Win32';
+const DEFAULT_TIMEZONE = 'America/New_York';
 
 // --- Command-Line Argument Parsing ---
 const args = process.argv.slice(2);
@@ -51,13 +45,6 @@ const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 
-// New argument for external blocked patterns file
-let blockedPatternsFile = null;
-const blockedFileIndex = args.findIndex(arg => arg === '--blocked-file');
-if (blockedFileIndex !== -1 && args[blockedFileIndex + 1]) {
-  blockedPatternsFile = args[blockedFileIndex + 1];
-}
-
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
   process.exit(0);
@@ -78,7 +65,6 @@ Options:
   --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
   --no-interact                  Disable page interactions globally
   --custom-json <file>           Use a custom config JSON file instead of config.json
-  --blocked-file <file>          Load additional blocked patterns from external file
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
@@ -135,38 +121,7 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
-// --- Initialize Blocked Manager ---
-// Load additional blocked patterns from external file if specified
-let externalBlockedPatterns = [];
-if (blockedPatternsFile) {
-  externalBlockedPatterns = blockedManager.constructor.loadFromFile(blockedPatternsFile);
-}
-
-// Combine global blocked patterns from config and external file
-const allGlobalBlocked = [...globalBlocked, ...externalBlockedPatterns];
-blockedManager.initialize(allGlobalBlocked, forceDebug);
-
-// --- Initialize Fingerprint Manager ---
-fingerprintManager.initialize(forceDebug);
-
-// --- Initialize CSS Blocker ---
-cssBlocker.initialize(forceDebug);
-
-// --- Initialize Cloudflare Bypass ---
-cloudflareBypass.initialize(forceDebug);
-
-// --- Initialize Page Injector ---
-pageInjector.initialize(forceDebug);
-
-// --- Initialize Interaction Simulator ---
-interactionSimulator.initialize(forceDebug);
-
-// --- Initialize CDP Manager ---
-cdpManager.initialize(forceDebug);
-
-// --- Initialize Process Manager ---
-processManager.initialize(forceDebug);
-
+// --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
 // This allows site-specific config to trigger CDP logging for the entire session.
@@ -191,31 +146,46 @@ function getRootDomain(url) {
   }
 }
 
+/**
+ * Generates an object with randomized browser fingerprint values.
+ * This is used to spoof various navigator and screen properties to make
+ * the headless browser instance appear more like a regular user's browser
+ * and potentially bypass some fingerprint-based bot detection.
+ *
+ * @returns {object} An object containing the spoofed fingerprint properties:
+ * @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
+ * @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
+ * @property {object} screen - Randomized screen dimensions and color depth.
+ * @property {number} screen.width - Randomized screen width.
+ * @property {number} screen.height - Randomized screen height.
+ * @property {number} screen.colorDepth - Fixed color depth (24).
+ * @property {string} platform - Fixed platform string ('Linux x86_64').
+ * @property {string} timezone - Fixed timezone ('UTC').
+ */
+function getRandomFingerprint() {
+  return {
+    deviceMemory: Math.random() < 0.5 ? 4 : 8,
+    hardwareConcurrency: [2, 4, 8][Math.floor(Math.random() * 3)],
+    screen: {
+      width: 360 + Math.floor(Math.random() * 400),
+      height: 640 + Math.floor(Math.random() * 500),
+      colorDepth: 24
+    },
+    platform: 'Linux x86_64',
+    timezone: 'UTC'
+  };
+}
+
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
-  // Register main browser cleanup handler
-  let browser = null;
-  processManager.registerCleanupHandler(async () => {
-    if (browser) {
-      if (forceDebug) console.log('[debug][process] Closing browser during cleanup');
-      try {
-        await browser.close();
-      } catch (error) {
-        console.error(`[error][process] Failed to close browser: ${error.message}`);
-      }
-    }
-  }, 'browser-cleanup');
-
-  try {
-    
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(MAX_CONCURRENT_SITES);
 
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
   // launch with no safe browsing
-  browser = await puppeteer.launch({
+  const browser = await puppeteer.launch({
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -234,13 +204,7 @@ function getRootDomain(url) {
     protocolTimeout: 300000
   });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
-
-  // Register browser as a managed resource
-  processManager.registerResource('main-browser', browser, async (browserInstance) => {
-    if (forceDebug) console.log('[debug][process] Cleaning up main browser resource');
-    await browserInstance.close();
-  });
-
+ 
   let siteCounter = 0;
   const totalUrls = sites.reduce((sum, site) => {
     const urls = Array.isArray(site.url) ? site.url.length : 1;
@@ -294,25 +258,96 @@ function getRootDomain(url) {
     try {
       page = await browserInstance.newPage();
       
-      // Register page for cleanup if process is interrupted
-      const pageId = `page-${Date.now()}-${Math.random()}`;
-      processManager.registerResource(pageId, page, async (pageInstance) => {
-        if (!pageInstance.isClosed()) await pageInstance.close();
-      });
-
       // Set consistent timeouts for the page
       page.setDefaultTimeout(timeout);
       page.setDefaultNavigationTimeout(timeout);
 
-      // Apply page script injections using page injector module
-      await pageInjector.applyPageInjections(page, siteConfig, globalEvalOnDoc, currentUrl);
+      // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
+      // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
+      const shouldInjectEvalForPage = siteConfig.evaluateOnNewDocument === true || globalEvalOnDoc;
+      if (shouldInjectEvalForPage) {
+          if (forceDebug) {
+              if (globalEvalOnDoc) {
+                  console.log(`[debug][evalOnDoc] Global Fetch/XHR interception enabled, applying to: ${currentUrl}`);
+              } else { // siteConfig.evaluateOnNewDocument must be true
+                  console.log(`[debug][evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`);
+              }
+          }
+          try {
+              await page.evaluateOnNewDocument(() => {
+                  // This script intercepts and logs Fetch and XHR requests
+                  // from within the page context at the earliest possible moment.
+                  const originalFetch = window.fetch;
+                  window.fetch = (...args) => {
+                      console.log('[evalOnDoc][fetch]', args[0]); // Log fetch requests
+                      return originalFetch.apply(this, args);
+                  };
 
-      // Apply CSS element blocking using CSS blocker module
-      await cssBlocker.applyPreLoadBlocking(page, siteConfig.css_blocked, currentUrl);
+                  const originalXHROpen = XMLHttpRequest.prototype.open;
+                  XMLHttpRequest.prototype.open = function (method, xhrUrl) { // Renamed 'url' to 'xhrUrl' to avoid conflict
+                      console.log('[evalOnDoc][xhr]', xhrUrl); // Log XHR requests
+                      return originalXHROpen.apply(this, arguments);
+                  };
+              });
+          } catch (evalErr) {
+              console.warn(`[warn][evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`);
+          }
+      }
+      // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
 
-      // Apply CDP monitoring using CDP manager module
-      const cdpResult = await cdpManager.applyCDPMonitoring(page, enableCDP, siteConfig, currentUrl);
-      cdpSession = cdpResult.session; // Keep reference for cleanup
+      // --- CSS Element Blocking Setup ---
+      const cssBlockedSelectors = siteConfig.css_blocked;
+      if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
+        if (forceDebug) console.log(`[debug] CSS element blocking enabled for ${currentUrl}: ${cssBlockedSelectors.join(', ')}`);
+        try {
+          await page.evaluateOnNewDocument(({ selectors }) => {
+            // Inject CSS to hide blocked elements
+            const style = document.createElement('style');
+            style.type = 'text/css';
+            const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
+            style.innerHTML = cssRules;
+            
+            // Add the style as soon as DOM is available
+            if (document.head) {
+              document.head.appendChild(style);
+            } else {
+              document.addEventListener('DOMContentLoaded', () => document.head.appendChild(style));
+            }
+          }, { selectors: cssBlockedSelectors });
+        } catch (cssErr) {
+          console.warn(`[warn][css_blocked] Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`);
+        }
+      }
+      // --- END: CSS Element Blocking Setup ---
+
+      // --- Per-Page CDP Setup ---
+      const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
+      if (cdpLoggingNeededForPage) {
+        if (forceDebug) {
+            if (enableCDP) {
+                console.log(`[debug] CDP logging globally enabled by --cdp, applying to page: ${currentUrl}`);
+            } else if (siteConfig.cdp === true) {
+                console.log(`[debug] CDP logging enabled for page ${currentUrl} via site-specific 'cdp: true' config.`);
+            }
+        }
+        try {
+            cdpSession = await page.target().createCDPSession();
+            await cdpSession.send('Network.enable');
+            cdpSession.on('Network.requestWillBeSent', (params) => {
+                const { url: requestUrl, method } = params.request;
+                const initiator = params.initiator ? params.initiator.type : 'unknown';
+                let hostnameForLog = 'unknown-host';
+                try {
+                    hostnameForLog = new URL(currentUrl).hostname;
+                } catch (_) { /* ignore if currentUrl is invalid for URL parsing */ }
+                console.log(`[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`);
+            });
+        } catch (cdpErr) {
+            cdpSession = null; // Reset on failure
+            console.warn(`[warn][cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`);
+        }
+      }
+      // --- End of Per-Page CDP Setup ---
 
       await page.setRequestInterception(true);
 
@@ -339,17 +374,50 @@ function getRootDomain(url) {
         }
       }
 
-      // Apply user agent spoofing using fingerprint manager
-      await fingerprintManager.applyUserAgent(page, siteConfig.userAgent, currentUrl);
-
-      // Apply Brave spoofing using fingerprint manager
-      if (siteConfig.isBrave) {
-       await fingerprintManager.applyBraveSpoofing(page, currentUrl);
+      if (siteConfig.userAgent) {
+        if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${siteConfig.userAgent}`);
+        const userAgents = {
+          chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
+          firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
+          safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+        };
+        const ua = userAgents[siteConfig.userAgent.toLowerCase()];
+        if (ua) await page.setUserAgent(ua);
       }
 
-      // Apply fingerprint protection using fingerprint manager
+      // --- evaluateOnNewDocument for Brave Spoofing (existing) ---
+      if (siteConfig.isBrave) {
+        if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
+        await page.evaluateOnNewDocument(() => {
+          Object.defineProperty(navigator, 'brave', {
+            get: () => ({ isBrave: () => Promise.resolve(true) })
+          });
+        });
+      }
+
+      // --- evaluateOnNewDocument for Fingerprint Protection (existing) ---
       if (fingerprintSetting) {
-       await fingerprintManager.applyFingerprint(page, fingerprintSetting, currentUrl);
+        if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
+        const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
+          deviceMemory: 8, hardwareConcurrency: 4,
+          screen: { width: 1920, height: 1080, colorDepth: 24 },
+          platform: DEFAULT_PLATFORM, timezone: DEFAULT_TIMEZONE
+        };
+        try {
+          await page.evaluateOnNewDocument(({ spoof }) => {
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
+            Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
+            Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
+            Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
+            Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
+            Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
+              resolvedOptions() { return { timeZone: spoof.timezone }; }
+            };
+          }, { spoof });
+        } catch (err) {
+          console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
+        }
       }
     
       const regexes = Array.isArray(siteConfig.filterRegex)
@@ -366,8 +434,9 @@ function getRootDomain(url) {
         });
       }
 
-      // Compile site-specific blocked patterns using the blocked manager
-      const siteBlockedRegexes = blockedManager.compileSitePatterns(siteConfig.blocked);
+      const blockedRegexes = Array.isArray(siteConfig.blocked)
+        ? siteConfig.blocked.map(pattern => new RegExp(pattern))
+        : [];
 
       // --- page.on('request', ...) Handler: Core Network Request Logic ---
       // This handler is triggered for every network request made by the page.
@@ -392,8 +461,7 @@ function getRootDomain(url) {
         if (forceDebug) console.log('[debug request]', request.url());
         const reqUrl = request.url();
 
-        // Use the blocked manager to check if URL should be blocked
-        if (blockedManager.shouldBlock(reqUrl, siteBlockedRegexes)) {
+        if (blockedRegexes.some(re => re.test(reqUrl))) {
           request.abort();
           return;
         }
@@ -420,44 +488,143 @@ function getRootDomain(url) {
 
       const interactEnabled = siteConfig.interact === true;
       
-      // Apply runtime CSS blocking as fallback using CSS blocker module
-      await cssBlocker.applyRuntimeBlocking(page, siteConfig.css_blocked, currentUrl);
+      // --- Runtime CSS Element Blocking (Fallback) ---
+      // Apply CSS blocking after page load as a fallback in case evaluateOnNewDocument didn't work
+      if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
+        try {
+          await page.evaluate((selectors) => {
+            const existingStyle = document.querySelector('#css-blocker-runtime');
+            if (!existingStyle) {
+              const style = document.createElement('style');
+              style.id = 'css-blocker-runtime';
+              style.type = 'text/css';
+              const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
+              style.innerHTML = cssRules;
+              document.head.appendChild(style);
+            }
+          }, cssBlockedSelectors);
+        } catch (cssRuntimeErr) {
+          console.warn(`[warn][css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`);
+        }
+      }
 
       try {
         await page.goto(currentUrl, { waitUntil: 'load', timeout: timeout });
         siteCounter++;
 
-       // Handle Cloudflare protection using cloudflare bypass module
-       await cloudflareBypass.handleCloudflareProtection(page, cloudflarePhishBypass, cloudflareBypass, currentUrl);
-       
-       console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
-       await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
-     } catch (err) {
-       // Check if we're shutting down
-       if (processManager.isShuttingDownNow()) {
-         throw new Error('Operation cancelled due to shutdown');
-       }
-       console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
-       throw err;
-     }     
+        // Handle Cloudflare phishing warning if enabled
+        if (cloudflarePhishBypass) {
+          if (forceDebug) console.log(`[debug] Checking for Cloudflare phishing warning on ${currentUrl}`);
+          try {
+            // Wait a moment for the warning page to load
+            await page.waitForTimeout(2000);
 
-      // Perform interaction simulation using interaction simulator module
-      await interactionSimulator.performBasicInteraction(page, interactEnabled, disableInteract, currentUrl);
+            // Check if we're on a Cloudflare phishing warning page
+            const isPhishingWarning = await page.evaluate(() => {
+              return document.body.textContent.includes('This website has been reported for potential phishing') ||
+                     document.title.includes('Attention Required') ||
+                     document.querySelector('a[href*="continue"]') !== null;
+            });
 
-      // Use managed sleep instead of raw setTimeout
+            if (isPhishingWarning) {
+              if (forceDebug) console.log(`[debug] Cloudflare phishing warning detected, attempting to bypass`);
+              await page.click('a[href*="continue"]', { timeout: 5000 });
+              await page.waitForNavigation({ waitUntil: 'load', timeout: 30000 });
+            }
+          } catch (bypassErr) {
+            if (forceDebug) console.log(`[debug] Cloudflare bypass attempt failed: ${bypassErr.message}`);
+          }
+        }
+
+        // Handle Cloudflare "Verify you are human" challenge if enabled
+        if (cloudflareBypass) {
+          if (forceDebug) console.log(`[debug] Checking for Cloudflare verification challenge on ${currentUrl}`);
+          try {
+            // Wait for potential Cloudflare challenge to appear
+            await page.waitForTimeout(3000);
+
+            // Check if we're on a Cloudflare challenge page
+            const isChallengePresent = await page.evaluate(() => {
+              return document.title.includes('Just a moment') ||
+                     document.body.textContent.includes('Checking your browser') ||
+                     document.body.textContent.includes('Verify you are human') ||
+                     document.querySelector('input[type="checkbox"]#challenge-form') !== null ||
+                     document.querySelector('.cf-challenge-running') !== null ||
+                     document.querySelector('[data-ray]') !== null;
+            });
+
+            if (isChallengePresent) {
+              if (forceDebug) console.log(`[debug] Cloudflare challenge detected, attempting to solve`);
+
+              // Look for the verification checkbox
+              const checkboxSelector = 'input[type="checkbox"]#challenge-form, input[type="checkbox"][name="cf_captcha_kind"], .cf-turnstile input[type="checkbox"], iframe[src*="challenges.cloudflare.com"]';
+
+              try {
+                // Wait for checkbox to be available
+                await page.waitForSelector(checkboxSelector, { timeout: 10000 });
+ 
+                // Simulate human-like mouse movement before clicking
+                const checkbox = await page.$(checkboxSelector);
+                if (checkbox) {
+                  const box = await checkbox.boundingBox();
+                  if (box) {
+                    // Move mouse in a natural pattern
+                    await page.mouse.move(box.x - 50, box.y - 50);
+                    await page.waitForTimeout(Math.random() * 500 + 200);
+                    await page.mouse.move(box.x + box.width/2, box.y + box.height/2, { steps: 5 });
+                    await page.waitForTimeout(Math.random() * 300 + 100);
+
+                    // Click the checkbox
+                    await checkbox.click();
+                    if (forceDebug) console.log(`[debug] Clicked Cloudflare verification checkbox`);
+
+                    // Wait for challenge to complete
+                    await page.waitForTimeout(5000);
+
+                    // Check if we need to wait for redirect or if challenge is solved
+                    await page.waitForFunction(() => {
+                      return !document.body.textContent.includes('Checking your browser') &&
+                             !document.body.textContent.includes('Just a moment');
+                    }, { timeout: 30000 });
+                  }
+                }
+              } catch (checkboxErr) {
+                if (forceDebug) console.log(`[debug] Checkbox interaction failed, trying alternative approach: ${checkboxErr.message}`);
+
+                // Alternative: try clicking anywhere on the challenge form
+                try {
+                  await page.click('.cf-challenge-running, [data-ray], .cf-turnstile', { timeout: 5000 });
+                  await page.waitForTimeout(5000);
+                } catch (altErr) {
+                  if (forceDebug) console.log(`[debug] Alternative click approach also failed: ${altErr.message}`);
+                }
+              }
+            }
+          } catch (challengeErr) {
+            if (forceDebug) console.log(`[debug] Cloudflare challenge bypass failed: ${challengeErr.message}`);
+          }
+        }
+
+        console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
+        await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
+      } catch (err) {
+        console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
+        throw err;
+      }
+
+      if (interactEnabled && !disableInteract) {
+        if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
+        const randomX = Math.floor(Math.random() * 500) + 50;
+        const randomY = Math.floor(Math.random() * 500) + 50;
+        await page.mouse.move(randomX, randomY, { steps: 10 });
+        await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
+        await page.mouse.click(randomX + 25, randomY + 25);
+        await page.hover('body');
+      }
+
       const delayMs = siteConfig.delay || 4000;
       await page.waitForNetworkIdle({ idleTime: 4000, timeout: timeout });
-      
-      // Check for shutdown during delay
-      const sleepCompleted = await processManager.sleep(delayMs);
-      if (!sleepCompleted) {
-        if (forceDebug) console.log(`[debug] Sleep interrupted by shutdown for ${currentUrl}`);
-        // Don't throw error, just continue with cleanup
-      }
-      
-      // Check if we're shutting down before proceeding with reloads
-      if (processManager.isShuttingDownNow()) return { url: currentUrl, rules: [], success: false, interrupted: true };
- 
+      await new Promise(resolve => setTimeout(resolve, delayMs));
 
       for (let i = 1; i < (siteConfig.reload || 1); i++) {
        if (siteConfig.clear_sitedata === true) {
@@ -483,11 +650,7 @@ function getRootDomain(url) {
          }
        }
         await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
-        
-        const reloadSleepCompleted = await processManager.sleep(delayMs);
-        if (!reloadSleepCompleted) {
-          break; // Exit reload loop if shutdown requested
-        }
+        await new Promise(resolve => setTimeout(resolve, delayMs));
       }
 
       if (siteConfig.forcereload === true) {
@@ -495,10 +658,7 @@ function getRootDomain(url) {
         try {
           await page.setCacheEnabled(false);
           await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
-          const forceReloadSleepCompleted = await processManager.sleep(delayMs);
-          if (!forceReloadSleepCompleted) {
-            // Continue with processing even if sleep was interrupted
-          }
+          await new Promise(resolve => setTimeout(resolve, delayMs));
           await page.setCacheEnabled(true);
         } catch (forceReloadErr) {
           console.warn(`[forcereload failed] ${currentUrl}: ${forceReloadErr.message}`);
@@ -538,19 +698,18 @@ function getRootDomain(url) {
       return { url: currentUrl, rules: [], success: false };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
-
-      // Unregister page resource since we're cleaning it up manually
-      processManager.unregisterResource(pageId);
-      // Clean up CDP session using CDP manager
-      await cdpManager.cleanupCDPSession(page, cdpSession);
-
+      if (cdpSession) {
+        try {
+          await cdpSession.detach();
+          if (forceDebug) console.log(`[debug] CDP session detached for ${currentUrl}`);
+        } catch (cdpCleanupErr) {
+          if (forceDebug) console.log(`[debug] Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`);
+        }
+      }
+      
       if (page && !page.isClosed()) {
         try {
           await page.close();
-
-          // Clean up page injector tracking
-          pageInjector.cleanupPage(page);
-
           if (forceDebug) console.log(`[debug] Page closed for ${currentUrl}`);
         } catch (pageCloseErr) {
           if (forceDebug) console.log(`[debug] Failed to close page for ${currentUrl}: ${pageCloseErr.message}`);
@@ -569,13 +728,6 @@ function getRootDomain(url) {
 
   if (!silentMode && allProcessingTasks.length > 0) {
     console.log(`\nProcessing ${allProcessingTasks.length} URLs with concurrency ${MAX_CONCURRENT_SITES}...`);
-
-    // Register a timeout to force shutdown if processing takes too long
-    const maxProcessingTime = 300000; // 5 minutes
-    processManager.createManagedTimeout(() => {
-      console.warn(`[warn][process] Processing timeout exceeded (${maxProcessingTime}ms), initiating shutdown`);
-      processManager.initiateShutdown('timeout', 1);
-    }, maxProcessingTime, 'processing-timeout');
   }
   const results = await Promise.all(allProcessingTasks);
 
@@ -611,18 +763,7 @@ function getRootDomain(url) {
     console.log(outputLines.join('\n'));
   }
   
-  // Clean browser resource tracking before manual close
-  processManager.unregisterResource('main-browser');
-  
-  if (browser && !browser.isConnected || !browser.isConnected()) {
-    try {
-      await browser.close();
-    } catch (browserCloseError) {
-      // Browser might already be closed
-      if (forceDebug) console.log(`[debug] Browser close error (may be expected): ${browserCloseError.message}`);
-    }
-  }
-
+  await browser.close();
   const endTime = Date.now();
   const durationMs = endTime - startTime;
   const totalSeconds = Math.floor(durationMs / 1000);
@@ -633,12 +774,5 @@ function getRootDomain(url) {
   if (!silentMode) {
     console.log(`\nScan completed. ${siteCounter} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
   }
-
-  // Use process manager for graceful exit
-  await processManager.gracefulExit(0, 'Scanner completed successfully');
-  
-  } catch (mainError) {
-    console.error(`[error] Fatal error in main execution: ${mainError.message}`);
-    await processManager.gracefulExit(1, 'Scanner failed with error');
-  }
+  process.exit(0);
 })();
