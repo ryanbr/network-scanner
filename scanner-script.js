@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.9 ===
+// === Network scanner script v0.9.10 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -13,9 +13,10 @@ const { cloudflareBypass } = require('./lib/cloudflare-bypass'); // Import the C
 const { pageInjector } = require('./lib/page-injector'); // Import the page injector module
 const { interactionSimulator } = require('./lib/interaction-simulator'); // Import the interaction simulator module
 const { cdpManager } = require('./lib/cdp-manager'); // Import the CDP manager module
+const { processManager } = require('./lib/process-manager'); // Import the process manager module
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.9'; // Script version
+const VERSION = '0.9.10'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 
 // get startTime
@@ -163,6 +164,9 @@ interactionSimulator.initialize(forceDebug);
 // --- Initialize CDP Manager ---
 cdpManager.initialize(forceDebug);
 
+// --- Initialize Process Manager ---
+processManager.initialize(forceDebug);
+
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
 // This allows site-specific config to trigger CDP logging for the entire session.
@@ -190,13 +194,28 @@ function getRootDomain(url) {
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
+  // Register main browser cleanup handler
+  let browser = null;
+  processManager.registerCleanupHandler(async () => {
+    if (browser) {
+      if (forceDebug) console.log('[debug][process] Closing browser during cleanup');
+      try {
+        await browser.close();
+      } catch (error) {
+        console.error(`[error][process] Failed to close browser: ${error.message}`);
+      }
+    }
+  }, 'browser-cleanup');
+
+  try {
+    
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(MAX_CONCURRENT_SITES);
 
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
   // launch with no safe browsing
-  const browser = await puppeteer.launch({
+  browser = await puppeteer.launch({
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
@@ -215,7 +234,13 @@ function getRootDomain(url) {
     protocolTimeout: 300000
   });
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
- 
+
+  // Register browser as a managed resource
+  processManager.registerResource('main-browser', browser, async (browserInstance) => {
+    if (forceDebug) console.log('[debug][process] Cleaning up main browser resource');
+    await browserInstance.close();
+  });
+
   let siteCounter = 0;
   const totalUrls = sites.reduce((sum, site) => {
     const urls = Array.isArray(site.url) ? site.url.length : 1;
@@ -269,6 +294,12 @@ function getRootDomain(url) {
     try {
       page = await browserInstance.newPage();
       
+      // Register page for cleanup if process is interrupted
+      const pageId = `page-${Date.now()}-${Math.random()}`;
+      processManager.registerResource(pageId, page, async (pageInstance) => {
+        if (!pageInstance.isClosed()) await pageInstance.close();
+      });
+
       // Set consistent timeouts for the page
       page.setDefaultTimeout(timeout);
       page.setDefaultNavigationTimeout(timeout);
@@ -402,6 +433,10 @@ function getRootDomain(url) {
        console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
        await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
      } catch (err) {
+       // Check if we're shutting down
+       if (processManager.isShuttingDownNow()) {
+         throw new Error('Operation cancelled due to shutdown');
+       }
        console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
        throw err;
      }     
@@ -409,9 +444,20 @@ function getRootDomain(url) {
       // Perform interaction simulation using interaction simulator module
       await interactionSimulator.performBasicInteraction(page, interactEnabled, disableInteract, currentUrl);
 
+      // Use managed sleep instead of raw setTimeout
       const delayMs = siteConfig.delay || 4000;
       await page.waitForNetworkIdle({ idleTime: 4000, timeout: timeout });
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      
+      // Check for shutdown during delay
+      const sleepCompleted = await processManager.sleep(delayMs);
+      if (!sleepCompleted) {
+        if (forceDebug) console.log(`[debug] Sleep interrupted by shutdown for ${currentUrl}`);
+        // Don't throw error, just continue with cleanup
+      }
+      
+      // Check if we're shutting down before proceeding with reloads
+      if (processManager.isShuttingDownNow()) return { url: currentUrl, rules: [], success: false, interrupted: true };
+ 
 
       for (let i = 1; i < (siteConfig.reload || 1); i++) {
        if (siteConfig.clear_sitedata === true) {
@@ -437,7 +483,11 @@ function getRootDomain(url) {
          }
        }
         await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        
+        const reloadSleepCompleted = await processManager.sleep(delayMs);
+        if (!reloadSleepCompleted) {
+          break; // Exit reload loop if shutdown requested
+        }
       }
 
       if (siteConfig.forcereload === true) {
@@ -445,7 +495,10 @@ function getRootDomain(url) {
         try {
           await page.setCacheEnabled(false);
           await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
-          await new Promise(resolve => setTimeout(resolve, delayMs));
+          const forceReloadSleepCompleted = await processManager.sleep(delayMs);
+          if (!forceReloadSleepCompleted) {
+            // Continue with processing even if sleep was interrupted
+          }
           await page.setCacheEnabled(true);
         } catch (forceReloadErr) {
           console.warn(`[forcereload failed] ${currentUrl}: ${forceReloadErr.message}`);
@@ -486,6 +539,8 @@ function getRootDomain(url) {
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
 
+      // Unregister page resource since we're cleaning it up manually
+      processManager.unregisterResource(pageId);
       // Clean up CDP session using CDP manager
       await cdpManager.cleanupCDPSession(page, cdpSession);
 
@@ -514,6 +569,13 @@ function getRootDomain(url) {
 
   if (!silentMode && allProcessingTasks.length > 0) {
     console.log(`\nProcessing ${allProcessingTasks.length} URLs with concurrency ${MAX_CONCURRENT_SITES}...`);
+
+    // Register a timeout to force shutdown if processing takes too long
+    const maxProcessingTime = 300000; // 5 minutes
+    processManager.createManagedTimeout(() => {
+      console.warn(`[warn][process] Processing timeout exceeded (${maxProcessingTime}ms), initiating shutdown`);
+      processManager.initiateShutdown('timeout', 1);
+    }, maxProcessingTime, 'processing-timeout');
   }
   const results = await Promise.all(allProcessingTasks);
 
@@ -549,7 +611,18 @@ function getRootDomain(url) {
     console.log(outputLines.join('\n'));
   }
   
-  await browser.close();
+  // Clean browser resource tracking before manual close
+  processManager.unregisterResource('main-browser');
+  
+  if (browser && !browser.isConnected || !browser.isConnected()) {
+    try {
+      await browser.close();
+    } catch (browserCloseError) {
+      // Browser might already be closed
+      if (forceDebug) console.log(`[debug] Browser close error (may be expected): ${browserCloseError.message}`);
+    }
+  }
+
   const endTime = Date.now();
   const durationMs = endTime - startTime;
   const totalSeconds = Math.floor(durationMs / 1000);
@@ -560,5 +633,12 @@ function getRootDomain(url) {
   if (!silentMode) {
     console.log(`\nScan completed. ${siteCounter} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
   }
-  process.exit(0);
+
+  // Use process manager for graceful exit
+  await processManager.gracefulExit(0, 'Scanner completed successfully');
+  
+  } catch (mainError) {
+    console.error(`[error] Fatal error in main execution: ${mainError.message}`);
+    await processManager.gracefulExit(1, 'Scanner failed with error');
+  }
 })();
