@@ -683,6 +683,7 @@ function getRandomFingerprint() {
 
     } catch (err) {
       console.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`);
+      
       if (siteConfig.screenshot === true && page) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
@@ -698,6 +699,7 @@ function getRandomFingerprint() {
       return { url: currentUrl, rules: [], success: false };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
+      
       if (cdpSession) {
         try {
           await cdpSession.detach();
@@ -705,6 +707,12 @@ function getRandomFingerprint() {
         } catch (cdpCleanupErr) {
           if (forceDebug) console.log(`[debug] Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`);
         }
+      }
+      // Add small delay to allow cleanup to complete
+      try {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } catch (delayErr) {
+        // Ignore timeout errors
       }
       
       if (page && !page.isClosed()) {
@@ -762,8 +770,47 @@ function getRandomFingerprint() {
     if (outputLines.length > 0) console.log("\n--- Generated Rules ---");
     console.log(outputLines.join('\n'));
   }
-  
-  await browser.close();
+ 
+  if (forceDebug) console.log(`[debug] Starting browser cleanup...`);
+
+  // Enhanced browser cleanup
+  try {
+   // Add timeout to browser cleanup
+   const cleanupPromise = (async () => {
+    if (forceDebug) console.log(`[debug] Getting all browser pages...`);
+    const pages = await browser.pages();
+    if (forceDebug) console.log(`[debug] Found ${pages.length} pages to close`);
+    await Promise.all(pages.map(async (page) => {
+      if (!page.isClosed()) {
+        try {
+	  if (forceDebug) console.log(`[debug] Closing page: ${page.url()}`);
+          await page.close();
+	  if (forceDebug) console.log(`[debug] Page closed successfully`);
+        } catch (err) {
+          // Force close if normal close fails
+          if (forceDebug) console.log(`[debug] Force closing page: ${err.message}`);
+        }
+      }
+    }));
+    if (forceDebug) console.log(`[debug] All pages closed, closing browser...`);
+    await browser.close();
+    if (forceDebug) console.log(`[debug] Browser closed successfully`);
+    })();
+    
+    // Race cleanup against timeout
+    await Promise.race([
+      cleanupPromise,
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Browser cleanup timeout')), 10000)
+      )
+    ]);
+
+  } catch (browserCloseErr) {
+    console.warn(`[warn] Browser cleanup had issues: ${browserCloseErr.message}`);
+    if (forceDebug) console.log(`[debug] Forcing process exit due to cleanup failure`);
+    process.exit(1);
+  }
+  if (forceDebug) console.log(`[debug] Calculating timing statistics...`);
   const endTime = Date.now();
   const durationMs = endTime - startTime;
   const totalSeconds = Math.floor(durationMs / 1000);
@@ -774,5 +821,6 @@ function getRandomFingerprint() {
   if (!silentMode) {
     console.log(`\nScan completed. ${siteCounter} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
   }
+  if (forceDebug) console.log(`[debug] About to exit process...`);
   process.exit(0);
 })();
