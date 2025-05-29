@@ -458,7 +458,11 @@ function getRandomFingerprint() {
           return;
         }
 
-        if (forceDebug) console.log('[debug request]', request.url());
+        // Show --debug output and the url while its scanning
+        if (forceDebug) {
+         const simplifiedUrl = getRootDomain(currentUrl);
+         console.log(`[debug req][${simplifiedUrl}] ${request.url()}`);
+        }
         const reqUrl = request.url();
 
         if (blockedRegexes.some(re => re.test(reqUrl))) {
