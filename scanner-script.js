@@ -1,13 +1,14 @@
-// === Network scanner script v0.9.4 ===
+// === Network scanner script v0.9.5 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
+const path = require('path');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.4'; // Script version
+const VERSION = '0.9.5'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
@@ -121,6 +122,21 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
+// --- Debug Log File Setup ---
+let debugLogFile = null;
+if (forceDebug) {
+  // Create logs folder if it doesn't exist
+  const logsFolder = 'logs';
+  if (!fs.existsSync(logsFolder)) {
+    fs.mkdirSync(logsFolder, { recursive: true });
+    console.log(`[debug] Created logs folder: ${logsFolder}`);
+  }
+
+  // Generate timestamped log filename
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, -5);
+  debugLogFile = path.join(logsFolder, `debug_requests_${timestamp}.log`);
+  console.log(`[debug] Debug requests will be logged to: ${debugLogFile}`);
+}
 // --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
 // If globalCDP is not already enabled by the --cdp flag,
 // check if any site in config.json has `cdp: true`. If so, enable globalCDP.
@@ -460,8 +476,21 @@ function getRandomFingerprint() {
 
         // Show --debug output and the url while its scanning
         if (forceDebug) {
-         const simplifiedUrl = getRootDomain(currentUrl);
-         console.log(`[debug req][${simplifiedUrl}] ${request.url()}`);
+          const simplifiedUrl = getRootDomain(currentUrl);
+          const timestamp = new Date().toISOString();
+          const logEntry = `${timestamp} [debug req][${simplifiedUrl}] ${request.url()}`;
+
+          // Output to console
+          console.log(`[debug req][${simplifiedUrl}] ${request.url()}`);
+
+          // Output to file
+          if (debugLogFile) {
+            try {
+              fs.appendFileSync(debugLogFile, logEntry + '\n');
+            } catch (logErr) {
+              console.warn(`[warn] Failed to write to debug log file: ${logErr.message}`);
+            }
+          }
         }
         const reqUrl = request.url();
 
