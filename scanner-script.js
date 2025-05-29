@@ -810,7 +810,9 @@ function getRandomFingerprint() {
   const outputLines = [];
   for (const { url, rules } of finalSiteRules) {
     if (rules.length > 0) {
-      if (showTitles) outputLines.push(`! ${url}`);
+      if (showTitles || (dumpUrls && adblockRulesLogFile)) {   // Show titles in dumpurls
+        outputLines.push(`! ${url}`);
+       }
       outputLines.push(...rules);
     }
   }
