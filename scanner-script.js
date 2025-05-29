@@ -122,9 +122,10 @@ try {
 }
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 
-// --- Debug Log File Setup ---
+// --- Log File Setup ---
 let debugLogFile = null;
-if (forceDebug) {
+let matchedUrlsLogFile = null;
+if (forceDebug || dumpUrls) {
   // Create logs folder if it doesn't exist
   const logsFolder = 'logs';
   if (!fs.existsSync(logsFolder)) {
@@ -132,10 +133,18 @@ if (forceDebug) {
     console.log(`[debug] Created logs folder: ${logsFolder}`);
   }
 
-  // Generate timestamped log filename
+  // Generate timestamped log filenames
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, -5);
+ 
+if (forceDebug) {
   debugLogFile = path.join(logsFolder, `debug_requests_${timestamp}.log`);
   console.log(`[debug] Debug requests will be logged to: ${debugLogFile}`);
+}
+
+if (dumpUrls) {
+    matchedUrlsLogFile = path.join(logsFolder, `matched_urls_${timestamp}.log`);
+    console.log(`Matched URLs will be logged to: ${matchedUrlsLogFile}`);
+  }
 }
 // --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
 // If globalCDP is not already enabled by the --cdp flag,
@@ -515,7 +524,8 @@ function getRandomFingerprint() {
             }
             if (dumpUrls) {
               const timestamp = new Date().toISOString();
-              fs.appendFileSync('matched_urls.log', `${timestamp} [match][${simplifiedUrl}] ${reqUrl}\n`);
+              fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}\n`);
+
             }
             break;
           }
