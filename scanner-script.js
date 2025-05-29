@@ -509,10 +509,14 @@ function getRandomFingerprint() {
         for (const re of regexes) {
           if (re.test(reqUrl)) {
             matchedDomains.add(reqDomain);
+            const simplifiedUrl = getRootDomain(currentUrl);
             if (siteConfig.verbose === 1) {
-              console.log(`[match] ${reqUrl} matched regex: ${re}`);
+              console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re}`);
             }
-            if (dumpUrls) fs.appendFileSync('matched_urls.log', `${reqUrl}\n`);
+            if (dumpUrls) {
+              const timestamp = new Date().toISOString();
+              fs.appendFileSync('matched_urls.log', `${timestamp} [match][${simplifiedUrl}] ${reqUrl}\n`);
+            }
             break;
           }
         }
