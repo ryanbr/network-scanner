@@ -125,6 +125,7 @@ const { sites = [], ignoreDomains = [], blocked: globalBlocked = [] } = config;
 // --- Log File Setup ---
 let debugLogFile = null;
 let matchedUrlsLogFile = null;
+let adblockRulesLogFile = null;
 if (forceDebug || dumpUrls) {
   // Create logs folder if it doesn't exist
   const logsFolder = 'logs';
@@ -144,6 +145,10 @@ if (forceDebug) {
 if (dumpUrls) {
     matchedUrlsLogFile = path.join(logsFolder, `matched_urls_${timestamp}.log`);
     console.log(`Matched URLs will be logged to: ${matchedUrlsLogFile}`);
+
+    // Also create adblock rules log file with same timestamp
+    adblockRulesLogFile = path.join(logsFolder, `adblock_rules_${timestamp}.txt`);
+    console.log(`Adblock rules will be saved to: ${adblockRulesLogFile}`); 
   }
 }
 // --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
@@ -813,6 +818,10 @@ function getRandomFingerprint() {
   if (outputFile) {
     fs.writeFileSync(outputFile, outputLines.join('\n') + '\n');
     if (!silentMode) console.log(`\nAdblock rules saved to ${outputFile}`);
+  } else if (dumpUrls && adblockRulesLogFile) {
+    // If --dumpurls is used but no -o output file specified, save to logs folder
+    fs.writeFileSync(adblockRulesLogFile, outputLines.join('\n') + '\n');
+    if (!silentMode) console.log(`\nAdblock rules saved to ${adblockRulesLogFile}`);
   } else {
     if (outputLines.length > 0) console.log("\n--- Generated Rules ---");
     console.log(outputLines.join('\n'));
