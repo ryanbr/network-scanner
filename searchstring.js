@@ -123,6 +123,29 @@ function createResponseHandler(config) {
     const matchesRegex = regexes.some(re => re.test(respUrl));
     if (!matchesRegex) return;
     
+    // Check if this is a first-party response (same domain as the URL being scanned)
+    const currentUrlHostname = new URL(currentUrl).hostname;
+    const responseHostname = new URL(respUrl).hostname;
+    const isFirstParty = currentUrlHostname === responseHostname;
+
+    // Apply first-party/third-party filtering based on site configuration
+    const allowFirstParty = siteConfig.firstParty === 1;
+    const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === 1;
+
+    if (isFirstParty && !allowFirstParty) {
+      if (forceDebug) {
+        console.log(`[debug] Skipping first-party response for searchstring analysis: ${respUrl}`);
+      }
+      return;
+    }
+
+    if (!isFirstParty && !allowThirdParty) {
+      if (forceDebug) {
+        console.log(`[debug] Skipping third-party response for searchstring analysis: ${respUrl}`);
+      }
+      return;
+    }
+    
     try {
       // Only capture appropriate content types to avoid binary data
       const contentType = response.headers()['content-type'] || '';
@@ -132,7 +155,7 @@ function createResponseHandler(config) {
         }
         return;
       }
-      
+
       const content = await response.text();
       
       // Check if content contains any of our search strings (OR logic)
@@ -147,20 +170,23 @@ function createResponseHandler(config) {
         const simplifiedUrl = getRootDomain(currentUrl);
         
         if (siteConfig.verbose === 1) {
-          console.log(`[match][${simplifiedUrl}] ${respUrl} contains searchstring: "${matchedString}"`);
+          const partyType = isFirstParty ? 'first-party' : 'third-party';
+          console.log(`[match][${simplifiedUrl}] ${respUrl} (${partyType}) contains searchstring: "${matchedString}"`);
         }
         
         if (dumpUrls) {
           const timestamp = new Date().toISOString();
+          const partyType = isFirstParty ? 'first-party' : 'third-party';
           try {
             fs.appendFileSync(matchedUrlsLogFile, 
-              `${timestamp} [match][${simplifiedUrl}] ${respUrl} (searchstring: "${matchedString}")\n`);
+              `${timestamp} [match][${simplifiedUrl}] ${respUrl} (${partyType}, searchstring: "${matchedString}")\n`);
           } catch (logErr) {
             console.warn(`[warn] Failed to write to matched URLs log: ${logErr.message}`);
           }
         }
       } else if (forceDebug) {
-        console.log(`[debug] ${respUrl} matched regex but no searchstring found`);
+        const partyType = isFirstParty ? 'first-party' : 'third-party';
+        console.log(`[debug] ${respUrl} (${partyType}) matched regex but no searchstring found`);
       }
       
     } catch (err) {
