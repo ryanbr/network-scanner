@@ -9,11 +9,14 @@ const fs = require('fs');
  * @returns {object} Object with searchStrings array and hasSearchString boolean
  */
 function parseSearchStrings(searchstring) {
-  const searchStrings = Array.isArray(searchstring)
+  let searchStrings = Array.isArray(searchstring)
     ? searchstring
     : searchstring
       ? [searchstring]
       : [];
+  
+  // Filter out empty strings to prevent matching everything
+  searchStrings = searchStrings.filter(str => str && str.trim().length > 0);
   
   const hasSearchString = searchStrings.length > 0;
   
