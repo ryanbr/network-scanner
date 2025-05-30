@@ -55,7 +55,7 @@ Example:
       "url": "https://example.com/",
       "userAgent": "chrome",
       "filterRegex": "ads|analytics",
-      "searchstring": "specificString"],
+      "searchstring": "specificString",
       "resourceTypes": ["script", "xhr", "image"],
       "reload": 2,
       "forcereload": true,
