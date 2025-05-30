@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.5 ===
+// === Network scanner script v0.9.6 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -6,9 +6,10 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 const path = require('path');
+const { compressMultipleFiles, formatFileSize } = require('./compress');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.5'; // Script version
+const VERSION = '0.9.6'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
@@ -45,6 +46,13 @@ const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
+const compressLogs = args.includes('--compress-logs');
+
+// Validate --compress-logs usage
+if (compressLogs && !dumpUrls) {
+  console.error(`❌ --compress-logs can only be used with --dumpurls`);
+  process.exit(1);
+}
 
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
@@ -61,6 +69,7 @@ Options:
   --silent                       Suppress normal console logs
   --titles                       Add ! <url> title before each site's group
   --dumpurls                     Dump matched URLs into matched_urls.log
+  --compress-logs                Compress log files with gzip (requires --dumpurls)
   --sub-domains                  Output full subdomains instead of collapsing to root
   --localhost                    Output as 127.0.0.1 domain.com
   --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
@@ -808,25 +817,62 @@ function getRandomFingerprint() {
   siteCounter = successfulPageLoads;
 
   const outputLines = [];
+  const outputLinesWithTitles = [];
   for (const { url, rules } of finalSiteRules) {
     if (rules.length > 0) {
-      if (showTitles || (dumpUrls && adblockRulesLogFile)) {   // Show titles in dumpurls
+      // Regular output (for -o files and console) - only add titles if --titles flag used
+      if (showTitles) {
         outputLines.push(`! ${url}`);
-       }
+      }
       outputLines.push(...rules);
+      
+      // Output with titles (for auto-saved log files) - always add titles
+      outputLinesWithTitles.push(`! ${url}`);
+      outputLinesWithTitles.push(...rules);
     }
   }
 
   if (outputFile) {
     fs.writeFileSync(outputFile, outputLines.join('\n') + '\n');
     if (!silentMode) console.log(`\nAdblock rules saved to ${outputFile}`);
-  } else if (dumpUrls && adblockRulesLogFile) {
-    // If --dumpurls is used but no -o output file specified, save to logs folder
-    fs.writeFileSync(adblockRulesLogFile, outputLines.join('\n') + '\n');
-    if (!silentMode) console.log(`\nAdblock rules saved to ${adblockRulesLogFile}`);
-  } else {
+    } else {
     if (outputLines.length > 0) console.log("\n--- Generated Rules ---");
     console.log(outputLines.join('\n'));
+   }
+   
+   // Always create adblock_rules_ file when --dumpurls is used (with titles)
+  if (dumpUrls && adblockRulesLogFile) {
+    fs.writeFileSync(adblockRulesLogFile, outputLinesWithTitles.join('\n') + '\n');
+    if (!silentMode) console.log(`\nAdblock rules saved to ${adblockRulesLogFile}`);
+  }
+  
+  // Compress log files if --compress-logs is enabled
+  if (compressLogs && dumpUrls) {
+    const filesToCompress = [];
+    if (debugLogFile && fs.existsSync(debugLogFile)) filesToCompress.push(debugLogFile);
+    if (matchedUrlsLogFile && fs.existsSync(matchedUrlsLogFile)) filesToCompress.push(matchedUrlsLogFile);
+    if (adblockRulesLogFile && fs.existsSync(adblockRulesLogFile)) filesToCompress.push(adblockRulesLogFile);
+    
+    if (filesToCompress.length > 0) {
+      if (!silentMode) console.log(`\nCompressing ${filesToCompress.length} log file(s)...`);
+      try {
+        const results = await compressMultipleFiles(filesToCompress, true);
+        
+        if (!silentMode) {
+          results.successful.forEach(({ original, compressed }) => {
+            const originalSize = fs.statSync(compressed).size; // compressed file size
+            console.log(`✅ Compressed: ${path.basename(original)} → ${path.basename(compressed)}`);
+          });
+          if (results.failed.length > 0) {
+            results.failed.forEach(({ path: filePath, error }) => {
+              console.warn(`⚠ Failed to compress ${path.basename(filePath)}: ${error}`);
+            });
+          }
+        }
+      } catch (compressionErr) {
+        console.warn(`[warn] Log compression failed: ${compressionErr.message}`);
+      }
+    }
   }
  
   if (forceDebug) console.log(`[debug] Starting browser cleanup...`);
