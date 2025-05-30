@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.6 ===
+// === Network scanner script v0.9.7 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -7,9 +7,10 @@ const fs = require('fs');
 const psl = require('psl');
 const path = require('path');
 const { compressMultipleFiles, formatFileSize } = require('./compress');
+const { parseSearchStrings, createResponseHandler } = require('./searchstring');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.6'; // Script version
+const VERSION = '0.9.7'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
@@ -87,6 +88,7 @@ Options:
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
+  searchstring: "text" or ["text1", "text2"]   Text to search in response content (requires filterRegex match)
   blocked: ["regex"]                          Regex patterns to block requests
   css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
   interact: true/false                         Simulate mouse movements/clicks
@@ -480,6 +482,9 @@ function getRandomFingerprint() {
           ? [new RegExp(siteConfig.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
           : [];
 
+   // Parse searchstring patterns using module
+   const { searchStrings, hasSearchString } = parseSearchStrings(siteConfig.searchstring);
+
       if (siteConfig.verbose === 1 && siteConfig.filterRegex) {
         const patterns = Array.isArray(siteConfig.filterRegex) ? siteConfig.filterRegex : [siteConfig.filterRegex];
         console.log(`[info] Regex patterns for ${currentUrl}:`);
@@ -487,6 +492,13 @@ function getRandomFingerprint() {
           console.log(`  [${idx + 1}] ${pattern}`);
         });
       }
+
+   if (siteConfig.verbose === 1 && hasSearchString) {
+     console.log(`[info] Search strings for ${currentUrl}:`);
+     searchStrings.forEach((searchStr, idx) => {
+       console.log(`  [${idx + 1}] "${searchStr}"`);
+     });
+   }
 
       const blockedRegexes = Array.isArray(siteConfig.blocked)
         ? siteConfig.blocked.map(pattern => new RegExp(pattern))
@@ -546,21 +558,50 @@ function getRandomFingerprint() {
 
         for (const re of regexes) {
           if (re.test(reqUrl)) {
-            matchedDomains.add(reqDomain);
-            const simplifiedUrl = getRootDomain(currentUrl);
-            if (siteConfig.verbose === 1) {
-              console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re}`);
-            }
-            if (dumpUrls) {
-              const timestamp = new Date().toISOString();
-              fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}\n`);
 
-            }
-            break;
+           // If NO searchstring is defined, match immediately (existing behavior)
+           if (!hasSearchString) {
+             matchedDomains.add(reqDomain);
+             const simplifiedUrl = getRootDomain(currentUrl);
+             if (siteConfig.verbose === 1) {
+               console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re}`);
+             }
+             if (dumpUrls) {
+               const timestamp = new Date().toISOString();
+               fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}\n`);
+             }
+           } else {
+             // If searchstring IS defined, queue for content checking
+             if (forceDebug) {
+               console.log(`[debug] ${reqUrl} matched regex ${re}, queued for content search`);
+             }
+           }
+
+          break;
           }
         }
         request.continue();
       });
+
+     // Add response handler ONLY if searchstring is defined
+     if (hasSearchString) {
+       const responseHandler = createResponseHandler({
+         searchStrings,
+         regexes,
+         matchedDomains,
+         currentUrl,
+         perSiteSubDomains,
+         ignoreDomains,
+         matchesIgnoreDomain,
+         getRootDomain,
+         siteConfig,
+         dumpUrls,
+         matchedUrlsLogFile,
+         forceDebug
+       });
+
+       page.on('response', responseHandler);
+     }
 
       const interactEnabled = siteConfig.interact === true;
       
