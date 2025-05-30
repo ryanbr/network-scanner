@@ -185,6 +185,19 @@ function getRootDomain(url) {
   }
 }
 
+// ability to use widcards in ignoreDomains
+function matchesIgnoreDomain(domain, ignorePatterns) {
+  return ignorePatterns.some(pattern => {
+    if (pattern.includes('*')) {
+      // Convert wildcard pattern to regex
+      const regexPattern = pattern
+        .replace(/\./g, '\\.')  // Escape dots
+        .replace(/\*/g, '.*');  // Convert * to .*
+      return new RegExp(`^${regexPattern}$`).test(domain);
+    }
+    return domain.endsWith(pattern);
+  });
+}
 /**
  * Generates an object with randomized browser fingerprint values.
  * This is used to spoof various navigator and screen properties to make
@@ -524,7 +537,7 @@ function getRandomFingerprint() {
 
         const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
-        if (!reqDomain || ignoreDomains.some(domain => reqDomain.endsWith(domain))) {
+	if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
           request.continue();
           return;
         }
