@@ -55,6 +55,7 @@ Example:
       "url": "https://example.com/",
       "userAgent": "chrome",
       "filterRegex": "ads|analytics",
+      "searchstring": "specificString"],
       "resourceTypes": ["script", "xhr", "image"],
       "reload": 2,
       "forcereload": true,
@@ -86,6 +87,7 @@ Example:
 | `url`                | String |   -     | Website URL to scan |
 | `userAgent`          | `chrome`, `firefox`, `safari`, `mobile-chrome`, etc. | - | User agent for page |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
+| `searchstring`       | String or Array | - |  Text to search in response content (requires filterRegex match) |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |
 | `forcereload`        | `true` or `false` | `false` | Force page reload |
