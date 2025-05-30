@@ -45,6 +45,7 @@ const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
+const removeDupes = args.includes('--remove-dupes');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
 
@@ -78,6 +79,7 @@ Options:
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
+  --remove-dupes                 Remove duplicate domains from output (only with -o)
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
@@ -843,6 +845,19 @@ function getRandomFingerprint() {
       outputLinesWithTitles.push(`! ${url}`);
       outputLinesWithTitles.push(...rules);
     }
+  }
+
+  // Remove duplicates if requested and outputting to file
+  if (removeDupes && outputFile) {
+    const uniqueLines = [];
+    const seenRules = new Set();
+    for (const line of outputLines) {
+      if (line.startsWith('!') || !seenRules.has(line)) {
+        uniqueLines.push(line);
+        if (!line.startsWith('!')) seenRules.add(line);
+      }
+    }
+    outputLines.splice(0, outputLines.length, ...uniqueLines);
   }
 
   if (outputFile) {

@@ -34,6 +34,7 @@ A Puppeteer-based tool (v0.9.0) for scanning websites to find third-party (or op
 | `--localhost-0.0.0.0`       | Output format as `0.0.0.0 domain.com` |
 | `--plain`                   | Output non formated domain.com` |
 | `--cdp`                    | Enable Chrome DevTools Protocol logging |
+| `--remove-dubes`            | Remove duplicate domains from output (only with -o) |
 | `--eval-on-doc`           | Inject JS fetch/XHR interception globally |
 | `--help`, `-h`              | Show help menu |
 
