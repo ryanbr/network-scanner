@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.7 ===
+// === Network scanner script v0.9.8 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -12,7 +12,7 @@ const { createGrepHandler, validateGrepAvailability } = require('./grep');
 
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.7'; // Script version
+const VERSION = '0.9.8'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
