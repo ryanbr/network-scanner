@@ -7,7 +7,9 @@ const fs = require('fs');
 const psl = require('psl');
 const path = require('path');
 const { compressMultipleFiles, formatFileSize } = require('./compress');
-const { parseSearchStrings, createResponseHandler } = require('./searchstring');
+const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./searchstring');
+const { createGrepHandler, validateGrepAvailability } = require('./grep');
+
 
 // --- Script Configuration & Constants ---
 const VERSION = '0.9.7'; // Script version
@@ -89,6 +91,10 @@ Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
   searchstring: "text" or ["text1", "text2"]   Text to search in response content (requires filterRegex match)
+  curl: true/false                             Use curl to download content for analysis (default: false)
+                                               Note: curl respects filterRegex but ignores resourceTypes filtering
+  grep: true/false                             Use grep instead of JavaScript for pattern matching (default: false)
+                                             Note: requires curl=true, uses system grep command for faster searches
   blocked: ["regex"]                          Regex patterns to block requests
   css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
   interact: true/false                         Simulate mouse movements/clicks
@@ -484,6 +490,38 @@ function getRandomFingerprint() {
 
    // Parse searchstring patterns using module
    const { searchStrings, hasSearchString } = parseSearchStrings(siteConfig.searchstring);
+   const useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring
+   const useGrep = siteConfig.grep === true && useCurl; // Grep requires curl to be enabled
+
+   // Get user agent for curl if needed
+   let curlUserAgent = '';
+   if (useCurl && siteConfig.userAgent) {
+     const userAgents = {
+       chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
+       firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
+       safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+     };
+     curlUserAgent = userAgents[siteConfig.userAgent.toLowerCase()] || '';
+   }
+
+   if (useCurl && forceDebug) {
+     console.log(`[debug] Curl-based content analysis enabled for ${currentUrl}`);
+   }
+
+   if (useGrep && forceDebug) {
+     console.log(`[debug] Grep-based pattern matching enabled for ${currentUrl}`);
+   }
+   
+   // Validate grep availability if needed
+   if (useGrep && hasSearchString) {
+     const grepCheck = validateGrepAvailability();
+     if (!grepCheck.isAvailable) {
+       console.warn(`[warn] Grep not available for ${currentUrl}: ${grepCheck.error}. Falling back to JavaScript search.`);
+       useGrep = false;
+     } else if (forceDebug) {
+       console.log(`[debug] Using grep: ${grepCheck.version}`);
+     }
+   }
 
       if (siteConfig.verbose === 1 && siteConfig.filterRegex) {
         const patterns = Array.isArray(siteConfig.filterRegex) ? siteConfig.filterRegex : [siteConfig.filterRegex];
@@ -576,6 +614,43 @@ function getRandomFingerprint() {
                console.log(`[debug] ${reqUrl} matched regex ${re}, queued for content search`);
              }
            }
+           
+           // If curl is enabled, download and analyze content immediately
+           if (useCurl) {
+             try {
+               // Use grep handler if both grep and searchstring are enabled
+               if (useGrep && hasSearchString) {
+                 const grepHandler = createGrepHandler({
+                   searchStrings,
+                   regexes,
+                   matchedDomains,
+                   currentUrl,
+                   perSiteSubDomains,
+                   ignoreDomains,
+                   matchesIgnoreDomain,
+                   getRootDomain,
+                   siteConfig,
+                   dumpUrls,
+                   matchedUrlsLogFile,
+                   forceDebug,
+                   userAgent: curlUserAgent,
+                   hasSearchString,
+                   grepOptions: {
+                     ignoreCase: true,
+                     wholeWord: false,
+                     regex: false
+                   }
+                 });
+                 
+                 setImmediate(() => grepHandler(reqUrl));
+               } else {
+                 // Use regular curl handler
+               }
+             } catch (curlErr) {
+               if (forceDebug) {
+                 console.log(`[debug] Curl handler failed for ${reqUrl}: ${curlErr.message}`);
+               }
+             }
 
           break;
           }
@@ -583,8 +658,8 @@ function getRandomFingerprint() {
         request.continue();
       });
 
-     // Add response handler ONLY if searchstring is defined
-     if (hasSearchString) {
+     // Add response handler ONLY if searchstring is defined AND neither curl nor grep is enabled
+     if (hasSearchString && !useCurl && !useGrep) {
        const responseHandler = createResponseHandler({
          searchStrings,
          regexes,

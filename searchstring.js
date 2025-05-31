@@ -2,6 +2,7 @@
 // Handles response content analysis for searchstring functionality
 
 const fs = require('fs');
+const { spawnSync } = require('child_process');
 
 /**
  * Parses searchstring configuration into a normalized format
@@ -21,6 +22,62 @@ function parseSearchStrings(searchstring) {
   const hasSearchString = searchStrings.length > 0;
   
   return { searchStrings, hasSearchString };
+}
+
+/**
+ * Downloads content using curl with appropriate headers and timeout
+ * @param {string} url - The URL to download
+ * @param {string} userAgent - User agent string to use
+ * @param {number} timeout - Timeout in seconds (default: 30)
+ * @returns {Promise<string>} The downloaded content
+ */
+async function downloadWithCurl(url, userAgent = '', timeout = 30) {
+  return new Promise((resolve, reject) => {
+    try {
+      const curlArgs = [
+        '-s', // Silent mode
+        '-L', // Follow redirects
+        '--max-time', timeout.toString(),
+        '--max-redirs', '5',
+        '--fail-with-body', // Return body even on HTTP errors
+        '--compressed', // Accept compressed responses
+      ];
+
+      if (userAgent) {
+        curlArgs.push('-H', `User-Agent: ${userAgent}`);
+      }
+
+      // Add common headers to appear more browser-like
+      curlArgs.push(
+        '-H', 'Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        '-H', 'Accept-Language: en-US,en;q=0.5',
+        '-H', 'Accept-Encoding: gzip, deflate',
+        '-H', 'Connection: keep-alive',
+        '-H', 'Upgrade-Insecure-Requests: 1'
+      );
+
+      curlArgs.push(url);
+
+      // Use spawnSync with proper argument separation
+      const result = spawnSync('curl', curlArgs, { 
+        encoding: 'utf8',
+        timeout: timeout * 1000,
+        maxBuffer: 10 * 1024 * 1024 // 10MB max buffer
+      });
+      
+      if (result.error) {
+        throw result.error;
+      }
+      
+      if (result.status !== 0) {
+        throw new Error(`Curl exited with status ${result.status}: ${result.stderr}`);
+      }
+      
+      resolve(result.stdout);
+    } catch (error) {
+      reject(new Error(`Curl failed for ${url}: ${error.message}`));
+    }
+  });
 }
 
 /**
@@ -92,6 +149,130 @@ function shouldAnalyzeContentType(contentType) {
   ];
   
   return textTypes.some(type => contentType.includes(type));
+}
+
+/**
+ * Creates a curl-based URL handler for downloading and optionally searching content
+ * @param {object} config - Configuration object containing all necessary parameters
+ * @returns {Function} URL handler function for curl-based content analysis
+ */
+function createCurlHandler(config) {
+  const {
+    searchStrings,
+    regexes,
+    matchedDomains,
+    currentUrl,
+    perSiteSubDomains,
+    ignoreDomains,
+    matchesIgnoreDomain,
+    getRootDomain,
+    siteConfig,
+    dumpUrls,
+    matchedUrlsLogFile,
+    forceDebug,
+    userAgent,
+    hasSearchString
+  } = config;
+
+  return async function curlHandler(requestUrl) {
+    const respDomain = perSiteSubDomains ? (new URL(requestUrl)).hostname : getRootDomain(requestUrl);
+    
+    // Only process URLs that match our regex patterns
+    const matchesRegex = regexes.some(re => re.test(requestUrl));
+    if (!matchesRegex) return;
+    
+    // Check if this is a first-party request (same domain as the URL being scanned)
+    const currentUrlHostname = new URL(currentUrl).hostname;
+    const requestHostname = new URL(requestUrl).hostname;
+    const isFirstParty = currentUrlHostname === requestHostname;
+    
+    // Apply first-party/third-party filtering
+    if (isFirstParty && siteConfig.firstParty === false) {
+      if (forceDebug) {
+        console.log(`[debug][curl] Skipping first-party request (firstParty=false): ${requestUrl}`);
+      }
+      return;
+    }
+    
+    if (!isFirstParty && siteConfig.thirdParty === false) {
+      if (forceDebug) {
+        console.log(`[debug][curl] Skipping third-party request (thirdParty=false): ${requestUrl}`);
+      }
+      return;
+    }
+    
+    try {
+      if (forceDebug) {
+        console.log(`[debug][curl] Downloading content from: ${requestUrl}`);
+      }
+      
+      // If NO searchstring is defined, match immediately (like browser behavior)
+      if (!hasSearchString) {
+        if (!respDomain || matchesIgnoreDomain(respDomain, ignoreDomains)) {
+          return;
+        }
+        
+        matchedDomains.add(respDomain);
+        const simplifiedUrl = getRootDomain(currentUrl);
+        
+        if (siteConfig.verbose === 1) {
+          const partyType = isFirstParty ? 'first-party' : 'third-party';
+          console.log(`[match][${simplifiedUrl}] ${requestUrl} (${partyType}, curl) matched regex`);
+        }
+        
+        if (dumpUrls) {
+          const timestamp = new Date().toISOString();
+          const partyType = isFirstParty ? 'first-party' : 'third-party';
+          try {
+            fs.appendFileSync(matchedUrlsLogFile, 
+              `${timestamp} [match][${simplifiedUrl}] ${requestUrl} (${partyType}, curl)\n`);
+          } catch (logErr) {
+            console.warn(`[warn] Failed to write to matched URLs log: ${logErr.message}`);
+          }
+        }
+        return;
+      }
+      
+      // If searchstring IS defined, download and search content
+      const content = await downloadWithCurl(requestUrl, userAgent, 30);
+      
+      // Check if content contains any of our search strings (OR logic)
+      const { found, matchedString } = searchContent(content, searchStrings, '');
+      
+      if (found) {
+        if (!respDomain || matchesIgnoreDomain(respDomain, ignoreDomains)) {
+          return;
+        }
+        
+        matchedDomains.add(respDomain);
+        const simplifiedUrl = getRootDomain(currentUrl);
+        
+        if (siteConfig.verbose === 1) {
+          const partyType = isFirstParty ? 'first-party' : 'third-party';
+          console.log(`[match][${simplifiedUrl}] ${requestUrl} (${partyType}, curl) contains searchstring: "${matchedString}"`);
+        }
+        
+        if (dumpUrls) {
+          const timestamp = new Date().toISOString();
+          const partyType = isFirstParty ? 'first-party' : 'third-party';
+          try {
+            fs.appendFileSync(matchedUrlsLogFile, 
+              `${timestamp} [match][${simplifiedUrl}] ${requestUrl} (${partyType}, curl, searchstring: "${matchedString}")\n`);
+          } catch (logErr) {
+            console.warn(`[warn] Failed to write to matched URLs log: ${logErr.message}`);
+          }
+        }
+      } else if (forceDebug) {
+        const partyType = isFirstParty ? 'first-party' : 'third-party';
+        console.log(`[debug][curl] ${requestUrl} (${partyType}) matched regex but no searchstring found`);
+      }
+      
+    } catch (err) {
+      if (forceDebug) {
+        console.log(`[debug][curl] Failed to download content for ${requestUrl}: ${err.message}`);
+      }
+    }
+  };
 }
 
 /**
@@ -256,6 +437,8 @@ module.exports = {
   searchContent,
   shouldAnalyzeContentType,
   createResponseHandler,
+  createCurlHandler,
+  downloadWithCurl,
   validateSearchString,
   getSearchStats
 };
