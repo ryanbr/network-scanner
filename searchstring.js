@@ -127,21 +127,24 @@ function createResponseHandler(config) {
     const currentUrlHostname = new URL(currentUrl).hostname;
     const responseHostname = new URL(respUrl).hostname;
     const isFirstParty = currentUrlHostname === responseHostname;
-
-    // Apply first-party/third-party filtering based on site configuration
-    const allowFirstParty = siteConfig.firstParty === 1;
-    const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === 1;
-
-    if (isFirstParty && !allowFirstParty) {
+    
+    // The main request handler already filtered first-party/third-party requests
+    // This response handler only runs for requests that passed that filter
+    // However, we need to apply the same first-party/third-party logic here for searchstring analysis
+    // because the response handler analyzes content, not just URLs
+    
+    // Apply first-party/third-party filtering for searchstring analysis
+    // Use the exact same logic as the main request handler
+    if (isFirstParty && siteConfig.firstParty === false) {
       if (forceDebug) {
-        console.log(`[debug] Skipping first-party response for searchstring analysis: ${respUrl}`);
+        console.log(`[debug] Skipping first-party response for searchstring analysis (firstParty=false): ${respUrl}`);
       }
       return;
     }
-
-    if (!isFirstParty && !allowThirdParty) {
+    
+    if (!isFirstParty && siteConfig.thirdParty === false) {
       if (forceDebug) {
-        console.log(`[debug] Skipping third-party response for searchstring analysis: ${respUrl}`);
+        console.log(`[debug] Skipping third-party response for searchstring analysis (thirdParty=false): ${respUrl}`);
       }
       return;
     }
@@ -155,7 +158,7 @@ function createResponseHandler(config) {
         }
         return;
       }
-
+      
       const content = await response.text();
       
       // Check if content contains any of our search strings (OR logic)
