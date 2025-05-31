@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v0.9.0) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v0.9.8) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -88,6 +88,8 @@ Example:
 | `userAgent`          | `chrome`, `firefox`, `safari`, `mobile-chrome`, etc. | - | User agent for page |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
 | `searchstring`       | String or Array | - |  Text to search in response content (requires filterRegex match) |
+| `curl`               | `true` or `false` | `false` | Use curl to download content for analysis |
+| `grep`               | `true` or `false` | `false` | Use grep instead of JavaScript for pattern matching |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |
 | `forcereload`        | `true` or `false` | `false` | Force page reload |
@@ -95,10 +97,14 @@ Example:
 | `delay`              | Milliseconds | `2000` | Wait time after loading/reloading |
 | `timeout`            | Milliseconds | `30000` | Timeout for page load |
 | `verbose`            | `0` or `1` | `0` | Enable verbose output per site |
+| `isBrave`            | `true` or `false` | `false` | Spoof Brave browser detection |
+| `localhost`          | `true` or `false` | `false` | Force localhost output (127.0.0.1) |
+| `localhost_0_0_0_0`  | `true` or `false` | `false` | Force localhost output (0.0.0.0) |
 | `debug`              | `0` or `1` | `0` | Dump matching URLs for the site |
 | `interact`           | `true` or `false` | `false` | Simulate user interaction (hover, click) |
 | `fingerprint_protection` | `true`, `false`, `random` | `false` | Enable navigator/device spoofing |
 | `cloudflare_phish`   | `true` or `false` | `false` | Enable Cloudflare Phishing Warning bypass |
+| `headful`            | `true` or `false` | `false` |  Launch browser with GUI for this site |
 | `cloudflare_bypass`  | `true` or `false` | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
 | `firstParty`         | `0` or `1` | `0` | Match first-party requests |
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |

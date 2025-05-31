@@ -17,9 +17,6 @@ const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
 const startTime = Date.now();
-// Default values for fingerprint spoofing if not set to 'random'
-const DEFAULT_PLATFORM = 'Win32';
-const DEFAULT_TIMEZONE = 'America/New_York';
 
 // --- Command-Line Argument Parsing ---
 const args = process.argv.slice(2);
@@ -208,35 +205,6 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
     return domain.endsWith(pattern);
   });
 }
-/**
- * Generates an object with randomized browser fingerprint values.
- * This is used to spoof various navigator and screen properties to make
- * the headless browser instance appear more like a regular user's browser
- * and potentially bypass some fingerprint-based bot detection.
- *
- * @returns {object} An object containing the spoofed fingerprint properties:
- * @property {number} deviceMemory - Randomized device memory (4 or 8 GB).
- * @property {number} hardwareConcurrency - Randomized CPU cores (2, 4, or 8).
- * @property {object} screen - Randomized screen dimensions and color depth.
- * @property {number} screen.width - Randomized screen width.
- * @property {number} screen.height - Randomized screen height.
- * @property {number} screen.colorDepth - Fixed color depth (24).
- * @property {string} platform - Fixed platform string ('Linux x86_64').
- * @property {string} timezone - Fixed timezone ('UTC').
- */
-function getRandomFingerprint() {
-  return {
-    deviceMemory: Math.random() < 0.5 ? 4 : 8,
-    hardwareConcurrency: [2, 4, 8][Math.floor(Math.random() * 3)],
-    screen: {
-      width: 360 + Math.floor(Math.random() * 400),
-      height: 640 + Math.floor(Math.random() * 500),
-      colorDepth: 24
-    },
-    platform: 'Linux x86_64',
-    timezone: 'UTC'
-  };
-}
 
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
@@ -301,7 +269,6 @@ function getRandomFingerprint() {
     const perSiteSubDomains = siteConfig.subDomains === 1 ? true : subDomainsMode;
     const siteLocalhost = siteConfig.localhost === true;
     const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
-    const fingerprintSetting = siteConfig.fingerprint_protection || false;
     const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
     const cloudflareBypass = siteConfig.cloudflare_bypass === true;
 
@@ -436,52 +403,9 @@ function getRandomFingerprint() {
         }
       }
 
-      if (siteConfig.userAgent) {
-        if (forceDebug) console.log(`[debug] userAgent spoofing enabled for ${currentUrl}: ${siteConfig.userAgent}`);
-        const userAgents = {
-          chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-          firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
-          safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
-        };
-        const ua = userAgents[siteConfig.userAgent.toLowerCase()];
-        if (ua) await page.setUserAgent(ua);
-      }
+      // --- Apply all fingerprint spoofing (user agent, Brave, fingerprint protection) ---
+      await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
 
-      // --- evaluateOnNewDocument for Brave Spoofing (existing) ---
-      if (siteConfig.isBrave) {
-        if (forceDebug) console.log(`[debug] Brave spoofing enabled for ${currentUrl}`);
-        await page.evaluateOnNewDocument(() => {
-          Object.defineProperty(navigator, 'brave', {
-            get: () => ({ isBrave: () => Promise.resolve(true) })
-          });
-        });
-      }
-
-      // --- evaluateOnNewDocument for Fingerprint Protection (existing) ---
-      if (fingerprintSetting) {
-        if (forceDebug) console.log(`[debug] fingerprint_protection enabled for ${currentUrl}`);
-        const spoof = fingerprintSetting === 'random' ? getRandomFingerprint() : {
-          deviceMemory: 8, hardwareConcurrency: 4,
-          screen: { width: 1920, height: 1080, colorDepth: 24 },
-          platform: DEFAULT_PLATFORM, timezone: DEFAULT_TIMEZONE
-        };
-        try {
-          await page.evaluateOnNewDocument(({ spoof }) => {
-            Object.defineProperty(navigator, 'deviceMemory', { get: () => spoof.deviceMemory });
-            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => spoof.hardwareConcurrency });
-            Object.defineProperty(window.screen, 'width', { get: () => spoof.screen.width });
-            Object.defineProperty(window.screen, 'height', { get: () => spoof.screen.height });
-            Object.defineProperty(window.screen, 'colorDepth', { get: () => spoof.screen.colorDepth });
-            Object.defineProperty(navigator, 'platform', { get: () => spoof.platform });
-            Intl.DateTimeFormat = class extends Intl.DateTimeFormat {
-              resolvedOptions() { return { timeZone: spoof.timezone }; }
-            };
-          }, { spoof });
-        } catch (err) {
-          console.warn(`[fingerprint spoof failed] ${currentUrl}: ${err.message}`);
-        }
-      }
-    
       const regexes = Array.isArray(siteConfig.filterRegex)
         ? siteConfig.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
         : siteConfig.filterRegex
