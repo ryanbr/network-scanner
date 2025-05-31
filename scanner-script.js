@@ -6,10 +6,10 @@ const puppeteer = require('puppeteer');
 const fs = require('fs');
 const psl = require('psl');
 const path = require('path');
-const { compressMultipleFiles, formatFileSize } = require('./compress');
-const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./searchstring');
-const { createGrepHandler, validateGrepAvailability } = require('./grep');
-
+const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
+const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
+const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
+const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 
 // --- Script Configuration & Constants ---
 const VERSION = '0.9.8'; // Script version
