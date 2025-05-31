@@ -94,7 +94,7 @@ Per-site config.json options:
   curl: true/false                             Use curl to download content for analysis (default: false)
                                                Note: curl respects filterRegex but ignores resourceTypes filtering
   grep: true/false                             Use grep instead of JavaScript for pattern matching (default: false)
-                                             Note: requires curl=true, uses system grep command for faster searches
+                                               Note: requires curl=true, uses system grep command for faster searches
   blocked: ["regex"]                          Regex patterns to block requests
   css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
   interact: true/false                         Simulate mouse movements/clicks
@@ -491,7 +491,7 @@ function getRandomFingerprint() {
    // Parse searchstring patterns using module
    const { searchStrings, hasSearchString } = parseSearchStrings(siteConfig.searchstring);
    const useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring
-   const useGrep = siteConfig.grep === true && useCurl; // Grep requires curl to be enabled
+   let useGrep = siteConfig.grep === true && useCurl; // Grep requires curl to be enabled
 
    // Get user agent for curl if needed
    let curlUserAgent = '';
@@ -645,12 +645,31 @@ function getRandomFingerprint() {
                  setImmediate(() => grepHandler(reqUrl));
                } else {
                  // Use regular curl handler
+                 const curlHandler = createCurlHandler({
+                   searchStrings,
+                   regexes,
+                   matchedDomains,
+                   currentUrl,
+                   perSiteSubDomains,
+                   ignoreDomains,
+                   matchesIgnoreDomain,
+                   getRootDomain,
+                   siteConfig,
+                   dumpUrls,
+                   matchedUrlsLogFile,
+                   forceDebug,
+                   userAgent: curlUserAgent,
+                   hasSearchString
+                 });
+                 
+                 setImmediate(() => curlHandler(reqUrl));
                }
              } catch (curlErr) {
                if (forceDebug) {
                  console.log(`[debug] Curl handler failed for ${reqUrl}: ${curlErr.message}`);
                }
              }
+           }
 
           break;
           }
