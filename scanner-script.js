@@ -51,6 +51,19 @@ const removeDupes = args.includes('--remove-dupes');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
 
+let adblockRulesMode = args.includes('--adblock-rules');
+
+// Validate --adblock-rules usage - ignore if used incorrectly instead of erroring
+if (adblockRulesMode) {
+  if (!outputFile) {
+    if (forceDebug) console.log(`[debug] --adblock-rules ignored: requires --output (-o) to specify an output file`);
+    adblockRulesMode = false;
+  } else if (localhostMode || localhostModeAlt || plainOutput) {
+    if (forceDebug) console.log(`[debug] --adblock-rules ignored: incompatible with localhost/plain output modes`);
+    adblockRulesMode = false;
+  }
+}
+
 // Validate --compress-logs usage
 if (compressLogs && !dumpUrls) {
   console.error(`❌ --compress-logs can only be used with --dumpurls`);
@@ -82,6 +95,7 @@ Options:
   --plain                        Output just domains (no adblock formatting)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --remove-dupes                 Remove duplicate domains from output (only with -o)
+  --adblock-rules                Generate adblock filter rules with resource type modifiers (requires -o, ignored if used with --localhost/--localhost-0.0.0.0/--plain)
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
@@ -112,6 +126,7 @@ Per-site config.json options:
   screenshot: true/false                       Capture screenshot on load failure
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
+  adblock_rules: true/false                    Generate adblock filter rules with resource types for this site
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
   cloudflare_bypass: true/false               Auto-solve Cloudflare "Verify you are human" challenges (default: false)
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
@@ -281,7 +296,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
     let page = null;
     let cdpSession = null;
-    const matchedDomains = new Set();
+    // Use Map to track domains and their resource types for --adblock-rules
+    const matchedDomains = adblockRulesMode || siteConfig.adblock_rules ? new Map() : new Set();
     const timeout = siteConfig.timeout || 30000;
 
     if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
@@ -468,6 +484,25 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         ? siteConfig.blocked.map(pattern => new RegExp(pattern))
         : [];
 
+      /**
+       * Helper function to add domain to matched collection
+       * @param {string} domain - Domain to add
+       * @param {string} resourceType - Resource type (for --adblock-rules mode)
+       */
+      function addMatchedDomain(domain, resourceType = null) {
+        if (matchedDomains instanceof Map) {
+          if (!matchedDomains.has(domain)) {
+            matchedDomains.set(domain, new Set());
+          }
+          // Only add the specific resourceType that was matched, not all types for this domain
+          if (resourceType) {
+            matchedDomains.get(domain).add(resourceType);
+          }
+        } else {
+          matchedDomains.add(domain);
+        }
+      }
+
       // --- page.on('request', ...) Handler: Core Network Request Logic ---
       // This handler is triggered for every network request made by the page.
       // It decides whether to allow, block, or process the request based on:
@@ -515,24 +550,27 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
         const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
 
-	if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+        if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
           request.continue();
           return;
         }
 
         for (const re of regexes) {
           if (re.test(reqUrl)) {
+            const resourceType = request.resourceType();
 
            // If NO searchstring is defined, match immediately (existing behavior)
            if (!hasSearchString) {
-             matchedDomains.add(reqDomain);
+             addMatchedDomain(reqDomain, resourceType);
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
-               console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re}`);
+               const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
+               console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re}${resourceInfo}`);
              }
              if (dumpUrls) {
                const timestamp = new Date().toISOString();
-               fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}\n`);
+               const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
+               fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}${resourceInfo}\n`);
              }
            } else {
              // If searchstring IS defined, queue for content checking
@@ -550,6 +588,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                    searchStrings,
                    regexes,
                    matchedDomains,
+                   addMatchedDomain, // Pass the helper function
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -560,6 +599,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                    matchedUrlsLogFile,
                    forceDebug,
                    userAgent: curlUserAgent,
+                   resourceType,
                    hasSearchString,
                    grepOptions: {
                      ignoreCase: true,
@@ -575,6 +615,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                    searchStrings,
                    regexes,
                    matchedDomains,
+                   addMatchedDomain, // Pass the helper function
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -585,6 +626,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                    matchedUrlsLogFile,
                    forceDebug,
                    userAgent: curlUserAgent,
+                   resourceType,
                    hasSearchString
                  });
                  
@@ -609,6 +651,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
          searchStrings,
          regexes,
          matchedDomains,
+         addMatchedDomain, // Pass the helper function
          currentUrl,
          perSiteSubDomains,
          ignoreDomains,
@@ -617,7 +660,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
          siteConfig,
          dumpUrls,
          matchedUrlsLogFile,
-         forceDebug
+         forceDebug,
+         resourceType: null // Response handler doesn't have direct access to resource type
        });
 
        page.on('response', responseHandler);
@@ -724,7 +768,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
       const globalOptions = {
         localhostMode,
         localhostModeAlt,
-        plainOutput
+        plainOutput,
+        adblockRulesMode
       };
       const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
       
@@ -810,7 +855,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
   // Debug: Show output format being used
   if (forceDebug) {
-    const globalOptions = { localhostMode, localhostModeAlt, plainOutput };
+    const globalOptions = { localhostMode, localhostModeAlt, plainOutput, adblockRules: adblockRulesMode };
     console.log(`[debug] Output format: ${getFormatDescription(globalOptions)}`);
     console.log(`[debug] Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`);
   }
