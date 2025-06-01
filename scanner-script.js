@@ -10,6 +10,7 @@ const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
+const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 
 // --- Script Configuration & Constants ---
 const VERSION = '0.9.8'; // Script version
@@ -800,20 +801,14 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         }
       }
 
-      const formattedRules = [];
-      matchedDomains.forEach(domain => {
-        if (domain.length > 6 && domain.includes('.')) {
-          const sitePlainSetting = siteConfig.plain === true;
-          const usePlain = plainOutput || sitePlainSetting;
-          if (localhostMode || siteLocalhost) {
-            formattedRules.push(usePlain ? domain : `127.0.0.1 ${domain}`);
-          } else if (localhostModeAlt || siteLocalhostAlt) {
-            formattedRules.push(usePlain ? domain : `0.0.0.0 ${domain}`);
-          } else {
-            formattedRules.push(usePlain ? domain : `||${domain}^`);
-          }
-        }
-      });
+      // Format rules using the output module
+      const globalOptions = {
+        localhostMode,
+        localhostModeAlt,
+        plainOutput
+      };
+      const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
+      
       return { url: currentUrl, rules: formattedRules, success: true };
 
     } catch (err) {
@@ -874,63 +869,31 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
   }
   const results = await Promise.all(allProcessingTasks);
 
-  const finalSiteRules = [];
-  let successfulPageLoads = 0;
-
-  results.forEach(result => {
-    if (result) {
-        if (result.success) {
-            successfulPageLoads++;
-        }
-        if (result.rules && result.rules.length > 0) {
-            finalSiteRules.push({ url: result.url, rules: result.rules });
-        }
-    }
-  });
+  // Handle all output using the output module
+  const outputConfig = {
+    outputFile,
+    showTitles,
+    removeDupes: removeDupes && outputFile, // Only remove dupes when outputting to file
+    silentMode,
+    dumpUrls,
+    adblockRulesLogFile
+  };
   
-  siteCounter = successfulPageLoads;
-
-  const outputLines = [];
-  const outputLinesWithTitles = [];
-  for (const { url, rules } of finalSiteRules) {
-    if (rules.length > 0) {
-      // Regular output (for -o files and console) - only add titles if --titles flag used
-      if (showTitles) {
-        outputLines.push(`! ${url}`);
-      }
-      outputLines.push(...rules);
-      
-      // Output with titles (for auto-saved log files) - always add titles
-      outputLinesWithTitles.push(`! ${url}`);
-      outputLinesWithTitles.push(...rules);
-    }
+  const outputResult = handleOutput(results, outputConfig);
+  
+  if (!outputResult.success) {
+    console.error('❌ Failed to write output files');
+    process.exit(1);
   }
 
-  // Remove duplicates if requested and outputting to file
-  if (removeDupes && outputFile) {
-    const uniqueLines = [];
-    const seenRules = new Set();
-    for (const line of outputLines) {
-      if (line.startsWith('!') || !seenRules.has(line)) {
-        uniqueLines.push(line);
-        if (!line.startsWith('!')) seenRules.add(line);
-      }
-    }
-    outputLines.splice(0, outputLines.length, ...uniqueLines);
-  }
+  // Use the success count from output handler
+  siteCounter = outputResult.successfulPageLoads;
 
-  if (outputFile) {
-    fs.writeFileSync(outputFile, outputLines.join('\n') + '\n');
-    if (!silentMode) console.log(`\nAdblock rules saved to ${outputFile}`);
-    } else {
-    if (outputLines.length > 0) console.log("\n--- Generated Rules ---");
-    console.log(outputLines.join('\n'));
-   }
-   
-   // Always create adblock_rules_ file when --dumpurls is used (with titles)
-  if (dumpUrls && adblockRulesLogFile) {
-    fs.writeFileSync(adblockRulesLogFile, outputLinesWithTitles.join('\n') + '\n');
-    if (!silentMode) console.log(`\nAdblock rules saved to ${adblockRulesLogFile}`);
+  // Debug: Show output format being used
+  if (forceDebug) {
+    const globalOptions = { localhostMode, localhostModeAlt, plainOutput };
+    console.log(`[debug] Output format: ${getFormatDescription(globalOptions)}`);
+    console.log(`[debug] Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`);
   }
   
   // Compress log files if --compress-logs is enabled
@@ -1010,7 +973,10 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
   const seconds = totalSeconds % 60;
 
   if (!silentMode) {
-    console.log(`\nScan completed. ${siteCounter} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
+    console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
+    if (outputResult.totalRules > 0) {
+      console.log(`Generated ${outputResult.totalRules} unique rules`);
+    }
   }
   if (forceDebug) console.log(`[debug] About to exit process...`);
   process.exit(0);
