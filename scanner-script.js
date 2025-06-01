@@ -559,7 +559,15 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
           if (re.test(reqUrl)) {
             const resourceType = request.resourceType();
             
-            // Check ignoreDomains FIRST, before any processing
+            // Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
+            if (blockedRegexes.some(re => re.test(reqUrl))) {
+              if (forceDebug) {
+                console.log(`[debug] URL ${reqUrl} matches blocked pattern, skipping detection (but request already blocked)`);
+              }
+              break; // Skip detection but don't interfere with browser blocking
+            }
+            
+            // Check ignoreDomains before any processing 
             if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
               if (forceDebug) {
                 console.log(`[debug] Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`);
