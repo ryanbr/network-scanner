@@ -558,6 +558,14 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         for (const re of regexes) {
           if (re.test(reqUrl)) {
             const resourceType = request.resourceType();
+            
+            // Check ignoreDomains FIRST, before any processing
+            if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+              if (forceDebug) {
+                console.log(`[debug] Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`);
+              }
+              break; // Skip this URL entirely
+            }
 
            // If NO searchstring is defined, match immediately (existing behavior)
            if (!hasSearchString) {
