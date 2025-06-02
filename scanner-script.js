@@ -136,6 +136,7 @@ Per-site config.json options:
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
+  dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
 `);
   process.exit(0);
@@ -658,6 +659,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                whoisOrTerms,
                digTerms,
                digRecordType,
+               digSubdomain: siteConfig.dig_subdomain === true,
                matchedDomains,
                addMatchedDomain,
                currentUrl,
@@ -670,7 +672,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
              });
              
              // Execute nettools check asynchronously
-             setImmediate(() => netToolsHandler(reqDomain));
+            const originalDomain = (new URL(reqUrl)).hostname;
+            setImmediate(() => netToolsHandler(reqDomain, originalDomain));
            } else {
              // If searchstring IS defined (with or without nettools), queue for content checking
              if (forceDebug) {
