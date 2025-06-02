@@ -114,9 +114,11 @@ Example:
 | `headful`            | `true` or `false` | `false` |  Launch browser with GUI for this site |
 | `cloudflare_bypass`  | `true` or `false` | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
 | `whois`              | Array | `["term1", "term2"]` | Check whois data for ALL specified terms (AND logic) |
-| `whois-or`           | Array | `["term1", "term2"]` | Must be from ANY of these registries (OR logic |
+| `whois-or`           | Array | `["term1", "term2"]` | Must be from ANY of these registries (OR logic) |
 | `dig`                | Array | `["term1", "term2"]` | Check dig output for ALL specified terms (AND logic) |
+| `dig-or`             | Array | `["term1", "term2"]` | Must be from ANY of these registries (OR logic) |
 | `digRecordType`      | String | `"A"`               | DNS record type for dig (default: A) |
+| `dig_subdomain`      | `true` or `false` | `false` | Check for subdomains of a dig |
 | `firstParty`         | `0` or `1` | `0` | Match first-party requests |
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |

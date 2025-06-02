@@ -112,6 +112,7 @@ Per-site config.json options:
                                                Note: requires curl=true, uses system grep command for faster searches
   blocked: ["regex"]                          Regex patterns to block requests
   css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
+  resourceTypes: ["script", "stylesheet"]     Only process requests of these resource types (default: all types)
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
   userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
@@ -136,6 +137,7 @@ Per-site config.json options:
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
+  dig-or: ["term1", "term2"]                  Check dig output for ANY specified term (OR logic)
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
 `);
@@ -476,8 +478,9 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
    const whoisTerms = siteConfig.whois && Array.isArray(siteConfig.whois) ? siteConfig.whois : null;
    const whoisOrTerms = siteConfig['whois-or'] && Array.isArray(siteConfig['whois-or']) ? siteConfig['whois-or'] : null;
    const digTerms = siteConfig.dig && Array.isArray(siteConfig.dig) ? siteConfig.dig : null;
+   const digOrTerms = siteConfig['dig-or'] && Array.isArray(siteConfig['dig-or']) ? siteConfig['dig-or'] : null;
    const digRecordType = siteConfig.digRecordType || 'A';
-   const hasNetTools = whoisTerms || whoisOrTerms || digTerms;
+   const hasNetTools = whoisTerms || whoisOrTerms || digTerms || digOrTerms;
    
    // Validate nettools availability if needed
    if (hasNetTools) {
@@ -492,11 +495,12 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
        }
      }
      
-     if (digTerms) {
+     if (digTerms || digOrTerms) {
        const digCheck = validateDigAvailability();
        if (!digCheck.isAvailable) {
          console.warn(`[warn] Dig not available for ${currentUrl}: ${digCheck.error}. Skipping dig checks.`);
          siteConfig.dig = null; // Disable dig for this site
+         siteConfig['dig-or'] = null; // Disable dig-or for this site
        } else if (forceDebug) {
          console.log(`[debug] Using dig: ${digCheck.version}`);
        }
@@ -538,6 +542,13 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
        console.log(`  [${idx + 1}] "${term}"`);
      });
    }
+   
+  if (siteConfig.verbose === 1 && digOrTerms) {
+    console.log(`[info] Dig-or terms for ${currentUrl} (${digRecordType} records):`);
+    digOrTerms.forEach((term, idx) => {
+      console.log(`  [${idx + 1}] "${term}" (OR logic)`);
+    });
+  }
 
       const blockedRegexes = Array.isArray(siteConfig.blocked)
         ? siteConfig.blocked.map(pattern => new RegExp(pattern))
@@ -603,6 +614,22 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         const reqUrl = request.url();
 
         if (blockedRegexes.some(re => re.test(reqUrl))) {
+         if (forceDebug) {
+           // Find which specific pattern matched for debug logging
+           const matchedPattern = siteConfig.blocked.find(pattern => new RegExp(pattern).test(reqUrl));
+           const simplifiedUrl = getRootDomain(currentUrl);
+           console.log(`[debug][blocked][${simplifiedUrl}] ${reqUrl} blocked by pattern: ${matchedPattern}`);
+           
+           // Also log to file if debug logging is enabled
+           if (debugLogFile) {
+             try {
+               const timestamp = new Date().toISOString();
+               fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (pattern: ${matchedPattern})\n`);
+             } catch (logErr) {
+               console.warn(`[warn] Failed to write blocked domain to debug log: ${logErr.message}`);
+             }
+           }
+         }
           request.abort();
           return;
         }
@@ -617,6 +644,18 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         for (const re of regexes) {
           if (re.test(reqUrl)) {
             const resourceType = request.resourceType();
+            
+           // *** UNIVERSAL RESOURCE TYPE FILTER ***
+           // Check resourceTypes filter FIRST, before ANY processing (nettools, searchstring, immediate matching)
+           const allowedResourceTypes = siteConfig.resourceTypes;
+           if (allowedResourceTypes && Array.isArray(allowedResourceTypes) && allowedResourceTypes.length > 0) {
+             if (!allowedResourceTypes.includes(resourceType)) {
+               if (forceDebug) {
+                 console.log(`[debug] URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`);
+               }
+               break; // Skip this URL entirely - doesn't match required resource types
+             }
+           }
             
             // Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
             if (blockedRegexes.some(re => re.test(reqUrl))) {
@@ -640,17 +679,19 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-               console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re}${resourceInfo}`);
+              console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo}`);
+
              }
              if (dumpUrls) {
                const timestamp = new Date().toISOString();
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-               fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}${resourceInfo}\n`);
+               fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo}\n`);
+
              }
             } else if (hasNetTools && !hasSearchString) {
              // If nettools are configured (whois/dig), perform checks on the domain
              if (forceDebug) {
-               console.log(`[debug] ${reqUrl} matched regex ${re}, queued for nettools check`);
+               console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`);
              }
              
              // Create and execute nettools handler
@@ -658,6 +699,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                whoisTerms,
                whoisOrTerms,
                digTerms,
+               digOrTerms,
                digRecordType,
                digSubdomain: siteConfig.dig_subdomain === true,
                matchedDomains,
@@ -677,7 +719,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
            } else {
              // If searchstring IS defined (with or without nettools), queue for content checking
              if (forceDebug) {
-               console.log(`[debug] ${reqUrl} matched regex ${re}, queued for content search`);
+               console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for content search`);
              }
            }
            
