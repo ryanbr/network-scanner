@@ -68,6 +68,8 @@ Example:
       "delay": 5000,
       "timeout": 30000,
       "verbose": 1,
+      "whois": ["term1", "term2"],
+      "dig": ["term1", "term2"],
       "debug": 1,
       "interact": true,
       "fingerprint_protection": "random",
@@ -111,6 +113,10 @@ Example:
 | `cloudflare_phish`   | `true` or `false` | `false` | Enable Cloudflare Phishing Warning bypass |
 | `headful`            | `true` or `false` | `false` |  Launch browser with GUI for this site |
 | `cloudflare_bypass`  | `true` or `false` | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
+| `whois`              | Array | `["term1", "term2"]` | Check whois data for ALL specified terms (AND logic) |
+| `whois-or`           | Array | `["term1", "term2"]` | Must be from ANY of these registries (OR logic |
+| `dig`                | Array | `["term1", "term2"]` | Check dig output for ALL specified terms (AND logic) |
+| `digRecordType`      | String | `"A"`               | DNS record type for dig (default: A) |
 | `firstParty`         | `0` or `1` | `0` | Match first-party requests |
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |

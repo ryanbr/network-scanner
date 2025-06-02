@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.0 ===
+// === Network scanner script v1.0.1 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -13,9 +13,10 @@ const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 const { handleCloudflareProtection } = require('./lib/cloudflare');
 const { handleBrowserExit } = require('./lib/browserexit');
+const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.0'; // Script version
+const VERSION = '1.0.1'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
@@ -132,6 +133,10 @@ Per-site config.json options:
   cloudflare_bypass: true/false               Auto-solve Cloudflare "Verify you are human" challenges (default: false)
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
+  whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
+  whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
+  dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
+  digRecordType: "A"                          DNS record type for dig (default: A)
 `);
   process.exit(0);
 }
@@ -466,6 +471,37 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
      }
    }
 
+   // Parse whois and dig terms
+   const whoisTerms = siteConfig.whois && Array.isArray(siteConfig.whois) ? siteConfig.whois : null;
+   const whoisOrTerms = siteConfig['whois-or'] && Array.isArray(siteConfig['whois-or']) ? siteConfig['whois-or'] : null;
+   const digTerms = siteConfig.dig && Array.isArray(siteConfig.dig) ? siteConfig.dig : null;
+   const digRecordType = siteConfig.digRecordType || 'A';
+   const hasNetTools = whoisTerms || whoisOrTerms || digTerms;
+   
+   // Validate nettools availability if needed
+   if (hasNetTools) {
+     if (whoisTerms || whoisOrTerms) {
+       const whoisCheck = validateWhoisAvailability();
+       if (!whoisCheck.isAvailable) {
+         console.warn(`[warn] Whois not available for ${currentUrl}: ${whoisCheck.error}. Skipping whois checks.`);
+         siteConfig.whois = null; // Disable whois for this site
+	 siteConfig['whois-or'] = null; // Disable whois-or for this site
+       } else if (forceDebug) {
+         console.log(`[debug] Using whois: ${whoisCheck.version}`);
+       }
+     }
+     
+     if (digTerms) {
+       const digCheck = validateDigAvailability();
+       if (!digCheck.isAvailable) {
+         console.warn(`[warn] Dig not available for ${currentUrl}: ${digCheck.error}. Skipping dig checks.`);
+         siteConfig.dig = null; // Disable dig for this site
+       } else if (forceDebug) {
+         console.log(`[debug] Using dig: ${digCheck.version}`);
+       }
+     }
+   }
+
       if (siteConfig.verbose === 1 && siteConfig.filterRegex) {
         const patterns = Array.isArray(siteConfig.filterRegex) ? siteConfig.filterRegex : [siteConfig.filterRegex];
         console.log(`[info] Regex patterns for ${currentUrl}:`);
@@ -478,6 +514,27 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
      console.log(`[info] Search strings for ${currentUrl}:`);
      searchStrings.forEach((searchStr, idx) => {
        console.log(`  [${idx + 1}] "${searchStr}"`);
+     });
+   }
+
+   if (siteConfig.verbose === 1 && whoisTerms) {
+     console.log(`[info] Whois terms for ${currentUrl}:`);
+     whoisTerms.forEach((term, idx) => {
+       console.log(`  [${idx + 1}] "${term}"`);
+     });
+   }
+
+   if (siteConfig.verbose === 1 && whoisOrTerms) {
+     console.log(`[info] Whois-or terms for ${currentUrl}:`);
+     whoisOrTerms.forEach((term, idx) => {
+       console.log(`  [${idx + 1}] "${term}" (OR logic)`);
+     });
+   }  
+ 
+   if (siteConfig.verbose === 1 && digTerms) {
+     console.log(`[info] Dig terms for ${currentUrl} (${digRecordType} records):`);
+     digTerms.forEach((term, idx) => {
+       console.log(`  [${idx + 1}] "${term}"`);
      });
    }
 
@@ -576,8 +633,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
               break; // Skip this URL entirely
             }
 
-           // If NO searchstring is defined, match immediately (existing behavior)
-           if (!hasSearchString) {
+           // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
+           if (!hasSearchString && !hasNetTools) {
              addMatchedDomain(reqDomain, resourceType);
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
@@ -589,8 +646,33 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
                fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl}${resourceInfo}\n`);
              }
+            } else if (hasNetTools && !hasSearchString) {
+             // If nettools are configured (whois/dig), perform checks on the domain
+             if (forceDebug) {
+               console.log(`[debug] ${reqUrl} matched regex ${re}, queued for nettools check`);
+             }
+             
+             // Create and execute nettools handler
+             const netToolsHandler = createNetToolsHandler({
+               whoisTerms,
+               whoisOrTerms,
+               digTerms,
+               digRecordType,
+               matchedDomains,
+               addMatchedDomain,
+               currentUrl,
+               getRootDomain,
+               siteConfig,
+               dumpUrls,
+               matchedUrlsLogFile,
+               forceDebug,
+               fs
+             });
+             
+             // Execute nettools check asynchronously
+             setImmediate(() => netToolsHandler(reqDomain));
            } else {
-             // If searchstring IS defined, queue for content checking
+             // If searchstring IS defined (with or without nettools), queue for content checking
              if (forceDebug) {
                console.log(`[debug] ${reqUrl} matched regex ${re}, queued for content search`);
              }
