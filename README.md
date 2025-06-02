@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v0.9.8) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v1.0.0) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -28,14 +28,19 @@ A Puppeteer-based tool (v0.9.8) for scanning websites to find third-party (or op
 | `--debug`                   | Force debug mode globally |
 | `--silent`                  | Suppress console output |
 | `--titles`                  | Add `! <url>` before each site's rules |
+| `--compress-logs`           | Compress log files with gzip (requires --dumpurls) |
+| `--no-interact`             | Disable page interactions globally |
+| `--custom-json <file>`      | Use a custom config JSON file instead of config.json |
+| `--headful`                 | Launch browser with GUI (not headless) |
 | `--dumpurls`                | Save full matched URLs to `matched_urls.log` |
 | `--sub-domains`             | Output full subdomains (default collapses) |
 | `--localhost`               | Output format as `127.0.0.1 domain.com` |
 | `--localhost-0.0.0.0`       | Output format as `0.0.0.0 domain.com` |
 | `--plain`                   | Output non formated domain.com` |
-| `--cdp`                    | Enable Chrome DevTools Protocol logging |
+| `--cdp`                     | Enable Chrome DevTools Protocol logging |
 | `--remove-dupes`            | Remove duplicate domains from output (only with -o) |
-| `--eval-on-doc`           | Inject JS fetch/XHR interception globally |
+| `--adblock-rules`           |  Generate adblock filter rules with resource type modifiers (requires -o, ignored if used with --localhost/--localhost-0.0.0.0/--plain) |
+| `--eval-on-doc`             | Inject JS fetch/XHR interception globally |
 | `--help`, `-h`              | Show help menu |
 
 ---

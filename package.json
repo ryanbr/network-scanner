@@ -1,16 +1,31 @@
 {
   "name": "network-scanner",
-  "version": "0.9.5",
-  "description": "A Puppeteer-based tool (v0.9.5) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules. Features debug request logging to timestamped files.",
+  "version": "1.0.0",
+  "description": "A Puppeteer-based network scanner for analyzing web traffic, generating adblock filter rules, and identifying third-party requests. Features include fingerprint spoofing, Cloudflare bypass, content analysis with curl/grep, and multiple output formats.",
   "main": "scanner-script.js",
   "scripts": {
-    "start": "node scanner-script.js"
+    "start": "node scanner-script.js",
+    "scan": "node scanner-script.js",
+    "help": "node scanner-script.js --help",
+    "version": "node scanner-script.js --version"
   },
   "dependencies": {
     "puppeteer": "^21.3.8",
     "psl": "^1.9.0",
     "p-limit": "^4.0.0"
   },
+  "keywords": [
+    "puppeteer",
+    "network-scanner",
+    "adblock",
+    "web-scraping",
+    "privacy",
+    "tracking-protection",
+    "filter-lists"
+  ],
   "author": "",
-  "license": "GPL-3.0"
+  "license": "GPL-3.0",
+  "engines": {
+    "node": ">=16.0.0"
+  }
 }

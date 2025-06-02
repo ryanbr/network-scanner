@@ -1,4 +1,4 @@
-// === Network scanner script v0.9.9 ===
+// === Network scanner script v1.0.0 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -15,7 +15,7 @@ const { handleCloudflareProtection } = require('./lib/cloudflare');
 const { handleBrowserExit } = require('./lib/browserexit');
 
 // --- Script Configuration & Constants ---
-const VERSION = '0.9.9'; // Script version
+const VERSION = '1.0.0'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
