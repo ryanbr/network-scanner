@@ -12,6 +12,7 @@ const { parseSearchStrings, createResponseHandler } = require('./lib/searchstrin
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 const { handleCloudflareProtection } = require('./lib/cloudflare');
+const { handleBrowserExit } = require('./lib/browserexit');
 
 // --- Script Configuration & Constants ---
 const VERSION = '0.9.9'; // Script version
@@ -907,43 +908,13 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
  
   if (forceDebug) console.log(`[debug] Starting browser cleanup...`);
 
-  // Enhanced browser cleanup
-  try {
-   // Add timeout to browser cleanup
-   const cleanupPromise = (async () => {
-    if (forceDebug) console.log(`[debug] Getting all browser pages...`);
-    const pages = await browser.pages();
-    if (forceDebug) console.log(`[debug] Found ${pages.length} pages to close`);
-    await Promise.all(pages.map(async (page) => {
-      if (!page.isClosed()) {
-        try {
-	  if (forceDebug) console.log(`[debug] Closing page: ${page.url()}`);
-          await page.close();
-	  if (forceDebug) console.log(`[debug] Page closed successfully`);
-        } catch (err) {
-          // Force close if normal close fails
-          if (forceDebug) console.log(`[debug] Force closing page: ${err.message}`);
-        }
-      }
-    }));
-    if (forceDebug) console.log(`[debug] All pages closed, closing browser...`);
-    await browser.close();
-    if (forceDebug) console.log(`[debug] Browser closed successfully`);
-    })();
-    
-    // Race cleanup against timeout
-    await Promise.race([
-      cleanupPromise,
-      new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Browser cleanup timeout')), 10000)
-      )
-    ]);
+  // Handle browser cleanup with force closure fallback (15 sec)
+  await handleBrowserExit(browser, {
+    forceDebug,
+    timeout: 15000,
+    exitOnFailure: true
+  });
 
-  } catch (browserCloseErr) {
-    console.warn(`[warn] Browser cleanup had issues: ${browserCloseErr.message}`);
-    if (forceDebug) console.log(`[debug] Forcing process exit due to cleanup failure`);
-    process.exit(1);
-  }
   if (forceDebug) console.log(`[debug] Calculating timing statistics...`);
   const endTime = Date.now();
   const durationMs = endTime - startTime;
