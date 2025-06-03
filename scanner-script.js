@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.1 ===
+// === Network scanner script v1.0.2 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -14,9 +14,10 @@ const { formatRules, handleOutput, getFormatDescription } = require('./lib/outpu
 const { handleCloudflareProtection } = require('./lib/cloudflare');
 const { handleBrowserExit } = require('./lib/browserexit');
 const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
+const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.1'; // Script version
+const VERSION = '1.0.2'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
@@ -37,6 +38,13 @@ const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
 if (outputIndex !== -1 && args[outputIndex + 1]) {
   outputFile = args[outputIndex + 1];
 }
+
+let compareFile = null;
+const compareIndex = args.findIndex(arg => arg === '--compare');
+if (compareIndex !== -1 && args[compareIndex + 1]) {
+  compareFile = args[compareIndex + 1];
+}
+
 
 const forceVerbose = args.includes('--verbose');
 const forceDebug = args.includes('--debug');
@@ -72,6 +80,17 @@ if (compressLogs && !dumpUrls) {
   process.exit(1);
 }
 
+// Validate --compare usage
+if (compareFile && !outputFile) {
+  console.error(`❌ --compare requires --output (-o) to specify an output file`);
+  process.exit(1);
+}
+
+if (compareFile && !fs.existsSync(compareFile)) {
+  console.error(`❌ Compare file not found: ${compareFile}`);
+  process.exit(1);
+}
+
 if (args.includes('--version')) {
   console.log(`scanner-script.js version ${VERSION}`);
   process.exit(0);
@@ -82,6 +101,7 @@ if (args.includes('--help') || args.includes('-h')) {
 
 Options:
   -o, --output <file>            Output file for rules. If omitted, prints to console
+  --compare <file>               Remove rules that already exist in this file before output
   --verbose                      Force verbose mode globally
   --debug                        Force debug mode globally
   --silent                       Suppress normal console logs
@@ -980,6 +1000,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
   // Handle all output using the output module
   const outputConfig = {
     outputFile,
+    compareFile,
+    forceDebug,
     showTitles,
     removeDupes: removeDupes && outputFile, // Only remove dupes when outputting to file
     silentMode,

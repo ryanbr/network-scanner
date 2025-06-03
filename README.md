@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v1.0.0) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v1.0.2) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -24,6 +24,7 @@ A Puppeteer-based tool (v1.0.0) for scanning websites to find third-party (or op
 | Argument                  | Description |
 |:---------------------------|:------------|
 | `-o, --output <file>`       | Output file for rules. If omitted, prints to console |
+| `--compare <file>`          | Remove rules that already exist in this file before output |
 | `--verbose`                 | Force verbose mode globally |
 | `--debug`                   | Force debug mode globally |
 | `--silent`                  | Suppress console output |
