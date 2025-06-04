@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.2 ===
+// === Network scanner script v1.0.3 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.2'; // Script version
+const VERSION = '1.0.3'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 
 // get startTime
@@ -234,6 +234,29 @@ function getRootDomain(url) {
     const parsed = psl.parse(hostname);
     return parsed.domain || hostname;
   } catch {
+    return '';
+  }
+}
+
+/**
+ * Safely extracts hostname from a URL, handling malformed URLs gracefully
+ * @param {string} url - The URL string to parse
+ * @param {boolean} getFullHostname - If true, returns full hostname; if false, returns root domain
+ * @returns {string} The hostname/domain, or empty string if URL is invalid
+*/
+function safeGetDomain(url, getFullHostname = false) {
+  try {
+    const parsedUrl = new URL(url);
+    if (getFullHostname) {
+      return parsedUrl.hostname;
+    } else {
+      return getRootDomain(url);
+    }
+  } catch (urlError) {
+    // Log malformed URLs for debugging
+    if (forceDebug) {
+      console.log(`[debug] Malformed URL skipped: ${url} (${urlError.message})`);
+    }
     return '';
   }
 }
@@ -602,7 +625,9 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
       // - Global `ignoreDomains` list.
       page.on('request', request => {
         const checkedUrl = request.url();
-        const isFirstParty = new URL(checkedUrl).hostname === new URL(currentUrl).hostname;
+        const checkedHostname = safeGetDomain(checkedUrl, true);
+        const currentHostname = safeGetDomain(currentUrl, true);
+        const isFirstParty = checkedHostname && currentHostname && checkedHostname === currentHostname;
 
         if (isFirstParty && siteConfig.firstParty === false) {
           request.continue();
@@ -654,9 +679,17 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
           return;
         }
 
-        const reqDomain = perSiteSubDomains ? (new URL(reqUrl)).hostname : getRootDomain(reqUrl);
+        const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains);
 
-        if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+        if (!reqDomain) {
+          if (forceDebug) {
+            console.log(`[debug] Skipping request with unparseable URL: ${reqUrl}`);
+          }
+          request.continue();
+          return;
+        }
+
+        if (matchesIgnoreDomain(reqDomain, ignoreDomains)) {
           request.continue();
           return;
         }
