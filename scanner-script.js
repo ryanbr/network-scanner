@@ -986,12 +986,14 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
   const allProcessingTasks = [];
   for (const site of sites) {
+    // Handle both single URLs and URL arrays in configuration
     const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
     for (const currentUrl of urlsToProcess) {
+      // Wrap each URL processing in concurrency limiter
       allProcessingTasks.push(limit(() => processUrl(currentUrl, site, browser)));
     }
   }
-
+  // Progress indicator for batch processing
   if (!silentMode && allProcessingTasks.length > 0) {
     console.log(`\nProcessing ${allProcessingTasks.length} URLs with concurrency ${MAX_CONCURRENT_SITES}...`);
   }
@@ -1028,6 +1030,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
   
   // Compress log files if --compress-logs is enabled
   if (compressLogs && dumpUrls) {
+    // Collect all existing log files for compression
     const filesToCompress = [];
     if (debugLogFile && fs.existsSync(debugLogFile)) filesToCompress.push(debugLogFile);
     if (matchedUrlsLogFile && fs.existsSync(matchedUrlsLogFile)) filesToCompress.push(matchedUrlsLogFile);
@@ -1036,13 +1039,16 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
     if (filesToCompress.length > 0) {
       if (!silentMode) console.log(`\nCompressing ${filesToCompress.length} log file(s)...`);
       try {
+        // Perform compression with original file deletion
         const results = await compressMultipleFiles(filesToCompress, true);
         
         if (!silentMode) {
+          // Report compression results and file sizes
           results.successful.forEach(({ original, compressed }) => {
             const originalSize = fs.statSync(compressed).size; // compressed file size
             console.log(`✅ Compressed: ${path.basename(original)} → ${path.basename(compressed)}`);
           });
+          // Report any compression failures
           if (results.failed.length > 0) {
             results.failed.forEach(({ path: filePath, error }) => {
               console.warn(`⚠ Failed to compress ${path.basename(filePath)}: ${error}`);
@@ -1057,6 +1063,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
  
   if (forceDebug) console.log(`[debug] Starting browser cleanup...`);
 
+  // Graceful browser shutdown with force closure fallback
   // Handle browser cleanup with force closure fallback (15 sec)
   await handleBrowserExit(browser, {
     forceDebug,
@@ -1064,6 +1071,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
     exitOnFailure: true
   });
 
+  // Calculate timing, success rates, and provide summary information
   if (forceDebug) console.log(`[debug] Calculating timing statistics...`);
   const endTime = Date.now();
   const durationMs = endTime - startTime;
@@ -1072,12 +1080,15 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
 
+  // Final summary report with timing and success statistics
   if (!silentMode) {
     console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
     if (outputResult.totalRules > 0) {
       console.log(`Generated ${outputResult.totalRules} unique rules`);
     }
   }
+  
+  // Clean process termination
   if (forceDebug) console.log(`[debug] About to exit process...`);
   process.exit(0);
 })();
