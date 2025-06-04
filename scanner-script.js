@@ -58,7 +58,7 @@ const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
-const removeDupes = args.includes('--remove-dupes');
+const removeDupes = args.includes('--remove-dupes') || args.includes('--remove-dubes');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
 
