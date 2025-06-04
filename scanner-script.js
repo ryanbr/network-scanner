@@ -574,30 +574,30 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
    }
 
    if (siteConfig.verbose === 1 && whoisTerms) {
-     console.log(`[info] Whois terms for ${currentUrl}:`);
+     if (forceDebug) console.log(`[info] Whois terms for ${currentUrl}:`);
      whoisTerms.forEach((term, idx) => {
-       console.log(`  [${idx + 1}] "${term}"`);
+       if (forceDebug) console.log(`  [${idx + 1}] "${term}"`);
      });
    }
 
    if (siteConfig.verbose === 1 && whoisOrTerms) {
-     console.log(`[info] Whois-or terms for ${currentUrl}:`);
+     if (forceDebug) console.log(`[info] Whois-or terms for ${currentUrl}:`);
      whoisOrTerms.forEach((term, idx) => {
-       console.log(`  [${idx + 1}] "${term}" (OR logic)`);
+       if (forceDebug) console.log(`  [${idx + 1}] "${term}" (OR logic)`);
      });
    }  
  
    if (siteConfig.verbose === 1 && digTerms) {
-     console.log(`[info] Dig terms for ${currentUrl} (${digRecordType} records):`);
+     if (forceDebug) console.log(`[info] Dig terms for ${currentUrl} (${digRecordType} records):`);
      digTerms.forEach((term, idx) => {
-       console.log(`  [${idx + 1}] "${term}"`);
+       if (forceDebug) console.log(`  [${idx + 1}] "${term}"`);
      });
    }
    
   if (siteConfig.verbose === 1 && digOrTerms) {
-    console.log(`[info] Dig-or terms for ${currentUrl} (${digRecordType} records):`);
+    if (forceDebug) console.log(`[info] Dig-or terms for ${currentUrl} (${digRecordType} records):`);
     digOrTerms.forEach((term, idx) => {
-      console.log(`  [${idx + 1}] "${term}" (OR logic)`);
+      if (forceDebug) console.log(`  [${idx + 1}] "${term}" (OR logic)`);
     });
   }
 
