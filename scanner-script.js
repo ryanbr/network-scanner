@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.3 ===
+// === Network scanner script v1.0.4 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,8 +17,9 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.3'; // Script version
+const VERSION = '1.0.4'; // Script version
 const MAX_CONCURRENT_SITES = 3;
+const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
 // get startTime
 const startTime = Date.now();
@@ -278,30 +279,37 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
+  /**
+   * Creates a new browser instance with consistent configuration
+   * @returns {Promise<import('puppeteer').Browser>} Browser instance
+   */
+  async function createBrowser() {
+    return await puppeteer.launch({
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-features=SafeBrowsing',
+        '--disable-dev-shm-usage',
+        '--disable-sync',
+        '--disable-gpu',
+        '--mute-audio',
+        '--disable-translate',
+        '--window-size=1920,1080',
+        '--disable-extensions',
+        '--no-default-browser-check',
+        '--safebrowsing-disable-auto-update'
+      ],
+      headless: launchHeadless,
+      protocolTimeout: 300000
+    });
+  }
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(MAX_CONCURRENT_SITES);
 
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
   // launch with no safe browsing
-  const browser = await puppeteer.launch({
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-features=SafeBrowsing',
-      '--disable-dev-shm-usage',
-      '--disable-sync',
-      '--disable-gpu',
-      '--mute-audio',
-      '--disable-translate',
-      '--window-size=1920,1080',
-      '--disable-extensions',
-      '--no-default-browser-check',
-      '--safebrowsing-disable-auto-update'
-    ],
-    headless: launchHeadless,
-    protocolTimeout: 300000
-  });
+  let browser = await createBrowser();
   if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
  
   let siteCounter = 0;
@@ -1017,20 +1025,79 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
     }
   }
 
-  const allProcessingTasks = [];
+// Temporarily store the pLimit function  
+  const originalLimit = limit;
+
+  // Group URLs by site to respect site boundaries during cleanup
+  const siteGroups = [];
+  let currentUrlCount = 0;
+
   for (const site of sites) {
-    // Handle both single URLs and URL arrays in configuration
+
     const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
-    for (const currentUrl of urlsToProcess) {
-      // Wrap each URL processing in concurrency limiter
-      allProcessingTasks.push(limit(() => processUrl(currentUrl, site, browser)));
+    siteGroups.push({
+      config: site,
+      urls: urlsToProcess
+    });
+    currentUrlCount += urlsToProcess.length;
+  }
+  if (!silentMode && currentUrlCount > 0) {
+    console.log(`\nProcessing ${currentUrlCount} URLs across ${siteGroups.length} sites with concurrency ${MAX_CONCURRENT_SITES}...`);
+    if (currentUrlCount > RESOURCE_CLEANUP_INTERVAL) {
+      console.log(`Browser will restart every ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
     }
   }
-  // Progress indicator for batch processing
-  if (!silentMode && allProcessingTasks.length > 0) {
-    console.log(`\nProcessing ${allProcessingTasks.length} URLs with concurrency ${MAX_CONCURRENT_SITES}...`);
+
+  const results = [];
+  let processedUrlCount = 0;
+  let urlsSinceLastCleanup = 0;
+  
+  // Process sites one by one, but restart browser when hitting URL limits
+  for (let siteIndex = 0; siteIndex < siteGroups.length; siteIndex++) {
+    const siteGroup = siteGroups[siteIndex];
+    const siteUrlCount = siteGroup.urls.length;
+    
+    // Check if processing this entire site would exceed cleanup interval
+    const wouldExceedLimit = urlsSinceLastCleanup + siteUrlCount >= RESOURCE_CLEANUP_INTERVAL;
+    const isNotLastSite = siteIndex < siteGroups.length - 1;
+    
+    // Restart browser if we've processed enough URLs and this isn't the last site
+    if (wouldExceedLimit && urlsSinceLastCleanup > 0 && isNotLastSite) {
+      if (!silentMode) {
+        console.log(`\n🔄 Processed ${processedUrlCount} URLs. Restarting browser before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
+      }
+      
+      try {
+        await handleBrowserExit(browser, {
+          forceDebug,
+          timeout: 10000,
+          exitOnFailure: false
+        });
+      } catch (browserCloseErr) {
+        if (forceDebug) console.log(`[debug] Browser cleanup warning: ${browserCloseErr.message}`);
+      }
+      
+      // Create new browser for next batch
+      browser = await createBrowser();
+      if (forceDebug) console.log(`[debug] New browser instance created for site ${siteIndex + 1}`);
+      
+      // Reset cleanup counter and add delay
+      urlsSinceLastCleanup = 0;
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
+    if (forceDebug) {
+      console.log(`[debug] Processing site ${siteIndex + 1}/${siteGroups.length}: ${siteUrlCount} URL(s) (total processed: ${processedUrlCount})`);
+    }
+    
+    // Create tasks with current browser instance and process them
+    const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrl(url, siteGroup.config, browser)));
+    const siteResults = await Promise.all(siteTasks);
+    results.push(...siteResults);
+    
+    processedUrlCount += siteUrlCount;
+    urlsSinceLastCleanup += siteUrlCount;
   }
-  const results = await Promise.all(allProcessingTasks);
 
   // Handle all output using the output module
   const outputConfig = {
