@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.5 ===
+// === Network scanner script v1.0.6 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.5'; // Script version
+const VERSION = '1.0.6'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -122,6 +122,11 @@ Options:
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
+  
+Global config.json options:
+  ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
+  blocked: ["regex1", "regex2"]                   Global regex patterns to block requests (combined with per-site blocked)
+
 
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
@@ -633,6 +638,12 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
       const blockedRegexes = Array.isArray(siteConfig.blocked)
         ? siteConfig.blocked.map(pattern => new RegExp(pattern))
         : [];
+		
+      // Add global blocked patterns
+      const globalBlockedRegexes = Array.isArray(globalBlocked)
+        ? globalBlocked.map(pattern => new RegExp(pattern))
+        : [];
+      const allBlockedRegexes = [...blockedRegexes, ...globalBlockedRegexes];
 
       /**
        * Helper function to add domain to matched collection
@@ -702,18 +713,20 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         }
         const reqUrl = request.url();
 
-        if (blockedRegexes.some(re => re.test(reqUrl))) {
+        if (allBlockedRegexes.some(re => re.test(reqUrl))) {
          if (forceDebug) {
            // Find which specific pattern matched for debug logging
-           const matchedPattern = siteConfig.blocked.find(pattern => new RegExp(pattern).test(reqUrl));
+            const allPatterns = [...(siteConfig.blocked || []), ...globalBlocked];
+            const matchedPattern = allPatterns.find(pattern => new RegExp(pattern).test(reqUrl));
+            const patternSource = siteConfig.blocked && siteConfig.blocked.includes(matchedPattern) ? 'site' : 'global';
            const simplifiedUrl = getRootDomain(currentUrl);
-           console.log(`[debug][blocked][${simplifiedUrl}] ${reqUrl} blocked by pattern: ${matchedPattern}`);
+           console.log(`[debug][blocked][${simplifiedUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`);
            
            // Also log to file if debug logging is enabled
            if (debugLogFile) {
              try {
                const timestamp = new Date().toISOString();
-               fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (pattern: ${matchedPattern})\n`);
+               fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (${patternSource} pattern: ${matchedPattern})\n`);
              } catch (logErr) {
                console.warn(`[warn] Failed to write blocked domain to debug log: ${logErr.message}`);
              }
@@ -755,7 +768,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
            }
             
             // Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
-            if (blockedRegexes.some(re => re.test(reqUrl))) {
+            if (allBlockedRegexes.some(re => re.test(reqUrl))) {
               if (forceDebug) {
                 console.log(`[debug] URL ${reqUrl} matches blocked pattern, skipping detection (but request already blocked)`);
               }
@@ -932,6 +945,10 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
       try {
         // Use custom goto options if provided, otherwise default to 'load'
+		// load                  Wait for all resources (default)
+		// domcontentloaded      Wait for DOM only
+		// networkidle0          Wait until 0 network requests for 500ms
+		// networkidle2          Wait until ≤2 network requests for 500ms 
         const defaultGotoOptions = { waitUntil: 'load', timeout: timeout };
         const gotoOptions = siteConfig.goto_options 
           ? { ...defaultGotoOptions, ...siteConfig.goto_options }
