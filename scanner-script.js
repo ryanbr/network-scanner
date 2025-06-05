@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.4 ===
+// === Network scanner script v1.0.5 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.4'; // Script version
+const VERSION = '1.0.5'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -159,6 +159,7 @@ Per-site config.json options:
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
   dig-or: ["term1", "term2"]                  Check dig output for ANY specified term (OR logic)
+  goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
 `);
@@ -457,6 +458,34 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
       // --- End of Per-Page CDP Setup ---
 
       await page.setRequestInterception(true);
+	  
+      // --- Setup iframe monitoring ---
+      // Monitor all frames (including iframes) for network requests
+      page.on('frameattached', async (frame) => {
+        if (forceDebug) {
+          console.log(`[debug] New frame detected: ${frame.url()}`);
+        }
+        
+        try {
+          // Wait for frame to be ready and set up request interception
+          await frame.goto(frame.url(), { waitUntil: 'domcontentloaded', timeout: 5000 });
+        } catch (frameErr) {
+          if (forceDebug) {
+            console.log(`[debug] Frame navigation failed: ${frameErr.message}`);
+          }
+        }
+      });
+      
+      // Monitor frame navigations 
+      page.on('framenavigated', (frame) => {
+        if (forceDebug && frame.url() !== 'about:blank') {
+          console.log(`[debug] Frame navigated to: ${frame.url()}`);
+        }
+      });
+      
+      // The existing request handler will now catch requests from all frames
+      // because we're using page.on('request') which monitors the entire page context
+      // --- End iframe monitoring setup ---
 
       if (siteConfig.clear_sitedata === true) {
         try {
@@ -644,6 +673,13 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         if (!isFirstParty && siteConfig.thirdParty === false) {
           request.continue();
           return;
+        }
+
+        // Enhanced debug logging to show which frame the request came from
+        if (forceDebug) {
+          const frameUrl = request.frame() ? request.frame().url() : 'unknown-frame';
+          const isMainFrame = request.frame() === page.mainFrame();
+          console.log(`[debug req][frame: ${isMainFrame ? 'main' : 'iframe'}] ${frameUrl} → ${request.url()}`);
         }
 
         // Show --debug output and the url while its scanning
@@ -895,7 +931,13 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
       }
 
       try {
-        await page.goto(currentUrl, { waitUntil: 'load', timeout: timeout });
+        // Use custom goto options if provided, otherwise default to 'load'
+        const defaultGotoOptions = { waitUntil: 'load', timeout: timeout };
+        const gotoOptions = siteConfig.goto_options 
+          ? { ...defaultGotoOptions, ...siteConfig.goto_options }
+          : defaultGotoOptions;
+          
+        await page.goto(currentUrl, gotoOptions);
         siteCounter++;
 
         // Handle all Cloudflare protections using the dedicated module
@@ -911,6 +953,22 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
         console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
         await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
+        
+        // Wait for iframes to load and log them
+        if (forceDebug) {
+          try {
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Give iframes time to load
+            const frames = page.frames();
+            console.log(`[debug] Total frames found: ${frames.length}`);
+            frames.forEach((frame, index) => {
+              if (frame.url() !== 'about:blank' && frame !== page.mainFrame()) {
+                console.log(`[debug] Iframe ${index}: ${frame.url()}`);
+              }
+            });
+          } catch (frameDebugErr) {
+            console.log(`[debug] Frame debugging failed: ${frameDebugErr.message}`);
+          }
+        }
       } catch (err) {
         console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
         throw err;
@@ -982,6 +1040,20 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
     } catch (err) {
       console.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`);
+	  
+      // Save any matches found even if page failed to load completely
+      if (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0)) {
+        const globalOptions = {
+          localhostMode,
+          localhostModeAlt,
+          plainOutput,
+          adblockRulesMode
+        };
+        const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
+        if (forceDebug) console.log(`[debug] Saving ${formattedRules.length} rules despite page load failure`);
+        return { url: currentUrl, rules: formattedRules, success: false, hasMatches: true };
+      }
+      
       
       if (siteConfig.screenshot === true && page) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -1105,7 +1177,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
     compareFile,
     forceDebug,
     showTitles,
-    removeDupes: removeDupes && outputFile, // Only remove dupes when outputting to file
+    removeDupes: removeDupes && outputFile,
     silentMode,
     dumpUrls,
     adblockRulesLogFile
@@ -1120,6 +1192,10 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
   // Use the success count from output handler
   siteCounter = outputResult.successfulPageLoads;
+  
+  // Count pages that had matches even if they failed to load completely
+  const pagesWithMatches = results.filter(r => r.success || r.hasMatches).length;
+  const totalMatches = results.reduce((sum, r) => sum + (r.rules ? r.rules.length : 0), 0);
 
   // Debug: Show output format being used
   if (forceDebug) {
@@ -1182,7 +1258,11 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
   // Final summary report with timing and success statistics
   if (!silentMode) {
-    console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
+    if (pagesWithMatches > outputResult.successfulPageLoads) {
+      console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs loaded successfully, ${pagesWithMatches} had matches in ${hours}h ${minutes}m ${seconds}s`);
+    } else {
+      console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
+    }
     if (outputResult.totalRules > 0) {
       console.log(`Generated ${outputResult.totalRules} unique rules`);
     }
