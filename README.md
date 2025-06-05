@@ -77,6 +77,7 @@ Example:
       "firstParty": 0,
       "thirdParty": 1,
       "subDomains": 0,
+      "goto_options": {"waitUntil": "networkidle2", "timeout": 45000 },
       "blocked": [
         "googletagmanager.com",
         ".*tracking.*"
@@ -126,6 +127,7 @@ Example:
 | `plain`              | `true` or `false` | `false` | Output nonformated domain urls |
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
 | `css_blocked`        | Array | - | css cosmetics to block during scanning |
+| `goto_options`       | `load` or `domcontentloaded` or `networkidle0` or `networkidle2` | `load` | How to wait for resources to load |
 | `evaluateOnNewDocument`    | `true` or `false` | `false` | Inject JS fetch/XHR logging on page load |
 | `cdp`                     | `true` or `false` | `false` | Enable Chrome DevTools Protocol logging per site |
 
