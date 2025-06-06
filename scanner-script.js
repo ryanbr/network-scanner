@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.6 ===
+// === Network scanner script v1.0.7 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.6'; // Script version
+const VERSION = '1.0.7'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -162,6 +162,12 @@ Per-site config.json options:
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
+  whois_server: "whois.domain.com" or ["server1", "server2"]  Custom whois server(s) - single server or randomized list (default: system default)
+  whois_max_retries: 2                       Maximum retry attempts per domain (default: 2)
+  whois_timeout_multiplier: 1.5              Timeout increase multiplier per retry (default: 1.5)
+  whois_use_fallback: true                   Add TLD-specific fallback servers (default: true)
+  whois_retry_on_timeout: true               Retry on timeout errors (default: true)
+  whois_retry_on_error: false                Retry on connection/other errors (default: false)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
   dig-or: ["term1", "term2"]                  Check dig output for ANY specified term (OR logic)
   goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
@@ -562,6 +568,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
    // Parse whois and dig terms
    const whoisTerms = siteConfig.whois && Array.isArray(siteConfig.whois) ? siteConfig.whois : null;
    const whoisOrTerms = siteConfig['whois-or'] && Array.isArray(siteConfig['whois-or']) ? siteConfig['whois-or'] : null;
+   const whoisServer = siteConfig.whois_server || null; // Parse whois_server configuration
    const digTerms = siteConfig.dig && Array.isArray(siteConfig.dig) ? siteConfig.dig : null;
    const digOrTerms = siteConfig['dig-or'] && Array.isArray(siteConfig['dig-or']) ? siteConfig['dig-or'] : null;
    const digRecordType = siteConfig.digRecordType || 'A';
@@ -605,6 +612,16 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
      searchStrings.forEach((searchStr, idx) => {
        console.log(`  [${idx + 1}] "${searchStr}"`);
      });
+   }
+
+   if (siteConfig.verbose === 1 && whoisServer) {
+     if (forceDebug) {
+       if (Array.isArray(whoisServer)) {
+         console.log(`[info] Whois servers for ${currentUrl} (randomized): [${whoisServer.join(', ')}]`);
+       } else {
+         console.log(`[info] Whois server for ${currentUrl}: ${whoisServer}`);
+       }
+     }
    }
 
    if (siteConfig.verbose === 1 && whoisTerms) {
@@ -808,6 +825,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
              const netToolsHandler = createNetToolsHandler({
                whoisTerms,
                whoisOrTerms,
+	       whoisServer, // Pass whois server configuration
                digTerms,
                digOrTerms,
                digRecordType,

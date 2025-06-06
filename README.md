@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v1.0.6) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v1.0.7) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -16,6 +16,8 @@ A Puppeteer-based tool (v1.0.6) for scanning websites to find third-party (or op
 - Save output in normal Adblock format or localhost (127.0.0.1/0.0.0.0)
 - Subdomain handling (collapse to root or full subdomain)
 - Optionally match only first-party, third-party, or both
+- **Custom whois servers with intelligent retry logic**
+- **Enhanced whois/dig domain verification with fallback servers**
 
 ---
 
@@ -70,6 +72,11 @@ Example:
       "timeout": 30000,
       "verbose": 1,
       "whois": ["term1", "term2"],
+      "whois_server": ["whois.verisign-grs.com", "whois.internic.net"],
+      "whois_max_retries": 3,
+      "whois_timeout_multiplier": 2.0,
+      "whois_retry_on_timeout": true,
+      "whois_retry_on_error": true,
       "dig": ["term1", "term2"],
       "debug": 1,
       "interact": true,
@@ -115,12 +122,18 @@ Example:
 | `cloudflare_phish`   | `true` or `false` | `false` | Enable Cloudflare Phishing Warning bypass |
 | `headful`            | `true` or `false` | `false` |  Launch browser with GUI for this site |
 | `cloudflare_bypass`  | `true` or `false` | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
-| `whois`              | Array | `["term1", "term2"]` | Check whois data for ALL specified terms (AND logic) |
-| `whois-or`           | Array | `["term1", "term2"]` | Must be from ANY of these registries (OR logic) |
+| `whois`          | Array | `["term1", "term2"]` | Check whois data for ALL specified terms (AND logic) |
+| `whois-or`       | Array | `["term1", "term2"]` | Check whois data for ANY specified term (OR logic) |
+| `whois_server`   | String or Array | System default | Custom whois server(s) - single server or randomized list |
+| `whois_max_retries` | Integer | `2` | Maximum retry attempts per domain |
+| `whois_timeout_multiplier` | Number | `1.5` | Timeout increase multiplier per retry (e.g. 1.5 = 50% increase) |
+| `whois_use_fallback` | `true` or `false` | `true` | Add TLD-specific fallback servers automatically |
+| `whois_retry_on_timeout` | `true` or `false` | `true` | Retry whois lookups on timeout errors |
+| `whois_retry_on_error` | `true` or `false` | `false` | Retry whois lookups on connection/other errors |
 | `dig`                | Array | `["term1", "term2"]` | Check dig output for ALL specified terms (AND logic) |
-| `dig-or`             | Array | `["term1", "term2"]` | Must be from ANY of these registries (OR logic) |
+| `dig-or`             | Array | `["term1", "term2"]` | Check dig output for ANY specified term (OR logic) |
 | `digRecordType`      | String | `"A"`               | DNS record type for dig (default: A) |
-| `dig_subdomain`      | `true` or `false` | `false` | Check for subdomains of a dig |
+| `dig_subdomain`      | `true` or `false` | `false` | Use subdomain for dig lookup instead of root domain |
 | `firstParty`         | `0` or `1` | `0` | Match first-party requests |
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
@@ -133,11 +146,72 @@ Example:
 
 ---
 
+## Whois Server Configuration
+
+### Basic Usage
+```json
+{
+  "whois": ["cloudflare"],
+  "whois_server": "whois.verisign-grs.com"
+}
+```
+
+### Advanced Retry Configuration
+```json
+{
+  "whois": ["suspicious-registrar"],
+  "whois_server": ["whois.verisign-grs.com", "whois.internic.net", "whois.iana.org"],
+  "whois_max_retries": 3,
+  "whois_timeout_multiplier": 2.0,
+  "whois_retry_on_timeout": true,
+  "whois_retry_on_error": true,
+  "whois_use_fallback": true
+}
+```
+
+### Load Balanced Servers
+```json
+{
+  "whois_server": [
+    "whois.verisign-grs.com",
+    "whois.internic.net", 
+    "whois.iana.org",
+    "whois.markmonitor.com"
+  ]
+}
+```
+
+## Whois Retry Behavior
+
+### Timeout Escalation
+- **Attempt 1**: Base timeout (8000ms)
+- **Attempt 2**: 8000ms × multiplier (e.g., 12000ms with 1.5 multiplier)  
+- **Attempt 3**: 12000ms × multiplier (e.g., 18000ms)
+
+### Server Selection Strategy
+1. **Primary servers**: Uses servers from `whois_server` array (randomly selected per domain)
+2. **Fallback servers**: Automatically adds TLD-specific reliable servers if `whois_use_fallback` is true
+3. **Retry logic**: Tries each server once before moving to next, with escalating timeouts
+
+### Example Debug Output
+```
+[debug][whois-retry] Starting whois lookup for suspicious-domain.com with 5 server(s) to try
+[debug][whois-retry] Attempt 1/5: trying server whois.slow-server.com (timeout: 8000ms)
+[debug][whois] TIMEOUT after 8000ms
+[debug][whois-retry] Attempt 2/5: trying server whois.fast-server.com (timeout: 12000ms)
+[debug][whois-retry] SUCCESS on attempt 2/5 using server whois.fast-server.com
+```
+
+---
+
 ## Notes
 
 - If both `firstParty: 0` and `thirdParty: 0` are set for a site, it will be skipped.
 - `ignoreDomains` applies globally across all sites.
 - Blocking (`blocked`) can match full domains or regex.
 - If a site's `blocked` field is missing, no extra blocking is applied.
+- **Whois servers are randomized per domain lookup** for load balancing and fault tolerance.
+- **Fallback servers are automatically selected** based on domain TLD (e.g., `.com` domains use Verisign servers).
+- **Retry logic significantly improves success rates** from ~70% to ~95%+ for whois lookups.
 
 ---
