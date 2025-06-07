@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.7 ===
+// === Network scanner script v1.0.8 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.7'; // Script version
+const VERSION = '1.0.8'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -58,6 +58,7 @@ const localhostModeAlt = args.includes('--localhost-0.0.0.0');
 const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
+const dnsmasqMode = args.includes('--dnsmasq');
 const removeDupes = args.includes('--remove-dupes') || args.includes('--remove-dubes');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
@@ -69,9 +70,17 @@ if (adblockRulesMode) {
   if (!outputFile) {
     if (forceDebug) console.log(`[debug] --adblock-rules ignored: requires --output (-o) to specify an output file`);
     adblockRulesMode = false;
-  } else if (localhostMode || localhostModeAlt || plainOutput) {
+  }  else if (localhostMode || localhostModeAlt || plainOutput || dnsmasqMode) {
     if (forceDebug) console.log(`[debug] --adblock-rules ignored: incompatible with localhost/plain output modes`);
     adblockRulesMode = false;
+  }
+}
+
+// Validate --dnsmasq usage
+if (dnsmasqMode) {
+  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode) {
+    if (forceDebug) console.log(`[debug] --dnsmasq ignored: incompatible with localhost/plain/adblock-rules output modes`);
+    dnsmasqMode = false;
   }
 }
 
@@ -112,13 +121,14 @@ Options:
   --sub-domains                  Output full subdomains instead of collapsing to root
   --localhost                    Output as 127.0.0.1 domain.com
   --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
+  --dnsmasq                      Output as local=/domain.com/ (dnsmasq format)
   --no-interact                  Disable page interactions globally
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
   --plain                        Output just domains (no adblock formatting)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --remove-dupes                 Remove duplicate domains from output (only with -o)
-  --adblock-rules                Generate adblock filter rules with resource type modifiers (requires -o, ignored if used with --localhost/--localhost-0.0.0.0/--plain)
+  --adblock-rules                Generate adblock filter rules with resource type modifiers (requires -o, ignored if used with --localhost/--localhost-0.0.0.0/--plain/--dnsmasq)
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
@@ -149,6 +159,7 @@ Per-site config.json options:
   subDomains: 1/0                              Output full subdomains (default: 0)
   localhost: true/false                        Force localhost output (127.0.0.1)
   localhost_0_0_0_0: true/false                Force localhost output (0.0.0.0)
+  dnsmasq: true/false                          Force dnsmasq output (local=/domain.com/)
   source: true/false                           Save page source HTML after load
   firstParty: true/false                       Allow first-party matches (default: false)
   thirdParty: true/false                       Allow third-party matches (default: true)
@@ -1067,7 +1078,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         localhostMode,
         localhostModeAlt,
         plainOutput,
-        adblockRulesMode
+        adblockRulesMode,
+        dnsmasqMode
       };
       const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
       
@@ -1082,7 +1094,8 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
           localhostMode,
           localhostModeAlt,
           plainOutput,
-          adblockRulesMode
+          adblockRulesMode,
+          dnsmasqMode
         };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         if (forceDebug) console.log(`[debug] Saving ${formattedRules.length} rules despite page load failure`);
@@ -1234,7 +1247,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
   // Debug: Show output format being used
   if (forceDebug) {
-    const globalOptions = { localhostMode, localhostModeAlt, plainOutput, adblockRules: adblockRulesMode };
+    const globalOptions = { localhostMode, localhostModeAlt, plainOutput, adblockRules: adblockRulesMode, dnsmasq: dnsmasqMode };
     console.log(`[debug] Output format: ${getFormatDescription(globalOptions)}`);
     console.log(`[debug] Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`);
   }

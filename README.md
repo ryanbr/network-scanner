@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v1.0.7) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v1.0.8) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -39,6 +39,7 @@ A Puppeteer-based tool (v1.0.7) for scanning websites to find third-party (or op
 | `--sub-domains`             | Output full subdomains (default collapses) |
 | `--localhost`               | Output format as `127.0.0.1 domain.com` |
 | `--localhost-0.0.0.0`       | Output format as `0.0.0.0 domain.com` |
+| `--dnsmasq`                 | Output format as `local=/domain.com/` (dnsmasq format) | 
 | `--plain`                   | Output non formated domain.com` |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging |
 | `--remove-dupes`            | Remove duplicate domains from output (only with -o) |
@@ -116,6 +117,7 @@ Example:
 | `isBrave`            | `true` or `false` | `false` | Spoof Brave browser detection |
 | `localhost`          | `true` or `false` | `false` | Force localhost output (127.0.0.1) |
 | `localhost_0_0_0_0`  | `true` or `false` | `false` | Force localhost output (0.0.0.0) |
+| `dnsmasq`            | `true` or `false` | `false` | Force dnsmasq output (local=/domain.com/) |
 | `debug`              | `0` or `1` | `0` | Dump matching URLs for the site |
 | `interact`           | `true` or `false` | `false` | Simulate user interaction (hover, click) |
 | `fingerprint_protection` | `true`, `false`, `random` | `false` | Enable navigator/device spoofing |
