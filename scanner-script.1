@@ -1,0 +1,657 @@
+.TH SCANNER-SCRIPT 1 "2025" "scanner-script v1.0.9" "User Commands"
+.SH NAME
+scanner-script \- Network scanner for malware detection and domain analysis
+
+.SH SYNOPSIS
+.B node scanner-script.js
+[\fIOPTIONS\fR]
+
+.SH DESCRIPTION
+.B scanner-script.js
+is a comprehensive network scanner that uses Puppeteer to analyze web pages for malicious content, tracking scripts, and suspicious domains. It can detect threats through URL pattern matching, content analysis, DNS/WHOIS lookups, and behavioral analysis.
+
+The scanner supports multiple detection methods including regex filtering, content searching with curl/grep, network tools integration, and advanced browser-based analysis with frame monitoring and fingerprint spoofing.
+
+.SH OPTIONS
+
+.SS Output Options
+.TP
+.BR \-o ", " \--output " \fIFILE\fR"
+Write rules to \fIFILE\fR instead of standard output.
+
+.TP
+.BR \--compare " \fIFILE\fR"
+Remove rules that already exist in \fIFILE\fR before output (requires \fB\-o\fR).
+
+.SS Output Format Options
+.TP
+.B \--localhost
+Output rules as \fB127.0.0.1 domain.com\fR format for hosts file.
+
+.TP
+.B \--localhost-0.0.0.0
+Output rules as \fB0.0.0.0 domain.com\fR format for hosts file.
+
+.TP
+.B \--plain
+Output just domain names without any formatting.
+
+.TP
+.B \--dnsmasq
+Output as \fBlocal=/domain.com/\fR format for dnsmasq.
+
+.TP
+.B \--dnsmasq-old
+Output as \fBserver=/domain.com/\fR format for older dnsmasq versions.
+
+.TP
+.B \--unbound
+Output as \fBlocal-zone: "domain.com." always_null\fR format for Unbound DNS.
+
+.TP
+.B \--adblock-rules
+Generate adblock filter rules with resource type modifiers (requires \fB\-o\fR).
+
+.SS General Options
+.TP
+.B \--verbose
+Enable verbose output globally for all sites.
+
+.TP
+.B \--debug
+Enable debug mode with detailed logging of all network requests.
+
+.TP
+.B \--silent
+Suppress normal console output (errors and warnings still shown).
+
+.TP
+.B \--titles
+Add comment lines with site URLs before each rule group.
+
+.TP
+.B \--dumpurls
+Log all matched URLs to timestamped log files in \fBlogs/\fR directory.
+
+.TP
+.B \--compress-logs
+Compress log files with gzip after completion (requires \fB\--dumpurls\fR).
+
+.TP
+.B \--sub-domains
+Output full subdomains instead of collapsing to root domains.
+
+.TP
+.B \--no-interact
+Disable mouse simulation and page interaction globally.
+
+.TP
+.BR \--custom-json " \fIFILE\fR"
+Use \fIFILE\fR instead of \fBconfig.json\fR for configuration.
+
+.TP
+.B \--headful
+Launch browser with GUI instead of headless mode.
+
+.TP
+.B \--cdp
+Enable Chrome DevTools Protocol logging for network analysis.
+
+.TP
+.B \--remove-dupes
+Remove duplicate domains from output (only with \fB\-o\fR).
+
+.TP
+.B \--eval-on-doc
+Globally enable JavaScript injection for Fetch/XHR interception.
+
+.TP
+.BR \-h ", " \--help
+Show help message and exit.
+
+.TP
+.B \--version
+Show version information and exit.
+
+.SH CONFIGURATION
+
+Configuration is provided via JSON files. The default configuration file is \fBconfig.json\fR.
+
+.SS Global Configuration Options
+
+.TP
+.B ignoreDomains
+Array of domains to completely ignore. Supports wildcards (e.g., \fB"*.ads.com"\fR).
+
+.TP
+.B blocked
+Array of global regex patterns to block requests.
+
+.SS Per-Site Configuration Options
+
+.TP
+.B url
+Single URL string or array of URLs to scan.
+
+.TP
+.B filterRegex
+Regex pattern(s) to match suspicious requests.
+
+.TP
+.B searchstring
+Text string(s) to search for in response content (OR logic).
+
+.TP
+.B searchstring_and
+Text string(s) that must ALL be present in content (AND logic).
+
+.TP
+.B curl
+Boolean. Use curl to download and analyze content.
+
+.TP
+.B grep
+Boolean. Use system grep for faster pattern matching (requires \fBcurl=true\fR).
+
+.TP
+.B resourceTypes
+Array of resource types to process (e.g., \fB["script", "xhr", "fetch"]\fR).
+
+.TP
+.B blocked
+Array of regex patterns to block requests for this site.
+
+.TP
+.B css_blocked
+Array of CSS selectors to hide elements on the page.
+
+.TP
+.B userAgent
+Spoof User-Agent: \fB"chrome"\fR, \fB"firefox"\fR, or \fB"safari"\fR.
+
+.TP
+.B interact
+Boolean. Simulate mouse movements and clicks.
+
+.TP
+.B delay
+Milliseconds to wait after page load (default: 4000).
+
+.TP
+.B reload
+Number of times to reload the page (default: 1).
+
+.TP
+.B timeout
+Request timeout in milliseconds (default: 30000).
+
+.TP
+.B firstParty
+Boolean. Allow first-party request matching (default: false).
+
+.TP
+.B thirdParty
+Boolean. Allow third-party request matching (default: true).
+
+.TP
+.B fingerprint_protection
+Boolean or \fB"random"\fR. Enable browser fingerprint spoofing.
+
+.TP
+.B whois
+Array of terms that must ALL be found in WHOIS data (AND logic).
+
+.TP
+.B whois-or
+Array of terms where ANY must be found in WHOIS data (OR logic).
+
+.TP
+.B whois_server
+Custom WHOIS server(s) to use for lookups.
+
+.TP
+.B dig
+Array of terms that must ALL be found in DNS records (AND logic).
+
+.TP
+.B dig-or
+Array of terms where ANY must be found in DNS records (OR logic).
+
+.TP
+.B digRecordType
+DNS record type for dig queries (default: "A").
+
+.TP
+.B dig_subdomain
+Boolean. Use subdomain for dig lookup instead of root domain (default: false).
+
+.TP
+.B goto_options
+Object. Custom page.goto() options for Puppeteer navigation. Available options:
+.RS
+.IP \(bu 4
+\fBwaitUntil\fR: When to consider navigation successful. Options:
+.RS
+.IP \(bu 4
+\fB"load"\fR - Wait for all resources to load (default)
+.IP \(bu 4
+\fB"domcontentloaded"\fR - Wait for DOM only, faster loading
+.IP \(bu 4
+\fB"networkidle0"\fR - Wait until 0 network requests for 500ms
+.IP \(bu 4
+\fB"networkidle2"\fR - Wait until ≤2 network requests for 500ms
+.RE
+.IP \(bu 4
+\fBtimeout\fR: Maximum navigation time in milliseconds (overrides site timeout)
+.IP \(bu 4
+\fBreferer\fR: Referer header to send with navigation request
+.RE
+Example: \fB{"waitUntil": "networkidle2", "timeout": 60000}\fR
+
+.TP
+.B forcereload
+Boolean. Force an additional reload with cache disabled after normal reloads.
+
+.TP
+.B clear_sitedata
+Boolean. Clear all cookies, cache, and storage before each page load (default: false).
+
+.TP
+.B isBrave
+Boolean. Spoof Brave browser detection.
+
+.TP
+.B evaluateOnNewDocument
+Boolean. Inject Fetch/XHR interceptor scripts into page context.
+
+.TP
+.B cdp
+Boolean. Enable Chrome DevTools Protocol logging for this specific site.
+
+.TP
+.B source
+Boolean. Save page source HTML after loading.
+
+.TP
+.B screenshot
+Boolean. Capture screenshot on page load failure.
+
+.TP
+.B headful
+Boolean. Launch browser with GUI for this specific site.
+
+.TP
+.B adblock_rules
+Boolean. Generate adblock filter rules with resource types for this site.
+
+.TP
+.B cloudflare_phish
+Boolean. Auto-click through Cloudflare phishing warnings (default: false).
+
+.TP
+.B cloudflare_bypass
+Boolean. Auto-solve Cloudflare "Verify you are human" challenges (default: false).
+
+.TP
+.B whois_max_retries
+Number. Maximum retry attempts per domain for WHOIS queries (default: 2).
+
+.TP
+.B whois_timeout_multiplier
+Number. Timeout increase multiplier per retry (default: 1.5).
+
+.TP
+.B whois_use_fallback
+Boolean. Add TLD-specific fallback servers for WHOIS (default: true).
+
+.TP
+.B whois_retry_on_timeout
+Boolean. Retry on timeout errors (default: true).
+
+.TP
+.B whois_retry_on_error
+Boolean. Retry on connection/other errors (default: false).
+
+.TP
+.B verbose
+Boolean. Enable verbose output for this specific site.
+
+.TP
+.B subDomains
+Number. Output full subdomains instead of root domains (1/0).
+
+.TP
+.B localhost
+Boolean. Force localhost output format (127.0.0.1) for this site.
+
+.TP
+.B localhost_0_0_0_0
+Boolean. Force localhost output format (0.0.0.0) for this site.
+
+.TP
+.B dnsmasq
+Boolean. Force dnsmasq output format for this site.
+
+.TP
+.B dnsmasq_old
+Boolean. Force dnsmasq old format for this site.
+
+.TP
+.B unbound
+Boolean. Force unbound output format for this site.
+
+.TP
+.B plain
+Boolean. Force plain domain output for this site.
+
+.SH EXAMPLES
+
+.SS Basic malware domain detection:
+.EX
+{
+  "url": "https://suspicious-site.com",
+  "filterRegex": "\\\\.(space|website|tech|buzz)\\\\b",
+  "resourceTypes": ["script", "xhr", "fetch"]
+}
+.EE
+
+.SS Content analysis with OR logic search:
+.EX
+{
+  "url": "https://ad-network.com",
+  "filterRegex": "\\\\.(top|click|buzz)\\\\b",
+  "searchstring": ["tracking", "analytics", "pixel"],
+  "curl": true,
+  "resourceTypes": ["script", "fetch"]
+}
+.EE
+
+.SS Content analysis with AND logic (all terms required):
+.EX
+{
+  "url": "https://crypto-site.com",
+  "filterRegex": "\\\\.(space|website)\\\\b",
+  "searchstring_and": ["mining", "crypto", "wallet"],
+  "curl": true,
+  "grep": true
+}
+.EE
+
+.SS WHOIS-based malicious domain detection:
+.EX
+{
+  "url": "https://phishing-target.com",
+  "filterRegex": "\\\\.(top|click|buzz|space)\\\\b",
+  "whois": ["privacy", "protection"],
+  "whois_server": "whois.verisign-grs.com",
+  "resourceTypes": ["script", "image", "fetch"]
+}
+.EE
+
+.SS WHOIS with OR logic (any term matches):
+.EX
+{
+  "url": "https://suspicious-ads.com",
+  "filterRegex": "\\\\.(website|online|tech)\\\\b",
+  "whois-or": ["namecheap", "privacy", "proxy", "guard"],
+  "whois_max_retries": 3,
+  "resourceTypes": ["script", "xhr"]
+}
+.EE
+
+.SS DNS-based threat detection:
+.EX
+{
+  "url": "https://malware-dropper.com",
+  "filterRegex": "\\\\.(space|buzz|click)\\\\b",
+  "dig": ["sinkhole", "blocked"],
+  "digRecordType": "A",
+  "resourceTypes": ["script", "other"]
+}
+.EE
+
+.SS DNS with subdomain analysis:
+.EX
+{
+  "url": "https://cdn-network.com",
+  "filterRegex": "\\\\.(top|global|world)\\\\b",
+  "dig-or": ["cloudflare", "fastly", "amazonaws"],
+  "dig_subdomain": true,
+  "digRecordType": "CNAME"
+}
+.EE
+
+.SS Combined content and network analysis:
+.EX
+{
+  "url": "https://complex-threat.com",
+  "filterRegex": "\\\\.(space|website|tech)\\\\b",
+  "searchstring_and": ["bitcoin", "mining"],
+  "whois": ["privacy"],
+  "dig-or": ["tor", "onion"],
+  "curl": true,
+  "resourceTypes": ["script", "fetch", "xhr"]
+}
+.EE
+
+.SS Advanced configuration with multiple detection methods:
+.EX
+{
+  "sites": [
+    {
+      "url": ["https://torrent-site.com", "https://streaming-site.org"],
+      "filterRegex": ["\\\\.(space|website|buzz)\\\\b", "\\\\.ads\\\\.|analytics"],
+      "searchstring": ["cryptocurrency", "mining", "wallet"],
+      "whois-or": ["privacy", "protection", "proxy"],
+      "dig": ["sinkhole"],
+      "curl": true,
+      "grep": true,
+      "userAgent": "chrome",
+      "resourceTypes": ["script", "xhr", "fetch"],
+      "delay": 5000,
+      "reload": 2
+    }
+  ]
+}
+.EE
+
+.SS Command line usage examples:
+
+.SS Run with adblock output format:
+.EX
+node scanner-script.js --output rules.txt --adblock-rules --verbose
+.EE
+
+.SS Debug mode with URL logging:
+.EX
+node scanner-script.js --debug --dumpurls --compress-logs
+.EE
+
+.SS Multiple output formats:
+.EX
+node scanner-script.js -o hosts.txt --localhost --remove-dupes
+node scanner-script.js -o dnsmasq.conf --dnsmasq --titles
+node scanner-script.js -o unbound.conf --unbound --sub-domains
+.EE
+
+.SS Advanced browser configuration:
+.EX
+{
+  "url": "https://complex-site.com",
+  "filterRegex": "\\\\.(space|website)\\\\b",
+  "goto_options": {
+    "waitUntil": "networkidle2",
+    "timeout": 60000
+  },
+  "clear_sitedata": true,
+  "forcereload": true,
+  "screenshot": true,
+  "source": true,
+  "evaluateOnNewDocument": true,
+  "cdp": true
+}
+.EE
+
+.SS Different page loading strategies:
+.EX
+{
+  "sites": [
+    {
+      "url": "https://fast-site.com",
+      "filterRegex": "\\\\.(space)\\\\b", 
+      "goto_options": {
+        "waitUntil": "domcontentloaded",
+        "timeout": 15000
+      },
+      "comment": "Fast loading for simple sites"
+    },
+    {
+      "url": "https://heavy-ajax-site.com",
+      "filterRegex": "\\\\.(website)\\\\b",
+      "goto_options": {
+        "waitUntil": "networkidle0", 
+        "timeout": 90000
+      },
+      "comment": "Wait for all AJAX requests to complete"
+    },
+    {
+      "url": "https://streaming-site.com",
+      "filterRegex": "\\\\.(top)\\\\b",
+      "goto_options": {
+        "waitUntil": "networkidle2",
+        "timeout": 45000,
+        "referer": "https://search-engine.com"
+      },
+      "comment": "Allow some ongoing requests, spoof referer"
+    }
+  ]
+}
+.EE
+
+.SS Cloudflare bypass and fingerprint spoofing:
+.EX
+{
+  "url": "https://protected-site.com",
+  "filterRegex": "\\\\.(top|buzz)\\\\b",
+  "cloudflare_bypass": true,
+  "cloudflare_phish": true,
+  "fingerprint_protection": "random",
+  "isBrave": true,
+  "userAgent": "chrome",
+  "headful": false
+}
+.EE
+
+.SS Enhanced WHOIS configuration:
+.EX
+{
+  "url": "https://domain-analysis.com",
+  "filterRegex": "\\\\.(space|website|tech)\\\\b",
+  "whois": ["privacy", "protection"],
+  "whois_server": ["whois.verisign-grs.com", "whois.markmonitor.com"],
+  "whois_max_retries": 3,
+  "whois_timeout_multiplier": 2.0,
+  "whois_use_fallback": true,
+  "whois_retry_on_timeout": true,
+  "whois_retry_on_error": false
+}
+.EE
+
+.SS Site-specific output formatting:
+.EX
+{
+  "sites": [
+    {
+      "url": "https://site1.com",
+      "filterRegex": "\\\\.(space)\\\\b",
+      "localhost": true,
+      "subDomains": 1
+    },
+    {
+      "url": "https://site2.com", 
+      "filterRegex": "\\\\.(website)\\\\b",
+      "dnsmasq": true,
+      "plain": false
+    }
+  ]
+}
+.EE
+
+.SH FILES
+
+.TP
+.B config.json
+Default configuration file containing scan targets and rules.
+
+.TP
+.B logs/
+Directory created for debug and matched URL logs when \fB\--debug\fR or \fB\--dumpurls\fR is used.
+
+.SH DETECTION METHODS
+
+.SS URL Pattern Matching
+Uses regex patterns to identify suspicious domains and request URLs.
+
+.SS Content Analysis
+Downloads page content with curl and searches for malicious strings using JavaScript or grep.
+
+.SS Network Tools Integration
+Performs WHOIS and DNS lookups to identify suspicious domain registrations.
+
+.SS Browser-Based Analysis
+Uses Puppeteer to monitor network requests, analyze frames, and detect dynamic threats.
+
+.SS Resource Type Filtering
+Filters analysis by HTTP resource type (script, xhr, fetch, image, etc.).
+
+.SH SECURITY FEATURES
+
+.SS Fingerprint Spoofing
+Randomizes browser fingerprints to avoid detection by malicious sites.
+
+.SS Request Blocking
+Blocks suspicious requests during scanning to prevent malware execution.
+
+.SS Frame Isolation
+Safely analyzes iframe content without executing malicious scripts.
+
+.SS Cloudflare Bypass
+Automatically handles Cloudflare protection challenges.
+
+.SH EXIT STATUS
+.TP
+.B 0
+Success. All URLs processed successfully.
+.TP
+.B 1
+Error in configuration, file access, or critical failure.
+
+.SH BUGS
+Frame navigation errors may appear in debug output but do not affect detection functionality.
+
+Report bugs to the project repository or maintainer.
+
+.SH SEE ALSO
+.BR curl (1),
+.BR grep (1),
+.BR whois (1),
+.BR dig (1),
+.BR dnsmasq (8),
+.BR unbound (8)
+
+.SH AUTHORS
+Written for malware research and network security analysis.
+
+.SH COPYRIGHT
+Copyright (C) 2025 Free Software Foundation, Inc.
+This is free software; you can redistribute it and/or modify it under the
+terms of the GNU General Public License as published by the Free Software
+Foundation; either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT
+ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
+FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.

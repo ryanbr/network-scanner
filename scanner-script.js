@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.8 ===
+// === Network scanner script v1.0.9 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -8,7 +8,7 @@ const psl = require('psl');
 const path = require('path');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
-const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
+const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 const { handleCloudflareProtection } = require('./lib/cloudflare');
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.8'; // Script version
+const VERSION = '1.0.9'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -166,6 +166,7 @@ Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
   searchstring: "text" or ["text1", "text2"]   Text to search in response content (requires filterRegex match)
+  searchstring_and: "text" or ["text1", "text2"] Text to search with AND logic - ALL terms must be present (requires filterRegex match)
   curl: true/false                             Use curl to download content for analysis (default: false)
                                                Note: curl respects filterRegex but ignores resourceTypes filtering
   grep: true/false                             Use grep instead of JavaScript for pattern matching (default: false)
@@ -611,7 +612,7 @@ function setupFrameHandling(page, forceDebug) {
           : [];
 
    // Parse searchstring patterns using module
-   const { searchStrings, hasSearchString } = parseSearchStrings(siteConfig.searchstring);
+   const { searchStrings, searchStringsAnd, hasSearchString, hasSearchStringAnd } = parseSearchStrings(siteConfig.searchstring, siteConfig.searchstring_and);
    const useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring
    let useGrep = siteConfig.grep === true && useCurl; // Grep requires curl to be enabled
 
@@ -635,7 +636,7 @@ function setupFrameHandling(page, forceDebug) {
    }
    
    // Validate grep availability if needed
-   if (useGrep && hasSearchString) {
+   if (useGrep && (hasSearchString || hasSearchStringAnd)) {
      const grepCheck = validateGrepAvailability();
      if (!grepCheck.isAvailable) {
        console.warn(`[warn] Grep not available for ${currentUrl}: ${grepCheck.error}. Falling back to JavaScript search.`);
@@ -687,11 +688,20 @@ function setupFrameHandling(page, forceDebug) {
         });
       }
 
-   if (siteConfig.verbose === 1 && hasSearchString) {
+   if (siteConfig.verbose === 1 && (hasSearchString || hasSearchStringAnd)) {
      console.log(`[info] Search strings for ${currentUrl}:`);
-     searchStrings.forEach((searchStr, idx) => {
-       console.log(`  [${idx + 1}] "${searchStr}"`);
-     });
+     if (hasSearchString) {
+       console.log(`  OR logic (any must match):`);
+       searchStrings.forEach((searchStr, idx) => {
+         console.log(`    [${idx + 1}] "${searchStr}"`);
+       });
+     }
+     if (hasSearchStringAnd) {
+       console.log(`  AND logic (all must match):`);
+       searchStringsAnd.forEach((searchStr, idx) => {
+         console.log(`    [${idx + 1}] "${searchStr}"`);
+       });
+     }
    }
 
    if (siteConfig.verbose === 1 && whoisServer) {
@@ -881,7 +891,7 @@ function setupFrameHandling(page, forceDebug) {
             }
 
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
-           if (!hasSearchString && !hasNetTools) {
+           if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
              addMatchedDomain(reqDomain, resourceType);
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
@@ -895,7 +905,7 @@ function setupFrameHandling(page, forceDebug) {
                fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo}\n`);
 
              }
-            } else if (hasNetTools && !hasSearchString) {
+            } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
              if (forceDebug) {
                console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`);
@@ -925,19 +935,21 @@ function setupFrameHandling(page, forceDebug) {
             const originalDomain = (new URL(reqUrl)).hostname;
             setImmediate(() => netToolsHandler(reqDomain, originalDomain));
            } else {
-             // If searchstring IS defined (with or without nettools), queue for content checking
+             // If searchstring or searchstring_and IS defined (with or without nettools), queue for content checking
              if (forceDebug) {
-               console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for content search`);
+               const searchType = hasSearchStringAnd ? 'searchstring_and' : 'searchstring';
+               console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for ${searchType} content search`);
              }
            }
            
            // If curl is enabled, download and analyze content immediately
            if (useCurl) {
              try {
-               // Use grep handler if both grep and searchstring are enabled
-               if (useGrep && hasSearchString) {
+               // Use grep handler if both grep and searchstring/searchstring_and are enabled
+               if (useGrep && (hasSearchString || hasSearchStringAnd)) {
                  const grepHandler = createGrepHandler({
                    searchStrings,
+				   searchStringsAnd,
                    regexes,
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
@@ -953,6 +965,7 @@ function setupFrameHandling(page, forceDebug) {
                    userAgent: curlUserAgent,
                    resourceType,
                    hasSearchString,
+				   hasSearchStringAnd,
                    grepOptions: {
                      ignoreCase: true,
                      wholeWord: false,
@@ -965,6 +978,8 @@ function setupFrameHandling(page, forceDebug) {
                  // Use regular curl handler
                  const curlHandler = createCurlHandler({
                    searchStrings,
+                   searchStringsAnd,
+                   hasSearchStringAnd,
                    regexes,
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
@@ -997,10 +1012,12 @@ function setupFrameHandling(page, forceDebug) {
         request.continue();
       });
 
-     // Add response handler ONLY if searchstring is defined AND neither curl nor grep is enabled
-     if (hasSearchString && !useCurl && !useGrep) {
+     // Add response handler ONLY if searchstring/searchstring_and is defined AND neither curl nor grep is enabled
+     if ((hasSearchString || hasSearchStringAnd) && !useCurl && !useGrep) {
        const responseHandler = createResponseHandler({
          searchStrings,
+         searchStringsAnd,
+         hasSearchStringAnd,
          regexes,
          matchedDomains,
          addMatchedDomain, // Pass the helper function
