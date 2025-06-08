@@ -325,6 +325,46 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
   });
 }
 
+function setupFrameHandling(page, forceDebug) {
+  // Handle frame creation with error suppression
+  page.on('frameattached', async (frame) => {
+    if (frame.parentFrame()) { // Only handle child frames, not main frame
+      try {
+        if (forceDebug) {
+          console.log(`[debug] New frame attached: ${frame.url() || 'about:blank'}`);
+        }
+        
+        // Don't try to navigate to frames with invalid/empty URLs
+        const frameUrl = frame.url();
+        if (!frameUrl || frameUrl === 'about:blank' || frameUrl === '') {
+          if (forceDebug) {
+            console.log(`[debug] Skipping frame with empty/invalid URL`);
+          }
+          return;
+        }
+        
+        // Validate URL format before attempting navigation
+        try {
+          new URL(frameUrl);
+        } catch (urlErr) {
+          if (forceDebug) {
+            console.log(`[debug] Skipping frame with malformed URL: ${frameUrl}`);
+          }
+          return;
+        }
+        
+      } catch (err) {
+        // Suppress "Cannot navigate to invalid URL" errors but log others
+        if (!err.message.includes('Cannot navigate to invalid URL')) {
+          if (forceDebug) {
+            console.log(`[debug] Frame handling error: ${err.message}`);
+          }
+        }
+      }
+    }
+  });
+}
+
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
@@ -506,6 +546,9 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
       // --- End of Per-Page CDP Setup ---
 
       await page.setRequestInterception(true);
+	  
+	  // Set up frame handling to suppress invalid URL errors
+      setupFrameHandling(page, forceDebug);
 	  
       // --- Setup iframe monitoring ---
       // Monitor all frames (including iframes) for network requests
