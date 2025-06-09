@@ -1,4 +1,4 @@
-A Puppeteer-based tool (v1.0.8) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
+A Puppeteer-based tool (v1.0.9) for scanning websites to find third-party (or optionally first-party) network requests matching specified patterns, and generate Adblock-formatted rules.
 
 ## Features
 
@@ -66,6 +66,7 @@ Example:
       "userAgent": "chrome",
       "filterRegex": "ads|analytics",
       "searchstring": "specificString",
+      "searchstring_and": ["term1", "term2", "term3"],
       "resourceTypes": ["script", "xhr", "image"],
       "reload": 2,
       "forcereload": true,
@@ -105,7 +106,8 @@ Example:
 | `url`                | String |   -     | Website URL to scan |
 | `userAgent`          | `chrome`, `firefox`, `safari`, `mobile-chrome`, etc. | - | User agent for page |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
-| `searchstring`       | String or Array | - |  Text to search in response content (requires filterRegex match) |
+| `searchstring`       | String or Array | - |  Text to search in response content (OR logic - any term matches from `filterRegex`) |
+| `searchstring_and`   | String or Array | - |  Text to search in response content (AND logic - all terms must match from `filterRegex`) |
 | `curl`               | `true` or `false` | `false` | Use curl to download content for analysis |
 | `grep`               | `true` or `false` | `false` | Use grep instead of JavaScript for pattern matching |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
@@ -217,5 +219,6 @@ Example:
 - **Whois servers are randomized per domain lookup** for load balancing and fault tolerance.
 - **Fallback servers are automatically selected** based on domain TLD (e.g., `.com` domains use Verisign servers).
 - **Retry logic significantly improves success rates** from ~70% to ~95%+ for whois lookups.
+- **Search string logic validation** prevents conflicting OR/AND configurations.
 
 ---
