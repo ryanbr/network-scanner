@@ -1,4 +1,4 @@
-// === Network scanner script v1.0.9 ===
+// === Network scanner script (nwss.js) v1.0.9 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -120,12 +120,12 @@ if (compareFile && !fs.existsSync(compareFile)) {
 }
 
 if (args.includes('--version')) {
-  console.log(`scanner-script.js version ${VERSION}`);
+  console.log(`nwss.js version ${VERSION}`);
   process.exit(0);
 }
 
 if (args.includes('--help') || args.includes('-h')) {
-  console.log(`Usage: node scanner-script.js [options]
+  console.log(`Usage: node nwss.js [options]
 
 Options:
   -o, --output <file>            Output file for rules. If omitted, prints to console

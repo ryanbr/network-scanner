@@ -1,13 +1,13 @@
-.TH SCANNER-SCRIPT 1 "2025" "scanner-script v1.0.9" "User Commands"
+.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.9" "User Commands"
 .SH NAME
-scanner-script \- Network scanner for malware detection and domain analysis
+NWSS scanner-script \- Network scanner for malware detection and domain analysis
 
 .SH SYNOPSIS
-.B node scanner-script.js
+.B node nwss.js
 [\fIOPTIONS\fR]
 
 .SH DESCRIPTION
-.B scanner-script.js
+.B nwss.js
 is a comprehensive network scanner that uses Puppeteer to analyze web pages for malicious content, tracking scripts, and suspicious domains. It can detect threats through URL pattern matching, content analysis, DNS/WHOIS lookups, and behavioral analysis.
 
 The scanner supports multiple detection methods including regex filtering, content searching with curl/grep, network tools integration, and advanced browser-based analysis with frame monitoring and fingerprint spoofing.
@@ -459,19 +459,19 @@ Boolean. Force plain domain output for this site.
 
 .SS Run with adblock output format:
 .EX
-node scanner-script.js --output rules.txt --adblock-rules --verbose
+node nwss.js --output rules.txt --adblock-rules --verbose
 .EE
 
 .SS Debug mode with URL logging:
 .EX
-node scanner-script.js --debug --dumpurls --compress-logs
+node nwss.js --debug --dumpurls --compress-logs
 .EE
 
 .SS Multiple output formats:
 .EX
-node scanner-script.js -o hosts.txt --localhost --remove-dupes
-node scanner-script.js -o dnsmasq.conf --dnsmasq --titles
-node scanner-script.js -o unbound.conf --unbound --sub-domains
+node nwss.js -o hosts.txt --localhost --remove-dupes
+node nwss.js -o dnsmasq.conf --dnsmasq --titles
+node nwss.js -o unbound.conf --unbound --sub-domains
 .EE
 
 .SS Advanced browser configuration:

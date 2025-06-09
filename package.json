@@ -1,13 +1,13 @@
 {
   "name": "network-scanner",
-  "version": "1.0.6",
+  "version": "1.0.9",
   "description": "A Puppeteer-based network scanner for analyzing web traffic, generating adblock filter rules, and identifying third-party requests. Features include fingerprint spoofing, Cloudflare bypass, content analysis with curl/grep, and multiple output formats.",
-  "main": "scanner-script.js",
+  "main": "nwss.js",
   "scripts": {
-    "start": "node scanner-script.js",
-    "scan": "node scanner-script.js",
-    "help": "node scanner-script.js --help",
-    "version": "node scanner-script.js --version"
+    "start": "node nwss.js",
+    "scan": "node nwss.js",
+    "help": "node nwss.js --help",
+    "version": "node nwss.js --version"
   },
   "dependencies": {
     "puppeteer": "^21.3.8",
