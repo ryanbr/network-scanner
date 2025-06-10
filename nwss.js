@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.10 ===
+// === Network scanner script (nwss.js) v1.0.11 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -15,9 +15,10 @@ const { handleCloudflareProtection } = require('./lib/cloudflare');
 const { handleBrowserExit } = require('./lib/browserexit');
 const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
+const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.10'; // Script version
+const VERSION = '1.0.11'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -65,15 +66,16 @@ const removeDupes = args.includes('--remove-dupes') || args.includes('--remove-d
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
 
+const enableColors = args.includes('--color') || args.includes('--colour');
 let adblockRulesMode = args.includes('--adblock-rules');
 
 // Validate --adblock-rules usage - ignore if used incorrectly instead of erroring
 if (adblockRulesMode) {
   if (!outputFile) {
-    if (forceDebug) console.log(`[debug] --adblock-rules ignored: requires --output (-o) to specify an output file`);
+    if (forceDebug) console.log(formatLogMessage('debug', `--adblock-rules ignored: requires --output (-o) to specify an output file`));
     adblockRulesMode = false;
   } else if (localhostMode || localhostModeAlt || plainOutput || dnsmasqMode || dnsmasqOldMode || unboundMode) {
-    if (forceDebug) console.log(`[debug] --adblock-rules ignored: incompatible with localhost/plain output modes`);
+    if (forceDebug) console.log(formatLogMessage('debug', `--adblock-rules ignored: incompatible with localhost/plain output modes`));
     adblockRulesMode = false;
   }
 }
@@ -81,7 +83,7 @@ if (adblockRulesMode) {
 // Validate --dnsmasq usage
 if (dnsmasqMode) {
   if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqOldMode || unboundMode) {
-    if (forceDebug) console.log(`[debug] --dnsmasq ignored: incompatible with localhost/plain/adblock-rules output modes`);
+    if (forceDebug) console.log(formatLogMessage('debug', `--dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     dnsmasqMode = false;
   }
 }
@@ -89,7 +91,7 @@ if (dnsmasqMode) {
 // Validate --dnsmasq-old usage
 if (dnsmasqOldMode) {
   if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || unboundMode) {
-    if (forceDebug) console.log(`[debug] --dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`);
+    if (forceDebug) console.log(formatLogMessage('debug', `--dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     dnsmasqOldMode = false;
   }
 }
@@ -97,7 +99,7 @@ if (dnsmasqOldMode) {
 // Validate --unbound usage
 if (unboundMode) {
   if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode) {
-    if (forceDebug) console.log(`[debug] --unbound ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`);
+    if (forceDebug) console.log(formatLogMessage('debug', `--unbound ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     unboundMode = false;
   }
 }
@@ -128,6 +130,7 @@ if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node nwss.js [options]
 
 Options:
+  --color, --colour              Enable colored console output for status messages
   -o, --output <file>            Output file for rules. If omitted, prints to console
   --compare <file>               Remove rules that already exist in this file before output
     
@@ -225,7 +228,7 @@ try {
     process.exit(1);
   }
   if (forceDebug && configPath !== 'config.json') {
-    console.log(`[debug] Using custom config file: ${configPath}`);
+    console.log(formatLogMessage('debug', `Using custom config file: ${configPath}`));
   }
   const raw = fs.readFileSync(configPath, 'utf8');
   config = JSON.parse(raw);
@@ -244,7 +247,7 @@ if (forceDebug || dumpUrls) {
   const logsFolder = 'logs';
   if (!fs.existsSync(logsFolder)) {
     fs.mkdirSync(logsFolder, { recursive: true });
-    console.log(`[debug] Created logs folder: ${logsFolder}`);
+    console.log(formatLogMessage('debug', `Created logs folder: ${logsFolder}`));
   }
 
   // Generate timestamped log filenames
@@ -252,16 +255,16 @@ if (forceDebug || dumpUrls) {
  
 if (forceDebug) {
   debugLogFile = path.join(logsFolder, `debug_requests_${timestamp}.log`);
-  console.log(`[debug] Debug requests will be logged to: ${debugLogFile}`);
+  console.log(formatLogMessage('debug', `Debug requests will be logged to: ${debugLogFile}`));
 }
 
 if (dumpUrls) {
     matchedUrlsLogFile = path.join(logsFolder, `matched_urls_${timestamp}.log`);
-    console.log(`Matched URLs will be logged to: ${matchedUrlsLogFile}`);
+    console.log(messageColors.processing('Matched URLs will be logged to:') + ` ${matchedUrlsLogFile}`);
 
     // Also create adblock rules log file with same timestamp
     adblockRulesLogFile = path.join(logsFolder, `adblock_rules_${timestamp}.txt`);
-    console.log(`Adblock rules will be saved to: ${adblockRulesLogFile}`); 
+    console.log(messageColors.processing('Adblock rules will be saved to:') + ` ${adblockRulesLogFile}`); 
   }
 }
 // --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
@@ -306,7 +309,7 @@ function safeGetDomain(url, getFullHostname = false) {
   } catch (urlError) {
     // Log malformed URLs for debugging
     if (forceDebug) {
-      console.log(`[debug] Malformed URL skipped: ${url} (${urlError.message})`);
+      console.log(formatLogMessage('debug', `Malformed URL skipped: ${url} (${urlError.message})`));
     }
     return '';
   }
@@ -332,14 +335,14 @@ function setupFrameHandling(page, forceDebug) {
     if (frame.parentFrame()) { // Only handle child frames, not main frame
       try {
         if (forceDebug) {
-          console.log(`[debug] New frame attached: ${frame.url() || 'about:blank'}`);
+          console.log(formatLogMessage('debug', `New frame attached: ${frame.url() || 'about:blank'}`));
         }
         
         // Don't try to navigate to frames with invalid/empty URLs
         const frameUrl = frame.url();
         if (!frameUrl || frameUrl === 'about:blank' || frameUrl === '') {
           if (forceDebug) {
-            console.log(`[debug] Skipping frame with empty/invalid URL`);
+            console.log(formatLogMessage('debug', `Skipping frame with empty/invalid URL`));
           }
           return;
         }
@@ -349,7 +352,7 @@ function setupFrameHandling(page, forceDebug) {
           new URL(frameUrl);
         } catch (urlErr) {
           if (forceDebug) {
-            console.log(`[debug] Skipping frame with malformed URL: ${frameUrl}`);
+            console.log(formatLogMessage('debug', `Skipping frame with malformed URL: ${frameUrl}`));
           }
           return;
         }
@@ -358,7 +361,7 @@ function setupFrameHandling(page, forceDebug) {
         // Suppress "Cannot navigate to invalid URL" errors but log others
         if (!err.message.includes('Cannot navigate to invalid URL')) {
           if (forceDebug) {
-            console.log(`[debug] Frame handling error: ${err.message}`);
+            console.log(formatLogMessage('debug', `Frame handling error: ${err.message}`));
           }
         }
       }
@@ -400,7 +403,7 @@ function setupFrameHandling(page, forceDebug) {
   const launchHeadless = !(headfulMode || perSiteHeadful);
   // launch with no safe browsing
   let browser = await createBrowser();
-  if (forceDebug) console.log(`[debug] Launching browser with headless: ${launchHeadless}`);
+  if (forceDebug) console.log(formatLogMessage('debug', `Launching browser with headless: ${launchHeadless}`));
  
   let siteCounter = 0;
   const totalUrls = sites.reduce((sum, site) => {
@@ -450,7 +453,7 @@ function setupFrameHandling(page, forceDebug) {
     const matchedDomains = adblockRulesMode || siteConfig.adblock_rules ? new Map() : new Set();
     const timeout = siteConfig.timeout || 30000;
 
-    if (!silentMode) console.log(`\nScanning: ${currentUrl}`);
+    if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
 
     try {
       page = await browserInstance.newPage();
@@ -465,9 +468,9 @@ function setupFrameHandling(page, forceDebug) {
       if (shouldInjectEvalForPage) {
           if (forceDebug) {
               if (globalEvalOnDoc) {
-                  console.log(`[debug][evalOnDoc] Global Fetch/XHR interception enabled, applying to: ${currentUrl}`);
+                  console.log(formatLogMessage('debug', `[evalOnDoc] Global Fetch/XHR interception enabled, applying to: ${currentUrl}`));
               } else { // siteConfig.evaluateOnNewDocument must be true
-                  console.log(`[debug][evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`);
+                  console.log(formatLogMessage('debug', `[evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`));
               }
           }
           try {
@@ -487,7 +490,7 @@ function setupFrameHandling(page, forceDebug) {
                   };
               });
           } catch (evalErr) {
-              console.warn(`[warn][evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`);
+              console.warn(formatLogMessage('warn', `[evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`));
           }
       }
       // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
@@ -495,7 +498,7 @@ function setupFrameHandling(page, forceDebug) {
       // --- CSS Element Blocking Setup ---
       const cssBlockedSelectors = siteConfig.css_blocked;
       if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
-        if (forceDebug) console.log(`[debug] CSS element blocking enabled for ${currentUrl}: ${cssBlockedSelectors.join(', ')}`);
+        if (forceDebug) console.log(formatLogMessage('debug', `CSS element blocking enabled for ${currentUrl}: ${cssBlockedSelectors.join(', ')}`));
         try {
           await page.evaluateOnNewDocument(({ selectors }) => {
             // Inject CSS to hide blocked elements
@@ -512,7 +515,7 @@ function setupFrameHandling(page, forceDebug) {
             }
           }, { selectors: cssBlockedSelectors });
         } catch (cssErr) {
-          console.warn(`[warn][css_blocked] Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`);
+          console.warn(formatLogMessage('warn', `[css_blocked] Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`));
         }
       }
       // --- END: CSS Element Blocking Setup ---
@@ -522,9 +525,9 @@ function setupFrameHandling(page, forceDebug) {
       if (cdpLoggingNeededForPage) {
         if (forceDebug) {
             if (enableCDP) {
-                console.log(`[debug] CDP logging globally enabled by --cdp, applying to page: ${currentUrl}`);
+                console.log(formatLogMessage('debug', `CDP logging globally enabled by --cdp, applying to page: ${currentUrl}`));
             } else if (siteConfig.cdp === true) {
-                console.log(`[debug] CDP logging enabled for page ${currentUrl} via site-specific 'cdp: true' config.`);
+                console.log(formatLogMessage('debug', `CDP logging enabled for page ${currentUrl} via site-specific 'cdp: true' config.`));
             }
         }
         try {
@@ -537,11 +540,11 @@ function setupFrameHandling(page, forceDebug) {
                 try {
                     hostnameForLog = new URL(currentUrl).hostname;
                 } catch (_) { /* ignore if currentUrl is invalid for URL parsing */ }
-                console.log(`[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`);
+                console.log(formatLogMessage('debug', `[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`));
             });
         } catch (cdpErr) {
             cdpSession = null; // Reset on failure
-            console.warn(`[warn][cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`);
+            console.warn(formatLogMessage('warn', `[cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`));
         }
       }
       // --- End of Per-Page CDP Setup ---
@@ -555,7 +558,7 @@ function setupFrameHandling(page, forceDebug) {
       // Monitor all frames (including iframes) for network requests
       page.on('frameattached', async (frame) => {
         if (forceDebug) {
-          console.log(`[debug] New frame detected: ${frame.url()}`);
+          console.log(formatLogMessage('debug', `New frame detected: ${frame.url()}`));
         }
         
         try {
@@ -563,7 +566,7 @@ function setupFrameHandling(page, forceDebug) {
           await frame.goto(frame.url(), { waitUntil: 'domcontentloaded', timeout: 5000 });
         } catch (frameErr) {
           if (forceDebug) {
-            console.log(`[debug] Frame navigation failed: ${frameErr.message}`);
+            console.log(formatLogMessage('debug', `Frame navigation failed: ${frameErr.message}`));
           }
         }
       });
@@ -571,7 +574,7 @@ function setupFrameHandling(page, forceDebug) {
       // Monitor frame navigations 
       page.on('framenavigated', (frame) => {
         if (forceDebug && frame.url() !== 'about:blank') {
-          console.log(`[debug] Frame navigated to: ${frame.url()}`);
+          console.log(formatLogMessage('debug', `Frame navigated to: ${frame.url()}`));
         }
       });
       
@@ -596,9 +599,9 @@ function setupFrameHandling(page, forceDebug) {
             sessionStorage.clear();
             indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
           });
-          if (forceDebug) console.log(`[debug] Cleared site data for ${currentUrl}`);
+          if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data for ${currentUrl}`));
         } catch (clearErr) {
-          console.warn(`[clear_sitedata failed] ${currentUrl}: ${clearErr.message}`);
+          console.warn(messageColors.warn(`[clear_sitedata failed] ${currentUrl}: ${clearErr.message}`));
         }
       }
 
@@ -628,21 +631,21 @@ function setupFrameHandling(page, forceDebug) {
    }
 
    if (useCurl && forceDebug) {
-     console.log(`[debug] Curl-based content analysis enabled for ${currentUrl}`);
+     console.log(formatLogMessage('debug', `Curl-based content analysis enabled for ${currentUrl}`));
    }
 
    if (useGrep && forceDebug) {
-     console.log(`[debug] Grep-based pattern matching enabled for ${currentUrl}`);
+     console.log(formatLogMessage('debug', `Grep-based pattern matching enabled for ${currentUrl}`));
    }
    
    // Validate grep availability if needed
    if (useGrep && (hasSearchString || hasSearchStringAnd)) {
      const grepCheck = validateGrepAvailability();
      if (!grepCheck.isAvailable) {
-       console.warn(`[warn] Grep not available for ${currentUrl}: ${grepCheck.error}. Falling back to JavaScript search.`);
+       console.warn(formatLogMessage('warn', `Grep not available for ${currentUrl}: ${grepCheck.error}. Falling back to JavaScript search.`));
        useGrep = false;
      } else if (forceDebug) {
-       console.log(`[debug] Using grep: ${grepCheck.version}`);
+       console.log(formatLogMessage('debug', `Using grep: ${grepCheck.version}`));
      }
    }
 
@@ -660,36 +663,36 @@ function setupFrameHandling(page, forceDebug) {
      if (whoisTerms || whoisOrTerms) {
        const whoisCheck = validateWhoisAvailability();
        if (!whoisCheck.isAvailable) {
-         console.warn(`[warn] Whois not available for ${currentUrl}: ${whoisCheck.error}. Skipping whois checks.`);
+         console.warn(formatLogMessage('warn', `Whois not available for ${currentUrl}: ${whoisCheck.error}. Skipping whois checks.`));
          siteConfig.whois = null; // Disable whois for this site
 	 siteConfig['whois-or'] = null; // Disable whois-or for this site
        } else if (forceDebug) {
-         console.log(`[debug] Using whois: ${whoisCheck.version}`);
+         console.log(formatLogMessage('debug', `Using whois: ${whoisCheck.version}`));
        }
      }
      
      if (digTerms || digOrTerms) {
        const digCheck = validateDigAvailability();
        if (!digCheck.isAvailable) {
-         console.warn(`[warn] Dig not available for ${currentUrl}: ${digCheck.error}. Skipping dig checks.`);
+         console.warn(formatLogMessage('warn', `Dig not available for ${currentUrl}: ${digCheck.error}. Skipping dig checks.`));
          siteConfig.dig = null; // Disable dig for this site
          siteConfig['dig-or'] = null; // Disable dig-or for this site
        } else if (forceDebug) {
-         console.log(`[debug] Using dig: ${digCheck.version}`);
+         console.log(formatLogMessage('debug', `Using dig: ${digCheck.version}`));
        }
      }
    }
 
       if (siteConfig.verbose === 1 && siteConfig.filterRegex) {
         const patterns = Array.isArray(siteConfig.filterRegex) ? siteConfig.filterRegex : [siteConfig.filterRegex];
-        console.log(`[info] Regex patterns for ${currentUrl}:`);
+        console.log(formatLogMessage('info', `Regex patterns for ${currentUrl}:`));
         patterns.forEach((pattern, idx) => {
           console.log(`  [${idx + 1}] ${pattern}`);
         });
       }
 
    if (siteConfig.verbose === 1 && (hasSearchString || hasSearchStringAnd)) {
-     console.log(`[info] Search strings for ${currentUrl}:`);
+     console.log(formatLogMessage('info', `Search strings for ${currentUrl}:`));
      if (hasSearchString) {
        console.log(`  OR logic (any must match):`);
        searchStrings.forEach((searchStr, idx) => {
@@ -707,36 +710,36 @@ function setupFrameHandling(page, forceDebug) {
    if (siteConfig.verbose === 1 && whoisServer) {
      if (forceDebug) {
        if (Array.isArray(whoisServer)) {
-         console.log(`[info] Whois servers for ${currentUrl} (randomized): [${whoisServer.join(', ')}]`);
+         console.log(formatLogMessage('info', `Whois servers for ${currentUrl} (randomized): [${whoisServer.join(', ')}]`));
        } else {
-         console.log(`[info] Whois server for ${currentUrl}: ${whoisServer}`);
+         console.log(formatLogMessage('info', `Whois server for ${currentUrl}: ${whoisServer}`));
        }
      }
    }
 
    if (siteConfig.verbose === 1 && whoisTerms) {
-     if (forceDebug) console.log(`[info] Whois terms for ${currentUrl}:`);
+     if (forceDebug) console.log(formatLogMessage('info', `Whois terms for ${currentUrl}:`));
      whoisTerms.forEach((term, idx) => {
        if (forceDebug) console.log(`  [${idx + 1}] "${term}"`);
      });
    }
 
    if (siteConfig.verbose === 1 && whoisOrTerms) {
-     if (forceDebug) console.log(`[info] Whois-or terms for ${currentUrl}:`);
+     if (forceDebug) console.log(formatLogMessage('info', `Whois-or terms for ${currentUrl}:`));
      whoisOrTerms.forEach((term, idx) => {
        if (forceDebug) console.log(`  [${idx + 1}] "${term}" (OR logic)`);
      });
    }  
  
    if (siteConfig.verbose === 1 && digTerms) {
-     if (forceDebug) console.log(`[info] Dig terms for ${currentUrl} (${digRecordType} records):`);
+     if (forceDebug) console.log(formatLogMessage('info', `Dig terms for ${currentUrl} (${digRecordType} records):`));
      digTerms.forEach((term, idx) => {
        if (forceDebug) console.log(`  [${idx + 1}] "${term}"`);
      });
    }
    
   if (siteConfig.verbose === 1 && digOrTerms) {
-    if (forceDebug) console.log(`[info] Dig-or terms for ${currentUrl} (${digRecordType} records):`);
+    if (forceDebug) console.log(formatLogMessage('info', `Dig-or terms for ${currentUrl} (${digRecordType} records):`));
     digOrTerms.forEach((term, idx) => {
       if (forceDebug) console.log(`  [${idx + 1}] "${term}" (OR logic)`);
     });
@@ -797,7 +800,7 @@ function setupFrameHandling(page, forceDebug) {
         if (forceDebug) {
           const frameUrl = request.frame() ? request.frame().url() : 'unknown-frame';
           const isMainFrame = request.frame() === page.mainFrame();
-          console.log(`[debug req][frame: ${isMainFrame ? 'main' : 'iframe'}] ${frameUrl} → ${request.url()}`);
+          console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: ${isMainFrame ? 'main' : 'iframe'}] ${frameUrl} → ${request.url()}`));
         }
 
         // Show --debug output and the url while its scanning
@@ -807,14 +810,14 @@ function setupFrameHandling(page, forceDebug) {
           const logEntry = `${timestamp} [debug req][${simplifiedUrl}] ${request.url()}`;
 
           // Output to console
-          console.log(`[debug req][${simplifiedUrl}] ${request.url()}`);
+          console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[${simplifiedUrl}] ${request.url()}`));
 
           // Output to file
           if (debugLogFile) {
             try {
               fs.appendFileSync(debugLogFile, logEntry + '\n');
             } catch (logErr) {
-              console.warn(`[warn] Failed to write to debug log file: ${logErr.message}`);
+              console.warn(formatLogMessage('warn', `Failed to write to debug log file: ${logErr.message}`));
             }
           }
         }
@@ -827,7 +830,7 @@ function setupFrameHandling(page, forceDebug) {
             const matchedPattern = allPatterns.find(pattern => new RegExp(pattern).test(reqUrl));
             const patternSource = siteConfig.blocked && siteConfig.blocked.includes(matchedPattern) ? 'site' : 'global';
            const simplifiedUrl = getRootDomain(currentUrl);
-           console.log(`[debug][blocked][${simplifiedUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`);
+           console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
            
            // Also log to file if debug logging is enabled
            if (debugLogFile) {
@@ -835,7 +838,7 @@ function setupFrameHandling(page, forceDebug) {
                const timestamp = new Date().toISOString();
                fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (${patternSource} pattern: ${matchedPattern})\n`);
              } catch (logErr) {
-               console.warn(`[warn] Failed to write blocked domain to debug log: ${logErr.message}`);
+               console.warn(formatLogMessage('warn', `Failed to write blocked domain to debug log: ${logErr.message}`));
              }
            }
          }
@@ -847,7 +850,7 @@ function setupFrameHandling(page, forceDebug) {
 
         if (!reqDomain) {
           if (forceDebug) {
-            console.log(`[debug] Skipping request with unparseable URL: ${reqUrl}`);
+            console.log(formatLogMessage('debug', `Skipping request with unparseable URL: ${reqUrl}`));
           }
           request.continue();
           return;
@@ -868,7 +871,8 @@ function setupFrameHandling(page, forceDebug) {
            if (allowedResourceTypes && Array.isArray(allowedResourceTypes) && allowedResourceTypes.length > 0) {
              if (!allowedResourceTypes.includes(resourceType)) {
                if (forceDebug) {
-                 console.log(`[debug] URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`);
+                 console.log(formatLogMessage('debug', `URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`));
+
                }
                break; // Skip this URL entirely - doesn't match required resource types
              }
@@ -877,7 +881,7 @@ function setupFrameHandling(page, forceDebug) {
             // Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
             if (allBlockedRegexes.some(re => re.test(reqUrl))) {
               if (forceDebug) {
-                console.log(`[debug] URL ${reqUrl} matches blocked pattern, skipping detection (but request already blocked)`);
+                console.log(formatLogMessage('debug', `URL ${reqUrl} matches blocked pattern, skipping detection (but request already blocked)`));
               }
               break; // Skip detection but don't interfere with browser blocking
             }
@@ -885,7 +889,7 @@ function setupFrameHandling(page, forceDebug) {
             // Check ignoreDomains before any processing 
             if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
               if (forceDebug) {
-                console.log(`[debug] Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`);
+                console.log(formatLogMessage('debug', `Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`));
               }
               break; // Skip this URL entirely
             }
@@ -896,7 +900,7 @@ function setupFrameHandling(page, forceDebug) {
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-              console.log(`[match][${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo}`);
+              console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo}`));
 
              }
              if (dumpUrls) {
@@ -908,7 +912,7 @@ function setupFrameHandling(page, forceDebug) {
             } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
              if (forceDebug) {
-               console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`);
+               console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`));
              }
              
              // Create and execute nettools handler
@@ -938,7 +942,7 @@ function setupFrameHandling(page, forceDebug) {
              // If searchstring or searchstring_and IS defined (with or without nettools), queue for content checking
              if (forceDebug) {
                const searchType = hasSearchStringAnd ? 'searchstring_and' : 'searchstring';
-               console.log(`[debug] ${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for ${searchType} content search`);
+               console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for ${searchType} content search`));
              }
            }
            
@@ -1001,7 +1005,7 @@ function setupFrameHandling(page, forceDebug) {
                }
              } catch (curlErr) {
                if (forceDebug) {
-                 console.log(`[debug] Curl handler failed for ${reqUrl}: ${curlErr.message}`);
+                 console.log(formatLogMessage('debug', `Curl handler failed for ${reqUrl}: ${curlErr.message}`));
                }
              }
            }
@@ -1054,7 +1058,7 @@ function setupFrameHandling(page, forceDebug) {
             }
           }, cssBlockedSelectors);
         } catch (cssRuntimeErr) {
-          console.warn(`[warn][css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`);
+          console.warn(formatLogMessage('warn', `[css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`));
         }
       }
 
@@ -1083,7 +1087,7 @@ function setupFrameHandling(page, forceDebug) {
           // Continue with scan despite Cloudflare issues
         }
 
-        console.log(`[info] Loaded: (${siteCounter}/${totalUrls}) ${currentUrl}`);
+        console.log(formatLogMessage('info', `${messageColors.loaded('Loaded:')} (${siteCounter}/${totalUrls}) ${currentUrl}`));
         await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
         
         // Wait for iframes to load and log them
@@ -1091,23 +1095,23 @@ function setupFrameHandling(page, forceDebug) {
           try {
             await new Promise(resolve => setTimeout(resolve, 2000)); // Give iframes time to load
             const frames = page.frames();
-            console.log(`[debug] Total frames found: ${frames.length}`);
+            console.log(formatLogMessage('debug', `Total frames found: ${frames.length}`));
             frames.forEach((frame, index) => {
               if (frame.url() !== 'about:blank' && frame !== page.mainFrame()) {
-                console.log(`[debug] Iframe ${index}: ${frame.url()}`);
+                console.log(formatLogMessage('debug', `Iframe ${index}: ${frame.url()}`));
               }
             });
           } catch (frameDebugErr) {
-            console.log(`[debug] Frame debugging failed: ${frameDebugErr.message}`);
+            console.log(formatLogMessage('debug', `Frame debugging failed: ${frameDebugErr.message}`));
           }
         }
       } catch (err) {
-        console.error(`[error] Failed on ${currentUrl}: ${err.message}`);
+        console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
         throw err;
       }
 
       if (interactEnabled && !disableInteract) {
-        if (forceDebug) console.log(`[debug] interaction simulation enabled for ${currentUrl}`);
+        if (forceDebug) console.log(formatLogMessage('debug', `interaction simulation enabled for ${currentUrl}`));
         const randomX = Math.floor(Math.random() * 500) + 50;
         const randomY = Math.floor(Math.random() * 500) + 50;
         await page.mouse.move(randomX, randomY, { steps: 10 });
@@ -1138,9 +1142,9 @@ function setupFrameHandling(page, forceDebug) {
              sessionStorage.clear();
              indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
            });
-           if (forceDebug) console.log(`[debug] Cleared site data before reload #${i + 1} for ${currentUrl}`);
+           if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data before reload #${i + 1} for ${currentUrl}`));
          } catch (reloadClearErr) {
-           console.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${reloadClearErr.message}`);
+           console.warn(messageColors.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${reloadClearErr.message}`));
          }
        }
         await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
@@ -1148,14 +1152,14 @@ function setupFrameHandling(page, forceDebug) {
       }
 
       if (siteConfig.forcereload === true) {
-        if (forceDebug) console.log(`[debug] Forcing extra reload (cache disabled) for ${currentUrl}`);
+        if (forceDebug) console.log(formatLogMessage('debug', `Forcing extra reload (cache disabled) for ${currentUrl}`));
         try {
           await page.setCacheEnabled(false);
           await page.reload({ waitUntil: 'domcontentloaded', timeout: timeout });
           await new Promise(resolve => setTimeout(resolve, delayMs));
           await page.setCacheEnabled(true);
         } catch (forceReloadErr) {
-          console.warn(`[forcereload failed] ${currentUrl}: ${forceReloadErr.message}`);
+          console.warn(messageColors.warn(`[forcereload failed] ${currentUrl}: ${forceReloadErr.message}`));
         }
       }
 
@@ -1174,7 +1178,7 @@ function setupFrameHandling(page, forceDebug) {
       return { url: currentUrl, rules: formattedRules, success: true };
 
     } catch (err) {
-      console.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`);
+      console.warn(messageColors.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`));
 	  
       // Save any matches found even if page failed to load completely
       if (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0)) {
@@ -1188,7 +1192,7 @@ function setupFrameHandling(page, forceDebug) {
           unboundMode
         };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
-        if (forceDebug) console.log(`[debug] Saving ${formattedRules.length} rules despite page load failure`);
+        if (forceDebug) console.log(formatLogMessage('debug', `Saving ${formattedRules.length} rules despite page load failure`));
         return { url: currentUrl, rules: formattedRules, success: false, hasMatches: true };
       }
       
@@ -1200,9 +1204,9 @@ function setupFrameHandling(page, forceDebug) {
         try {
           await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
 
-          if (forceDebug) console.log(`[debug] Screenshot saved: ${filename}`);
+          if (forceDebug) console.log(formatLogMessage('debug', `Screenshot saved: ${filename}`));
         } catch (screenshotErr) {
-          console.warn(`[screenshot failed] ${currentUrl}: ${screenshotErr.message}`);
+          console.warn(messageColors.warn(`[screenshot failed] ${currentUrl}: ${screenshotErr.message}`));
         }
       }
       return { url: currentUrl, rules: [], success: false };
@@ -1212,9 +1216,9 @@ function setupFrameHandling(page, forceDebug) {
       if (cdpSession) {
         try {
           await cdpSession.detach();
-          if (forceDebug) console.log(`[debug] CDP session detached for ${currentUrl}`);
+          if (forceDebug) console.log(formatLogMessage('debug', `CDP session detached for ${currentUrl}`));
         } catch (cdpCleanupErr) {
-          if (forceDebug) console.log(`[debug] Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`);
+          if (forceDebug) console.log(formatLogMessage('debug', `Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`));
         }
       }
       // Add small delay to allow cleanup to complete
@@ -1227,9 +1231,9 @@ function setupFrameHandling(page, forceDebug) {
       if (page && !page.isClosed()) {
         try {
           await page.close();
-          if (forceDebug) console.log(`[debug] Page closed for ${currentUrl}`);
+          if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
         } catch (pageCloseErr) {
-          if (forceDebug) console.log(`[debug] Failed to close page for ${currentUrl}: ${pageCloseErr.message}`);
+          if (forceDebug) console.log(formatLogMessage('debug', `Failed to close page for ${currentUrl}: ${pageCloseErr.message}`));
         }
       }
     }
@@ -1252,9 +1256,9 @@ function setupFrameHandling(page, forceDebug) {
     currentUrlCount += urlsToProcess.length;
   }
   if (!silentMode && currentUrlCount > 0) {
-    console.log(`\nProcessing ${currentUrlCount} URLs across ${siteGroups.length} sites with concurrency ${MAX_CONCURRENT_SITES}...`);
+    console.log(`\n${messageColors.processing('Processing')} ${currentUrlCount} URLs across ${siteGroups.length} sites with concurrency ${MAX_CONCURRENT_SITES}...`);
     if (currentUrlCount > RESOURCE_CLEANUP_INTERVAL) {
-      console.log(`Browser will restart every ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
+      console.log(messageColors.processing('Browser will restart every') + ` ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
     }
   }
 
@@ -1274,7 +1278,7 @@ function setupFrameHandling(page, forceDebug) {
     // Restart browser if we've processed enough URLs and this isn't the last site
     if (wouldExceedLimit && urlsSinceLastCleanup > 0 && isNotLastSite) {
       if (!silentMode) {
-        console.log(`\n🔄 Processed ${processedUrlCount} URLs. Restarting browser before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
+        console.log(`\n${messageColors.fileOp('🔄 Processed')} ${processedUrlCount} URLs. ${messageColors.fileOp('Restarting browser')} before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
       }
       
       try {
@@ -1284,12 +1288,12 @@ function setupFrameHandling(page, forceDebug) {
           exitOnFailure: false
         });
       } catch (browserCloseErr) {
-        if (forceDebug) console.log(`[debug] Browser cleanup warning: ${browserCloseErr.message}`);
+        if (forceDebug) console.log(formatLogMessage('debug', `Browser cleanup warning: ${browserCloseErr.message}`));
       }
       
       // Create new browser for next batch
       browser = await createBrowser();
-      if (forceDebug) console.log(`[debug] New browser instance created for site ${siteIndex + 1}`);
+      if (forceDebug) console.log(formatLogMessage('debug', `New browser instance created for site ${siteIndex + 1}`));
       
       // Reset cleanup counter and add delay
       urlsSinceLastCleanup = 0;
@@ -1297,7 +1301,7 @@ function setupFrameHandling(page, forceDebug) {
     }
     
     if (forceDebug) {
-      console.log(`[debug] Processing site ${siteIndex + 1}/${siteGroups.length}: ${siteUrlCount} URL(s) (total processed: ${processedUrlCount})`);
+      console.log(formatLogMessage('debug', `Processing site ${siteIndex + 1}/${siteGroups.length}: ${siteUrlCount} URL(s) (total processed: ${processedUrlCount})`));
     }
     
     // Create tasks with current browser instance and process them
@@ -1324,7 +1328,7 @@ function setupFrameHandling(page, forceDebug) {
   const outputResult = handleOutput(results, outputConfig);
   
   if (!outputResult.success) {
-    console.error('❌ Failed to write output files');
+    console.error(messageColors.error('❌ Failed to write output files'));
     process.exit(1);
   }
 
@@ -1338,8 +1342,8 @@ function setupFrameHandling(page, forceDebug) {
   // Debug: Show output format being used
   if (forceDebug) {
     const globalOptions = { localhostMode, localhostModeAlt, plainOutput, adblockRules: adblockRulesMode, dnsmasq: dnsmasqMode, dnsmasqOld: dnsmasqOldMode, unbound: unboundMode };
-    console.log(`[debug] Output format: ${getFormatDescription(globalOptions)}`);
-    console.log(`[debug] Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`);
+     console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
+     console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
   }
   
   // Compress log files if --compress-logs is enabled
@@ -1351,7 +1355,7 @@ function setupFrameHandling(page, forceDebug) {
     if (adblockRulesLogFile && fs.existsSync(adblockRulesLogFile)) filesToCompress.push(adblockRulesLogFile);
     
     if (filesToCompress.length > 0) {
-      if (!silentMode) console.log(`\nCompressing ${filesToCompress.length} log file(s)...`);
+      if (!silentMode) console.log(`\n${messageColors.compression('Compressing')} ${filesToCompress.length} log file(s)...`);
       try {
         // Perform compression with original file deletion
         const results = await compressMultipleFiles(filesToCompress, true);
@@ -1360,22 +1364,22 @@ function setupFrameHandling(page, forceDebug) {
           // Report compression results and file sizes
           results.successful.forEach(({ original, compressed }) => {
             const originalSize = fs.statSync(compressed).size; // compressed file size
-            console.log(`✅ Compressed: ${path.basename(original)} → ${path.basename(compressed)}`);
+            console.log(messageColors.success('✅ Compressed:') + ` ${path.basename(original)} → ${path.basename(compressed)}`);
           });
           // Report any compression failures
           if (results.failed.length > 0) {
             results.failed.forEach(({ path: filePath, error }) => {
-              console.warn(`⚠ Failed to compress ${path.basename(filePath)}: ${error}`);
+              console.warn(messageColors.warn(`⚠ Failed to compress ${path.basename(filePath)}: ${error}`));
             });
           }
         }
       } catch (compressionErr) {
-        console.warn(`[warn] Log compression failed: ${compressionErr.message}`);
+        console.warn(formatLogMessage('warn', `Log compression failed: ${compressionErr.message}`));
       }
     }
   }
  
-  if (forceDebug) console.log(`[debug] Starting browser cleanup...`);
+  if (forceDebug) console.log(formatLogMessage('debug', `Starting browser cleanup...`));
 
   // Graceful browser shutdown with force closure fallback
   // Handle browser cleanup with force closure fallback (15 sec)
@@ -1386,7 +1390,7 @@ function setupFrameHandling(page, forceDebug) {
   });
 
   // Calculate timing, success rates, and provide summary information
-  if (forceDebug) console.log(`[debug] Calculating timing statistics...`);
+  if (forceDebug) console.log(formatLogMessage('debug', `Calculating timing statistics...`));
   const endTime = Date.now();
   const durationMs = endTime - startTime;
   const totalSeconds = Math.floor(durationMs / 1000);
@@ -1397,16 +1401,18 @@ function setupFrameHandling(page, forceDebug) {
   // Final summary report with timing and success statistics
   if (!silentMode) {
     if (pagesWithMatches > outputResult.successfulPageLoads) {
-      console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs loaded successfully, ${pagesWithMatches} had matches in ${hours}h ${minutes}m ${seconds}s`);
+      console.log(`\n${messageColors.success('Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs loaded successfully, ${pagesWithMatches} had matches in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
+
     } else {
-      console.log(`\nScan completed. ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${hours}h ${minutes}m ${seconds}s`);
+      console.log(`\n${messageColors.success('Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
+
     }
     if (outputResult.totalRules > 0) {
-      console.log(`Generated ${outputResult.totalRules} unique rules`);
+      console.log(messageColors.success('Generated') + ` ${outputResult.totalRules} unique rules`);
     }
   }
   
   // Clean process termination
-  if (forceDebug) console.log(`[debug] About to exit process...`);
+  if (forceDebug) console.log(formatLogMessage('debug', `About to exit process...`));
   process.exit(0);
 })();
