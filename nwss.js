@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.12 ===
+// === Network scanner script (nwss.js) v1.0.13 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,7 +18,7 @@ const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.12'; // Script version
+const VERSION = '1.0.13'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -927,6 +927,8 @@ function setupFrameHandling(page, forceDebug) {
                whoisDelay: whois_delay,
 	       whoisServer, // Pass whois server configuration
                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+               debugLogFile, // Pass debug log file for whois error logging
+               fs, // Pass fs module for file operations
                digTerms,
                digOrTerms,
                digRecordType,
