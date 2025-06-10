@@ -125,6 +125,7 @@ Example:
 |:---------------------|:-------|:-------:|:------------|
 | `whois`              | Array | - | Check whois data for ALL specified terms (AND logic) |
 | `whois-or`           | Array | - | Check whois data for ANY specified term (OR logic) |
+| `whois_delay`        | Integer | 2000 | Delay whois requests to avoid throttling (2sec Default) | 
 | `whois_server`       | String or Array | - | Custom whois server(s) - single server or randomized list |
 | `whois_max_retries`  | Integer | `2` | Maximum retry attempts per domain |
 | `whois_timeout_multiplier` | Number | `1.5` | Timeout increase multiplier per retry |
