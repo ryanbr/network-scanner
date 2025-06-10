@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.9 ===
+// === Network scanner script (nwss.js) v1.0.10 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,7 +17,7 @@ const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailabilit
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.9'; // Script version
+const VERSION = '1.0.10'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
