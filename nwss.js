@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.12 ===
+// === Network scanner script (nwss.js) v1.0.11 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,7 +18,7 @@ const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.12'; // Script version
+const VERSION = '1.0.11'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -163,6 +163,7 @@ General Options:
 Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
   blocked: ["regex1", "regex2"]                   Global regex patterns to block requests (combined with per-site blocked)
+  whois_server_mode: "random" or "cycle"      Default server selection mode for all sites (default: random)
 
 
 Per-site config.json options:
@@ -203,6 +204,7 @@ Per-site config.json options:
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
+  whois_server_mode: "random" or "cycle"      Server selection mode: random (default) or cycle through list
   whois_server: "whois.domain.com" or ["server1", "server2"]  Custom whois server(s) - single server or randomized list (default: system default)
   whois_max_retries: 2                       Maximum retry attempts per domain (default: 2)
   whois_timeout_multiplier: 1.5              Timeout increase multiplier per retry (default: 1.5)
@@ -236,7 +238,10 @@ try {
   console.error(`❌ Failed to load config file (${configPath}):`, e.message);
   process.exit(1);
 }
-const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 2000 } = config;
+const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 2000, whois_server_mode = 'random' } = config;
+
+// Add global cycling index tracker for whois server selection
+let globalWhoisServerIndex = 0;
 
 // --- Log File Setup ---
 let debugLogFile = null;
@@ -921,6 +926,7 @@ function setupFrameHandling(page, forceDebug) {
                whoisOrTerms,
                whoisDelay: whois_delay,
 	       whoisServer, // Pass whois server configuration
+               whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
                digTerms,
                digOrTerms,
                digRecordType,
