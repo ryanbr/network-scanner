@@ -189,6 +189,7 @@ Global config.json options:
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
+  comments: "text" or ["text1", "text2"]       Documentation/notes - ignored by script
   searchstring: "text" or ["text1", "text2"]   Text to search in response content (requires filterRegex match)
   searchstring_and: "text" or ["text1", "text2"] Text to search with AND logic - ALL terms must be present (requires filterRegex match)
   curl: true/false                             Use curl to download content for analysis (default: false)
@@ -260,7 +261,9 @@ try {
   console.error(`❌ Failed to load config file (${configPath}):`, e.message);
   process.exit(1);
 }
-const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 2000, whois_server_mode = 'random' } = config;
+// Extract config values while ignoring 'comments' field at global and site levels
+const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 2000, whois_server_mode = 'random', comments: globalComments, ...otherGlobalConfig } = config;
+
 
 // Add global cycling index tracker for whois server selection
 let globalWhoisServerIndex = 0;
@@ -293,6 +296,13 @@ if (dumpUrls) {
     adblockRulesLogFile = path.join(logsFolder, `adblock_rules_${timestamp}.txt`);
     console.log(messageColors.processing('Adblock rules will be saved to:') + ` ${adblockRulesLogFile}`); 
   }
+}
+
+// Log comments if debug mode is enabled and comments exist
+if (forceDebug && globalComments) {
+  const commentList = Array.isArray(globalComments) ? globalComments : [globalComments];
+  console.log(formatLogMessage('debug', `Global comments found: ${commentList.length} item(s)`));
+  commentList.forEach((comment, idx) => console.log(formatLogMessage('debug', `  Comment ${idx + 1}: ${comment}`)));
 }
 // --- Global CDP Override Logic --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
 // If globalCDP is not already enabled by the --cdp flag,
@@ -470,6 +480,15 @@ function setupFrameHandling(page, forceDebug) {
     const cloudflareBypass = siteConfig.cloudflare_bypass === true;
     const sitePrivoxy = siteConfig.privoxy === true;
     const sitePihole = siteConfig.pihole === true;
+    
+    // Log site-level comments if debug mode is enabled
+    if (forceDebug && siteConfig.comments) {
+      const siteComments = Array.isArray(siteConfig.comments) ? siteConfig.comments : [siteConfig.comments];
+      console.log(formatLogMessage('debug', `Site comments for ${currentUrl}: ${siteComments.length} item(s)`));
+      siteComments.forEach((comment, idx) => 
+        console.log(formatLogMessage('debug', `  Site comment ${idx + 1}: ${comment}`))
+      );
+    }
 
     if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
       console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);

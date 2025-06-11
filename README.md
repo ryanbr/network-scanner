@@ -108,6 +108,7 @@ Example:
 | `url`                | String |   -     | Website URL to scan |
 | `userAgent`          | `chrome`, `firefox`, `safari`, `mobile-chrome`, etc. | - | User agent for page |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
+| `comments`           | String or Array | - | String of comments or references |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |
 | `delay`              | Milliseconds | `2000` | Wait time after loading/reloading |

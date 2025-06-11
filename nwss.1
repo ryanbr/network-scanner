@@ -146,6 +146,10 @@ Single URL string or array of URLs to scan.
 Regex pattern(s) to match suspicious requests.
 
 .TP
+.B comments
+Documentation strings or notes - completely ignored by the scanner. Can be a single string or array of strings. Used for adding context, URLs, timestamps, or any documentation notes to configuration files.
+
+.TP
 .B searchstring
 Text string(s) to search for in response content (OR logic).
 
@@ -466,6 +470,28 @@ Boolean. Force plain domain output for this site.
       "resourceTypes": ["script", "xhr", "fetch"],
       "delay": 5000,
       "reload": 2
+    }
+  ]
+}
+.EE
+
+.SS Configuration with documentation comments:
+.EX
+{
+  "comments": ["Testing malware sites", "Updated 2025-01-15", "https://docs.example.com/config"],
+  "sites": [
+    {
+      "url": "https://suspicious-site.com",
+      "comments": "Main phishing target for Q1 testing",
+      "filterRegex": "\\\\.(space|website|tech|buzz)\\\\b",
+      "resourceTypes": ["script", "xhr", "fetch"]
+    },
+    {
+      "url": "https://crypto-mining.com",
+      "comments": ["Cryptojacking site", "Added by security team", "Ticket #12345"],
+      "filterRegex": "\\\\.(top|click)\\\\b",
+      "searchstring": ["mining", "crypto"],
+      "curl": true
     }
   ]
 }
