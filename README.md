@@ -39,7 +39,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--dnsmasq-old`             | Output as `server=/domain.com/` (dnsmasq old format) |
 | `--unbound`                 | Output as `local-zone: "domain.com." always_null` (unbound format) |
 | `--privoxy`                 | Output as `{ +block } .domain.com` (Privoxy format) |
-| `--pihole`                  | Output as `(^|\\.)domain\\.com$` (Pi-hole regex format) |
+| `--pihole`                  | Output as `(^\|\\.)domain\\.com$` (Pi-hole regex format) |
 | `--adblock-rules`           | Generate adblock filter rules with resource type modifiers (requires `-o`) |
 
 ### General Options
