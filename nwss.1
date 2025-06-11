@@ -1,4 +1,4 @@
-.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.9" "User Commands"
+.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.15" "User Commands"
 .SH NAME
 NWSS scanner-script \- Network scanner for malware detection and domain analysis
 
@@ -47,6 +47,14 @@ Output as \fBserver=/domain.com/\fR format for older dnsmasq versions.
 .TP
 .B \--unbound
 Output as \fBlocal-zone: "domain.com." always_null\fR format for Unbound DNS.
+
+.TP
+.B \--privoxy
+Output as \fB{ +block } .domain.com\fR format for Privoxy action files.
+
+.TP
+.B \--pihole
+Output as \fB(^|\\.)domain\\.com$\fR format for Pi-hole regex filters.
 
 .TP
 .B \--adblock-rules
@@ -341,6 +349,14 @@ Boolean. Force dnsmasq old format for this site.
 Boolean. Force unbound output format for this site.
 
 .TP
+.B privoxy
+Boolean. Force Privoxy output format for this site.
+
+.TP
+.B pihole
+Boolean. Force Pi-hole regex output format for this site.
+
+.TP
 .B plain
 Boolean. Force plain domain output for this site.
 
@@ -462,6 +478,16 @@ Boolean. Force plain domain output for this site.
 node nwss.js --output rules.txt --adblock-rules --verbose
 .EE
 
+.SS Run with Privoxy output format:
+.EX
+node nwss.js --output user.action --privoxy --remove-dupes
+.EE
+
+.SS Run with Pi-hole regex format:
+.EX
+node nwss.js --output pihole_regex.txt --pihole --titles
+.EE
+
 .SS Debug mode with URL logging:
 .EX
 node nwss.js --debug --dumpurls --compress-logs
@@ -472,6 +498,8 @@ node nwss.js --debug --dumpurls --compress-logs
 node nwss.js -o hosts.txt --localhost --remove-dupes
 node nwss.js -o dnsmasq.conf --dnsmasq --titles
 node nwss.js -o unbound.conf --unbound --sub-domains
+node nwss.js -o user.action --privoxy --verbose
+node nwss.js -o regex.txt --pihole --debug
 .EE
 
 .SS Advanced browser configuration:
@@ -572,10 +600,85 @@ node nwss.js -o unbound.conf --unbound --sub-domains
       "filterRegex": "\\\\.(website)\\\\b",
       "dnsmasq": true,
       "plain": false
+    },
+    {
+      "url": "https://site3.com",
+      "filterRegex": "\\\\.(buzz)\\\\b",
+      "privoxy": true
+    },
+    {
+      "url": "https://site4.com",
+      "filterRegex": "\\\\.(tech)\\\\b",
+      "pihole": true
     }
   ]
 }
 .EE
+
+.SS Privoxy-specific configuration:
+.EX
+{
+  "url": "https://ad-heavy-site.com",
+  "filterRegex": "\\\\.(ads|doubleclick|googlesyndication)\\\\.",
+  "privoxy": true,
+  "resourceTypes": ["script", "image", "xhr"],
+  "blocked": ["analytics", "tracking"],
+  "delay": 3000
+}
+.EE
+
+.SS Pi-hole regex generation:
+.EX
+{
+  "url": "https://tracker-network.com",
+  "filterRegex": "\\\\.(top|click|buzz|space)\\\\b",
+  "pihole": true,
+  "whois-or": ["privacy", "protection"],
+  "resourceTypes": ["script", "fetch", "xhr"]
+}
+.EE
+
+.SH OUTPUT FORMATS
+
+The scanner supports multiple output formats for different blocking systems:
+
+.SS Standard Adblock Format
+Default format: \fB||domain.com^\fR
+.br
+Compatible with uBlock Origin, AdBlock Plus, and other browser ad blockers.
+
+.SS Privoxy Format
+Flag: \fB\--privoxy\fR
+.br
+Format: \fB{ +block } .domain.com\fR
+.br
+For use in Privoxy action files. The leading dot blocks domain and all subdomains.
+
+.SS Pi-hole Regex Format
+Flag: \fB\--pihole\fR
+.br
+Format: \fB(^|\\.)domain\\.com$\fR
+.br
+For Pi-hole regex filters. Blocks domain and subdomains at DNS level.
+
+.SS Hosts File Formats
+Flags: \fB\--localhost\fR, \fB\--localhost-0.0.0.0\fR
+.br
+Formats: \fB127.0.0.1 domain.com\fR, \fB0.0.0.0 domain.com\fR
+.br
+For system hosts files.
+
+.SS DNS Server Formats
+Flags: \fB\--dnsmasq\fR, \fB\--dnsmasq-old\fR, \fB\--unbound\fR
+.br
+For dnsmasq and Unbound DNS servers.
+
+.SS Plain Domain Format
+Flag: \fB\--plain\fR
+.br
+Format: \fBdomain.com\fR
+.br
+Simple domain list without formatting.
 
 .SH FILES
 
@@ -586,6 +689,10 @@ Default configuration file containing scan targets and rules.
 .TP
 .B logs/
 Directory created for debug and matched URL logs when \fB\--debug\fR or \fB\--dumpurls\fR is used.
+
+.TP
+.B user.action
+Common Privoxy action file when using \fB\--privoxy\fR output.
 
 .SH DETECTION METHODS
 
@@ -637,7 +744,8 @@ Report bugs to the project repository or maintainer.
 .BR whois (1),
 .BR dig (1),
 .BR dnsmasq (8),
-.BR unbound (8)
+.BR unbound (8),
+.BR privoxy (8)
 
 .SH AUTHORS
 Written for malware research and network security analysis.
