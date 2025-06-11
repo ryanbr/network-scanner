@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.13 ===
+// === Network scanner script (nwss.js) v1.0.14 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,7 +18,7 @@ const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.13'; // Script version
+const VERSION = '1.0.14'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -63,6 +63,7 @@ const dnsmasqMode = args.includes('--dnsmasq');
 const dnsmasqOldMode = args.includes('--dnsmasq-old');
 const unboundMode = args.includes('--unbound');
 const removeDupes = args.includes('--remove-dupes') || args.includes('--remove-dubes');
+const privoxyMode = args.includes('--privoxy');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
 
@@ -74,7 +75,7 @@ if (adblockRulesMode) {
   if (!outputFile) {
     if (forceDebug) console.log(formatLogMessage('debug', `--adblock-rules ignored: requires --output (-o) to specify an output file`));
     adblockRulesMode = false;
-  } else if (localhostMode || localhostModeAlt || plainOutput || dnsmasqMode || dnsmasqOldMode || unboundMode) {
+  } else if (localhostMode || localhostModeAlt || plainOutput || dnsmasqMode || dnsmasqOldMode || unboundMode || privoxyMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--adblock-rules ignored: incompatible with localhost/plain output modes`));
     adblockRulesMode = false;
   }
@@ -82,7 +83,7 @@ if (adblockRulesMode) {
 
 // Validate --dnsmasq usage
 if (dnsmasqMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqOldMode || unboundMode) {
+  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqOldMode || unboundMode || privoxyMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     dnsmasqMode = false;
   }
@@ -90,7 +91,7 @@ if (dnsmasqMode) {
 
 // Validate --dnsmasq-old usage
 if (dnsmasqOldMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || unboundMode) {
+  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || unboundMode || privoxyMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     dnsmasqOldMode = false;
   }
@@ -98,9 +99,17 @@ if (dnsmasqOldMode) {
 
 // Validate --unbound usage
 if (unboundMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode) {
+  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || privoxyMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--unbound ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     unboundMode = false;
+  }
+}
+
+// Validate --privoxy usage
+if (privoxyMode) {
+  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || unboundMode) {
+    if (forceDebug) console.log(formatLogMessage('debug', `--privoxy ignored: incompatible with localhost/plain/adblock-rules/dnsmasq/unbound output modes`));
+    privoxyMode = false;
   }
 }
 
@@ -141,6 +150,7 @@ Output Format Options:
   --dnsmasq                      Output as local=/domain.com/ (dnsmasq format)
   --dnsmasq-old                  Output as server=/domain.com/ (dnsmasq old format)
   --unbound                      Output as local-zone: "domain.com." always_null (unbound format)
+  --privoxy                      Output as { +block } .domain.com (Privoxy format)
   --adblock-rules                Generate adblock filter rules with resource type modifiers (requires -o)
 
 General Options:
@@ -191,6 +201,7 @@ Per-site config.json options:
   dnsmasq: true/false                          Force dnsmasq output (local=/domain.com/)
   dnsmasq_old: true/false                      Force dnsmasq old output (server=/domain.com/)
   unbound: true/false                          Force unbound output (local-zone: "domain.com." always_null)
+  privoxy: true/false                          Force Privoxy output ({ +block } .domain.com)
   source: true/false                           Save page source HTML after load
   firstParty: true/false                       Allow first-party matches (default: false)
   thirdParty: true/false                       Allow third-party matches (default: true)
@@ -446,6 +457,7 @@ function setupFrameHandling(page, forceDebug) {
     const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
     const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
     const cloudflareBypass = siteConfig.cloudflare_bypass === true;
+    const sitePrivoxy = siteConfig.privoxy === true;
 
     if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
       console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
@@ -1180,7 +1192,8 @@ function setupFrameHandling(page, forceDebug) {
         adblockRulesMode,
         dnsmasqMode,
         dnsmasqOldMode,
-        unboundMode
+        unboundMode,
+        privoxyMode
       };
       const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
       
@@ -1350,7 +1363,16 @@ function setupFrameHandling(page, forceDebug) {
 
   // Debug: Show output format being used
   if (forceDebug) {
-    const globalOptions = { localhostMode, localhostModeAlt, plainOutput, adblockRules: adblockRulesMode, dnsmasq: dnsmasqMode, dnsmasqOld: dnsmasqOldMode, unbound: unboundMode };
+    const globalOptions = {
+      localhostMode,
+      localhostModeAlt,
+      plainOutput,
+      adblockRules: adblockRulesMode,
+      dnsmasq: dnsmasqMode,
+      dnsmasqOld: dnsmasqOldMode,
+      unbound: unboundMode,
+      privoxy: privoxyMode
+    };
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
   }
