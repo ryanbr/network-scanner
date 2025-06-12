@@ -449,6 +449,8 @@ function setupFrameHandling(page, forceDebug) {
       const frameUrl = frame.url();
       if (frameUrl &&
           frameUrl !== 'about:blank' &&
+          frameUrl !== 'about:srcdoc' &&
+          !frameUrl.startsWith('about:') &&
           !frameUrl.startsWith('chrome-error://') &&
           !frameUrl.startsWith('chrome-extension://')) {
         console.log(formatLogMessage('debug', `Frame detached: ${frameUrl}`));
