@@ -371,36 +371,87 @@ function setupFrameHandling(page, forceDebug) {
   page.on('frameattached', async (frame) => {
     if (frame.parentFrame()) { // Only handle child frames, not main frame
       try {
+        const frameUrl = frame.url();
+        
         if (forceDebug) {
-          console.log(formatLogMessage('debug', `New frame attached: ${frame.url() || 'about:blank'}`));
+          console.log(formatLogMessage('debug', `New frame attached: ${frameUrl || 'about:blank'}`));
         }
         
         // Don't try to navigate to frames with invalid/empty URLs
-        const frameUrl = frame.url();
-        if (!frameUrl || frameUrl === 'about:blank' || frameUrl === '') {
+        if (!frameUrl ||
+            frameUrl === 'about:blank' ||
+            frameUrl === '' ||
+            frameUrl === 'about:srcdoc' ||
+            frameUrl.startsWith('about:') ||
+            frameUrl.startsWith('data:') ||
+            frameUrl.startsWith('blob:') ||
+            frameUrl.startsWith('chrome-error://') ||
+            frameUrl.startsWith('chrome-extension://')) {
           if (forceDebug) {
-            console.log(formatLogMessage('debug', `Skipping frame with empty/invalid URL`));
+            console.log(formatLogMessage('debug', `Skipping frame with invalid/special URL: ${frameUrl}`));
           }
           return;
         }
         
         // Validate URL format before attempting navigation
         try {
-          new URL(frameUrl);
+          const parsedUrl = new URL(frameUrl);
+          // Only process http/https URLs
+          if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `Skipping frame with non-http protocol: ${frameUrl}`));
+            }
+            return;
+          }
         } catch (urlErr) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Skipping frame with malformed URL: ${frameUrl}`));
           }
           return;
         }
+        // REMOVED: Don't try to manually navigate frames
+        // Let frames load naturally - manual navigation often causes Protocol errors
+        // await frame.goto(frame.url(), { waitUntil: 'domcontentloaded', timeout: 5000 });
         
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Frame will load naturally: ${frameUrl}`));
+        }
+       
       } catch (err) {
         // Suppress "Cannot navigate to invalid URL" errors but log others
-        if (!err.message.includes('Cannot navigate to invalid URL')) {
+        if (!err.message.includes('Cannot navigate to invalid URL') && 
+            !err.message.includes('Protocol error')) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Frame handling error: ${err.message}`));
           }
         }
+      }
+    }
+  });
+  // Handle frame navigations (keep this for monitoring)
+  page.on('framenavigated', (frame) => {
+    const frameUrl = frame.url();
+    if (forceDebug &&
+        frameUrl &&
+        frameUrl !== 'about:blank' &&
+        frameUrl !== 'about:srcdoc' &&
+        !frameUrl.startsWith('about:') &&
+        !frameUrl.startsWith('data:') &&
+        !frameUrl.startsWith('chrome-error://') &&
+        !frameUrl.startsWith('chrome-extension://')) {
+      console.log(formatLogMessage('debug', `Frame navigated to: ${frameUrl}`));
+    }
+  });
+
+  // Optional: Handle frame detachment for cleanup
+  page.on('framedetached', (frame) => {
+    if (forceDebug) {
+      const frameUrl = frame.url();
+      if (frameUrl &&
+          frameUrl !== 'about:blank' &&
+          !frameUrl.startsWith('chrome-error://') &&
+          !frameUrl.startsWith('chrome-extension://')) {
+        console.log(formatLogMessage('debug', `Frame detached: ${frameUrl}`));
       }
     }
   });
@@ -602,34 +653,6 @@ function setupFrameHandling(page, forceDebug) {
 	  // Set up frame handling to suppress invalid URL errors
       setupFrameHandling(page, forceDebug);
 	  
-      // --- Setup iframe monitoring ---
-      // Monitor all frames (including iframes) for network requests
-      page.on('frameattached', async (frame) => {
-        if (forceDebug) {
-          console.log(formatLogMessage('debug', `New frame detected: ${frame.url()}`));
-        }
-        
-        try {
-          // Wait for frame to be ready and set up request interception
-          await frame.goto(frame.url(), { waitUntil: 'domcontentloaded', timeout: 5000 });
-        } catch (frameErr) {
-          if (forceDebug) {
-            console.log(formatLogMessage('debug', `Frame navigation failed: ${frameErr.message}`));
-          }
-        }
-      });
-      
-      // Monitor frame navigations 
-      page.on('framenavigated', (frame) => {
-        if (forceDebug && frame.url() !== 'about:blank') {
-          console.log(formatLogMessage('debug', `Frame navigated to: ${frame.url()}`));
-        }
-      });
-      
-      // The existing request handler will now catch requests from all frames
-      // because we're using page.on('request') which monitors the entire page context
-      // --- End iframe monitoring setup ---
-
       if (siteConfig.clear_sitedata === true) {
         try {
           let clearDataSession = null;
