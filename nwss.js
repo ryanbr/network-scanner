@@ -22,6 +22,21 @@ const VERSION = '1.0.15'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
+// Add retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  retryDelay: 3000, // 3 seconds base delay
+  backoffMultiplier: 1.5,
+  retryableErrors: [
+    'Protocol error: Connection closed',
+    'net::ERR_CONNECTION_RESET',
+    'net::ERR_CONNECTION_REFUSED',
+    'net::ERR_TIMED_OUT',
+    'Navigation timeout',
+    'Target closed'
+  ]
+};
+
 // get startTime
 const startTime = Date.now();
 
@@ -459,6 +474,18 @@ function setupFrameHandling(page, forceDebug) {
   });
 }
 
+// Add utility functions for retry logic
+function isRetryableError(error) {
+  const errorMessage = error.message || error.toString();
+  return RETRY_CONFIG.retryableErrors.some(retryableError => 
+    errorMessage.includes(retryableError)
+  );
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
@@ -480,10 +507,21 @@ function setupFrameHandling(page, forceDebug) {
         '--window-size=1920,1080',
         '--disable-extensions',
         '--no-default-browser-check',
-        '--safebrowsing-disable-auto-update'
+        '--safebrowsing-disable-auto-update',
+        // Additional stability args for connection issues
+        '--disable-web-security',
+        '--disable-features=VizDisplayCompositor',
+        '--disable-background-timer-throttling',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-ipc-flooding-protection',
+        '--max_old_space_size=4096'
       ],
       headless: launchHeadless,
-      protocolTimeout: 300000
+      protocolTimeout: 300000,
+      handleSIGINT: false,
+      handleSIGTERM: false,
+      handleSIGHUP: false
     });
   }
   const pLimit = (await import('p-limit')).default;
@@ -508,6 +546,101 @@ function setupFrameHandling(page, forceDebug) {
   // (The code block for this initial global CDP session has been removed.
   // CDP is now handled on a per-page basis within processUrl if enabled.)
 
+  /**
+   * Enhanced processUrl with retry logic for connection errors
+   */
+  async function processUrlWithRetry(currentUrl, siteConfig, browserInstance, attempt = 1) {
+    try {
+      return await processUrl(currentUrl, siteConfig, browserInstance);
+    } catch (error) {
+      const isLastAttempt = attempt >= RETRY_CONFIG.maxRetries;
+      const shouldRetry = isRetryableError(error) && !isLastAttempt;
+      
+      if (shouldRetry) {
+        const delay = Math.min(RETRY_CONFIG.retryDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1), 10000); // Cap at 10 seconds
+        console.warn(`⚠ Attempt ${attempt}/${RETRY_CONFIG.maxRetries} failed for ${currentUrl}: ${error.message}`);
+        console.log(`🔄 Retrying in ${delay}ms...`);
+        
+        await sleep(delay);
+        
+        // Restart browser on connection errors
+        if (error.message.includes('Protocol error: Connection closed')) {
+          try {
+            if (forceDebug) console.log(formatLogMessage('debug', `Restarting browser due to connection error...`));
+            // Force close with timeout
+            await Promise.race([
+              browserInstance.close(),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Browser close timeout')), 5000))
+            ]);
+            browserInstance = await createBrowser();
+          } catch (browserRestartErr) {
+            if (forceDebug) console.log(formatLogMessage('debug', `Browser restart failed: ${browserRestartErr.message}`));
+            // Continue with existing browser instance if restart fails
+          }
+        }
+        
+        return await processUrlWithRetry(currentUrl, siteConfig, browserInstance, attempt + 1);
+      } else {
+        // Final failure - return partial results if any matches were found
+        console.warn(`❌ All ${RETRY_CONFIG.maxRetries} attempts failed for ${currentUrl}: ${error.message}`);
+        return { url: currentUrl, rules: [], success: false, retryFailed: true };
+      }
+    }
+  }
+
+  /**
+   * Enhanced navigation with better error handling
+   */
+  async function navigateWithRetry(page, url, options = {}, maxAttempts = 2, pageTimeout = 30000) {
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const defaultOptions = { 
+          waitUntil: 'domcontentloaded', // More reliable than 'load' for flaky connections
+          timeout: Math.min(45000, Math.max(pageTimeout, 30000)) // Between 30-45 seconds
+        };
+        const finalOptions = { ...defaultOptions, ...options };
+        
+        await page.goto(url, finalOptions);
+        return true;
+      } catch (navError) {
+        if (attempt === maxAttempts) {
+          throw navError;
+        }
+        
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Navigation attempt ${attempt} failed for ${url}: ${navError.message}`));
+        }
+        
+        // Try to recover the page
+        try {
+          if (!page.isClosed()) {
+            await page.evaluate(() => window.stop());
+          }
+        } catch (stopError) {
+          // Ignore stop errors
+        }
+        
+        await sleep(2000 * attempt);
+      }
+    }
+    return false;
+  }
+  
+  /**
+   * Enhanced browser health check
+   */
+  async function isBrowserHealthy(browser) {
+    try {
+      const pages = await browser.pages();
+      await browser.version();
+      return true;
+    } catch (healthError) {
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `Browser health check failed: ${healthError.message}`));
+      }
+      return false;
+    }
+  }
 
   // --- Global evaluateOnNewDocument for Fetch/XHR Interception ---
   // REMOVED: The old flawed global loop for evaluateOnNewDocument (Fetch/XHR interception) is removed.
@@ -560,8 +693,21 @@ function setupFrameHandling(page, forceDebug) {
       page = await browserInstance.newPage();
       
       // Set consistent timeouts for the page
-      page.setDefaultTimeout(timeout);
-      page.setDefaultNavigationTimeout(timeout);
+      page.setDefaultTimeout(Math.max(timeout, 60000)); // At least 60 seconds
+      page.setDefaultNavigationTimeout(Math.max(timeout, 60000));
+
+      // Add page error handlers
+      page.on('error', (err) => {
+        if (forceDebug) console.log(`[debug] Page error: ${err.message}`);
+      });
+      
+      page.on('pageerror', (err) => {
+        if (forceDebug) console.log(`[debug] Page script error: ${err.message}`);
+      });
+      
+      page.on('console', (msg) => {
+        if (forceDebug && msg.type() === 'error') console.log(`[debug] Console error: ${msg.text()}`);
+      });
 
       // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
       // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
@@ -1140,17 +1286,16 @@ function setupFrameHandling(page, forceDebug) {
       }
 
       try {
-        // Use custom goto options if provided, otherwise default to 'load'
-		// load                  Wait for all resources (default)
-		// domcontentloaded      Wait for DOM only
-		// networkidle0          Wait until 0 network requests for 500ms
-		// networkidle2          Wait until ≤2 network requests for 500ms 
-        const defaultGotoOptions = { waitUntil: 'load', timeout: timeout };
-        const gotoOptions = siteConfig.goto_options 
-          ? { ...defaultGotoOptions, ...siteConfig.goto_options }
-          : defaultGotoOptions;
-          
-        await page.goto(currentUrl, gotoOptions);
+        // Use custom goto options if provided, otherwise default to 'domcontentloaded'
+        // load                  Wait for all resources (can timeout on broken sites)
+        // domcontentloaded      Wait for DOM only (more reliable for flaky connections)
+        // networkidle0          Wait until 0 network requests for 500ms
+        // networkidle2          Wait until ≤2 network requests for 500ms
+        const defaultGotoOptions = { waitUntil: 'domcontentloaded', timeout: Math.max(timeout, 45000) };
+        const gotoOptions = siteConfig.goto_options ? { ...defaultGotoOptions, ...siteConfig.goto_options } : defaultGotoOptions;
+        
+        // Use enhanced navigation with retry
+        await navigateWithRetry(page, currentUrl, gotoOptions, 2, timeout);
         siteCounter++;
 
         // Handle all Cloudflare protections using the dedicated module
@@ -1365,8 +1510,16 @@ function setupFrameHandling(page, forceDebug) {
     
     // Restart browser if we've processed enough URLs and this isn't the last site
     if (wouldExceedLimit && urlsSinceLastCleanup > 0 && isNotLastSite) {
+      // Check browser health before restart
+      const isHealthy = await isBrowserHealthy(browser);
+      if (!isHealthy) {
+        if (!silentMode) {
+          console.log(`\n${messageColors.fileOp('⚠ Browser unhealthy')}, forcing restart before site ${siteIndex + 1}/${siteGroups.length}...`);
+        }
+      } else {
       if (!silentMode) {
-        console.log(`\n${messageColors.fileOp('🔄 Processed')} ${processedUrlCount} URLs. ${messageColors.fileOp('Restarting browser')} before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
+          console.log(`\n${messageColors.fileOp('🔄 Processed')} ${processedUrlCount} URLs. ${messageColors.fileOp('Restarting browser')} before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
+        }
       }
       
       try {
@@ -1393,7 +1546,14 @@ function setupFrameHandling(page, forceDebug) {
     }
     
     // Create tasks with current browser instance and process them
-    const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrl(url, siteGroup.config, browser)));
+    // Double-check browser health before processing this site group
+    const isBrowserStillHealthy = await isBrowserHealthy(browser);
+    if (!isBrowserStillHealthy) {
+      console.warn(messageColors.warn(`⚠ Browser became unhealthy, attempting restart before site ${siteIndex + 1}...`));
+      browser = await createBrowser();
+    }
+
+    const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrlWithRetry(url, siteGroup.config, browser)));
     const siteResults = await Promise.all(siteTasks);
     results.push(...siteResults);
     
@@ -1513,4 +1673,29 @@ function setupFrameHandling(page, forceDebug) {
   // Clean process termination
   if (forceDebug) console.log(formatLogMessage('debug', `About to exit process...`));
   process.exit(0);
+  
+  // Add graceful shutdown handling
+  process.on('SIGINT', async () => {
+    console.log('\n🛑 Received interrupt signal, shutting down gracefully...');
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (err) {
+        console.log('Browser cleanup error during shutdown:', err.message);
+      }
+    }
+    process.exit(0);
+  });
+  process.on('SIGTERM', async () => {
+    console.log('\n🛑 Received termination signal, shutting down gracefully...');
+    if (browser) {
+      try {
+        await browser.close();
+      } catch (err) {
+        console.log('Browser cleanup error during shutdown:', err.message);
+      }
+    }
+    process.exit(0);
+  }); 
+  
 })();
