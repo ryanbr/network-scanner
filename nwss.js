@@ -1174,8 +1174,16 @@ function setupFrameHandling(page, forceDebug) {
             const frames = page.frames();
             console.log(formatLogMessage('debug', `Total frames found: ${frames.length}`));
             frames.forEach((frame, index) => {
-              if (frame.url() !== 'about:blank' && frame !== page.mainFrame()) {
-                console.log(formatLogMessage('debug', `Iframe ${index}: ${frame.url()}`));
+          const frameUrl = frame.url();
+          if (frameUrl &&
+              frameUrl !== 'about:blank' &&
+              frameUrl !== 'about:srcdoc' &&
+              !frameUrl.startsWith('about:') &&
+              !frameUrl.startsWith('data:') &&
+              !frameUrl.startsWith('chrome-error://') &&
+              !frameUrl.startsWith('chrome-extension://') &&
+              frame !== page.mainFrame()) {
+                console.log(formatLogMessage('debug', `Iframe ${index}: ${frameUrl}`));
               }
             });
           } catch (frameDebugErr) {
