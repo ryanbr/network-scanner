@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.15 ===
+// === Network scanner script (nwss.js) v1.0.17 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,7 +18,7 @@ const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.15'; // Script version
+const VERSION = '1.0.17'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -491,11 +491,48 @@ function sleep(ms) {
 (async () => {
   /**
    * Creates a new browser instance with consistent configuration
+   * Uses system Chrome and temporary directories to minimize disk usage
    * @returns {Promise<import('puppeteer').Browser>} Browser instance
    */
   async function createBrowser() {
+    // Create temporary user data directory that we can fully control and clean up
+    const tempUserDataDir = `/tmp/puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+
+    // Try to find system Chrome installation to avoid Puppeteer downloads
+    const systemChromePaths = [
+      '/usr/bin/google-chrome-stable',
+      '/usr/bin/google-chrome',
+      '/usr/bin/chromium-browser',
+      '/usr/bin/chromium',
+      '/snap/bin/chromium'
+    ];
+
+    let executablePath = null;
+    for (const chromePath of systemChromePaths) {
+      if (fs.existsSync(chromePath)) {
+        executablePath = chromePath;
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Using system Chrome: ${chromePath}`));
+        }
+        break;
+      }
+    }
     return await puppeteer.launch({
+      // Use system Chrome if available to avoid downloads
+      executablePath: executablePath,
+      // Force temporary user data directory for complete cleanup control
+      userDataDir: tempUserDataDir,
       args: [
+        // Disk space controls - 50MB cache limits
+        '--disk-cache-size=52428800', // 50MB disk cache (50 * 1024 * 1024)
+        '--media-cache-size=52428800', // 50MB media cache  
+        '--disable-application-cache',
+        '--disable-offline-load-stale-cache',
+        '--disable-background-downloads',
+        '--no-first-run',
+        '--disable-default-apps',
+        '--disable-component-extensions-with-background-pages',
+        '--disable-background-networking',
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-features=SafeBrowsing',
@@ -508,14 +545,13 @@ function sleep(ms) {
         '--disable-extensions',
         '--no-default-browser-check',
         '--safebrowsing-disable-auto-update',
-        // Additional stability args for connection issues
         '--disable-web-security',
         '--disable-features=VizDisplayCompositor',
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
         '--disable-ipc-flooding-protection',
-        '--max_old_space_size=4096'
+        '--max_old_space_size=1024'
       ],
       headless: launchHeadless,
       protocolTimeout: 300000,
@@ -524,6 +560,39 @@ function sleep(ms) {
       handleSIGHUP: false
     });
   }
+
+  /**
+   * Cleanup Chrome temporary files and directories
+   */
+  async function cleanupChromeFiles() {
+    try {
+      const { execSync } = require('child_process');
+
+      // Clean Chrome cache directories with shell commands for wildcards
+      const cleanupCommands = [
+        'rm -rf /tmp/.org.chromium.Chromium.* 2>/dev/null || true',
+        'rm -rf /tmp/puppeteer-* 2>/dev/null || true',
+        'rm -rf /dev/shm/.org.chromium.Chromium.* 2>/dev/null || true'
+      ];
+
+      for (const command of cleanupCommands) {
+        try {
+          execSync(command, { stdio: 'ignore' });
+        } catch (cmdErr) {
+          // Ignore individual command errors
+        }
+      }
+
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', 'Chrome temporary files cleaned'));
+      }
+    } catch (cleanupErr) {
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `Chrome cleanup error: ${cleanupErr.message}`));
+      }
+    }
+  }
+
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(MAX_CONCURRENT_SITES);
 
@@ -532,6 +601,9 @@ function sleep(ms) {
   // launch with no safe browsing
   let browser = await createBrowser();
   if (forceDebug) console.log(formatLogMessage('debug', `Launching browser with headless: ${launchHeadless}`));
+
+  // Initial cleanup of any existing Chrome temp files
+  await cleanupChromeFiles();
  
   let siteCounter = 0;
   const totalUrls = sites.reduce((sum, site) => {
@@ -567,11 +639,21 @@ function sleep(ms) {
         if (error.message.includes('Protocol error: Connection closed')) {
           try {
             if (forceDebug) console.log(formatLogMessage('debug', `Restarting browser due to connection error...`));
+
+            // Get user data dir before closing browser
+            const userDataDir = browserInstance._userDataDir || browserInstance.process()?.spawnargs?.find(arg => arg.includes('--user-data-dir='))?.split('=')[1];
+   
             // Force close with timeout
             await Promise.race([
               browserInstance.close(),
               new Promise((_, reject) => setTimeout(() => reject(new Error('Browser close timeout')), 5000))
             ]);
+
+            // Clean up the specific user data directory
+            if (userDataDir && fs.existsSync(userDataDir)) {
+              fs.rmSync(userDataDir, { recursive: true, force: true });
+            }
+
             browserInstance = await createBrowser();
           } catch (browserRestartErr) {
             if (forceDebug) console.log(formatLogMessage('debug', `Browser restart failed: ${browserRestartErr.message}`));
@@ -1462,6 +1544,13 @@ function sleep(ms) {
       }
       
       if (page && !page.isClosed()) {
+        // Clear page resources before closing
+        try {
+          await page.evaluate(() => {
+            if (window.gc) window.gc(); // Force garbage collection if available
+          });
+        } catch (gcErr) { /* ignore */ }
+
         try {
           await page.close();
           if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
@@ -1510,6 +1599,10 @@ function sleep(ms) {
     
     // Restart browser if we've processed enough URLs and this isn't the last site
     if (wouldExceedLimit && urlsSinceLastCleanup > 0 && isNotLastSite) {
+
+      // Get user data dir before closing browser for cleanup
+      const userDataDir = browser._userDataDir || browser.process()?.spawnargs?.find(arg => arg.includes('--user-data-dir='))?.split('=')[1];
+
       // Check browser health before restart
       const isHealthy = await isBrowserHealthy(browser);
       if (!isHealthy) {
@@ -1528,6 +1621,16 @@ function sleep(ms) {
           timeout: 10000,
           exitOnFailure: false
         });
+
+        // Clean up the specific user data directory
+        if (userDataDir && fs.existsSync(userDataDir)) {
+          fs.rmSync(userDataDir, { recursive: true, force: true });
+          if (forceDebug) console.log(formatLogMessage('debug', `Cleaned user data dir: ${userDataDir}`));
+        }
+        
+        // Clean all Chrome temp files
+        await cleanupChromeFiles();
+
       } catch (browserCloseErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Browser cleanup warning: ${browserCloseErr.message}`));
       }
@@ -1641,11 +1744,20 @@ function sleep(ms) {
 
   // Graceful browser shutdown with force closure fallback
   // Handle browser cleanup with force closure fallback (15 sec)
+  // Get user data dir before final cleanup
+  const finalUserDataDir = browser._userDataDir || browser.process()?.spawnargs?.find(arg => arg.includes('--user-data-dir='))?.split('=')[1];
+
   await handleBrowserExit(browser, {
     forceDebug,
     timeout: 15000,
     exitOnFailure: true
   });
+
+  // Final cleanup of Chrome files
+  if (finalUserDataDir && fs.existsSync(finalUserDataDir)) {
+    fs.rmSync(finalUserDataDir, { recursive: true, force: true });
+  }
+  await cleanupChromeFiles();
 
   // Calculate timing, success rates, and provide summary information
   if (forceDebug) console.log(formatLogMessage('debug', `Calculating timing statistics...`));
