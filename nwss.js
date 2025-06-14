@@ -784,7 +784,11 @@ function sleep(ms) {
       });
       
       page.on('pageerror', (err) => {
-        if (forceDebug) console.log(`[debug] Page script error: ${err.message}`);
+        if (forceDebug) {
+          // Safely extract error message - err might not be an Error object
+          const errorMessage = err?.message || err?.toString() || String(err) || 'Unknown error';
+          console.log(`[debug] Page script error: ${errorMessage}`);
+        }
       });
       
       page.on('console', (msg) => {
