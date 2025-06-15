@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.17 ===
+// === Network scanner script (nwss.js) v1.0.18 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,24 +18,9 @@ const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.17'; // Script version
+const VERSION = '1.0.18'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
-
-// Add retry configuration
-const RETRY_CONFIG = {
-  maxRetries: 3,
-  retryDelay: 3000, // 3 seconds base delay
-  backoffMultiplier: 1.5,
-  retryableErrors: [
-    'Protocol error: Connection closed',
-    'net::ERR_CONNECTION_RESET',
-    'net::ERR_CONNECTION_REFUSED',
-    'net::ERR_TIMED_OUT',
-    'Navigation timeout',
-    'Target closed'
-  ]
-};
 
 // get startTime
 const startTime = Date.now();
@@ -474,18 +459,6 @@ function setupFrameHandling(page, forceDebug) {
   });
 }
 
-// Add utility functions for retry logic
-function isRetryableError(error) {
-  const errorMessage = error.message || error.toString();
-  return RETRY_CONFIG.retryableErrors.some(retryableError => 
-    errorMessage.includes(retryableError)
-  );
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
@@ -545,19 +518,21 @@ function sleep(ms) {
         '--disable-extensions',
         '--no-default-browser-check',
         '--safebrowsing-disable-auto-update',
-        '--disable-web-security',
-        '--disable-features=VizDisplayCompositor',
-        '--disable-background-timer-throttling',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-renderer-backgrounding',
-        '--disable-ipc-flooding-protection',
-        '--max_old_space_size=1024'
+        '--max_old_space_size=1024',
+        '--disable-dev-shm-usage',
+	'--disable-background-timer-throttling',
+	'--disable-backgrounding-occluded-windows', 
+	'--disable-renderer-backgrounding',
+	'--disable-features=TranslateUI',
+	'--disable-features=VizDisplayCompositor',
+	'--run-all-compositor-stages-before-draw',
+	'--disable-threaded-animation',
+	'--disable-threaded-scrolling',
+	'--disable-checker-imaging',
+	'--disable-image-animation-resync'
       ],
       headless: launchHeadless,
-      protocolTimeout: 300000,
-      handleSIGINT: false,
-      handleSIGTERM: false,
-      handleSIGHUP: false
+      protocolTimeout: 500000
     });
   }
 
@@ -618,112 +593,7 @@ function sleep(ms) {
   // (The code block for this initial global CDP session has been removed.
   // CDP is now handled on a per-page basis within processUrl if enabled.)
 
-  /**
-   * Enhanced processUrl with retry logic for connection errors
-   */
-  async function processUrlWithRetry(currentUrl, siteConfig, browserInstance, attempt = 1) {
-    try {
-      return await processUrl(currentUrl, siteConfig, browserInstance);
-    } catch (error) {
-      const isLastAttempt = attempt >= RETRY_CONFIG.maxRetries;
-      const shouldRetry = isRetryableError(error) && !isLastAttempt;
-      
-      if (shouldRetry) {
-        const delay = Math.min(RETRY_CONFIG.retryDelay * Math.pow(RETRY_CONFIG.backoffMultiplier, attempt - 1), 10000); // Cap at 10 seconds
-        console.warn(`⚠ Attempt ${attempt}/${RETRY_CONFIG.maxRetries} failed for ${currentUrl}: ${error.message}`);
-        console.log(`🔄 Retrying in ${delay}ms...`);
-        
-        await sleep(delay);
-        
-        // Restart browser on connection errors
-        if (error.message.includes('Protocol error: Connection closed')) {
-          try {
-            if (forceDebug) console.log(formatLogMessage('debug', `Restarting browser due to connection error...`));
-
-            // Get user data dir before closing browser
-            const userDataDir = browserInstance._userDataDir || browserInstance.process()?.spawnargs?.find(arg => arg.includes('--user-data-dir='))?.split('=')[1];
-   
-            // Force close with timeout
-            await Promise.race([
-              browserInstance.close(),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('Browser close timeout')), 5000))
-            ]);
-
-            // Clean up the specific user data directory
-            if (userDataDir && fs.existsSync(userDataDir)) {
-              fs.rmSync(userDataDir, { recursive: true, force: true });
-            }
-
-            browserInstance = await createBrowser();
-          } catch (browserRestartErr) {
-            if (forceDebug) console.log(formatLogMessage('debug', `Browser restart failed: ${browserRestartErr.message}`));
-            // Continue with existing browser instance if restart fails
-          }
-        }
-        
-        return await processUrlWithRetry(currentUrl, siteConfig, browserInstance, attempt + 1);
-      } else {
-        // Final failure - return partial results if any matches were found
-        console.warn(`❌ All ${RETRY_CONFIG.maxRetries} attempts failed for ${currentUrl}: ${error.message}`);
-        return { url: currentUrl, rules: [], success: false, retryFailed: true };
-      }
-    }
-  }
-
-  /**
-   * Enhanced navigation with better error handling
-   */
-  async function navigateWithRetry(page, url, options = {}, maxAttempts = 2, pageTimeout = 30000) {
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const defaultOptions = { 
-          waitUntil: 'domcontentloaded', // More reliable than 'load' for flaky connections
-          timeout: Math.min(45000, Math.max(pageTimeout, 30000)) // Between 30-45 seconds
-        };
-        const finalOptions = { ...defaultOptions, ...options };
-        
-        await page.goto(url, finalOptions);
-        return true;
-      } catch (navError) {
-        if (attempt === maxAttempts) {
-          throw navError;
-        }
-        
-        if (forceDebug) {
-          console.log(formatLogMessage('debug', `Navigation attempt ${attempt} failed for ${url}: ${navError.message}`));
-        }
-        
-        // Try to recover the page
-        try {
-          if (!page.isClosed()) {
-            await page.evaluate(() => window.stop());
-          }
-        } catch (stopError) {
-          // Ignore stop errors
-        }
-        
-        await sleep(2000 * attempt);
-      }
-    }
-    return false;
-  }
-  
-  /**
-   * Enhanced browser health check
-   */
-  async function isBrowserHealthy(browser) {
-    try {
-      const pages = await browser.pages();
-      await browser.version();
-      return true;
-    } catch (healthError) {
-      if (forceDebug) {
-        console.log(formatLogMessage('debug', `Browser health check failed: ${healthError.message}`));
-      }
-      return false;
-    }
-  }
-
+ 
   // --- Global evaluateOnNewDocument for Fetch/XHR Interception ---
   // REMOVED: The old flawed global loop for evaluateOnNewDocument (Fetch/XHR interception) is removed.
   // This functionality is now correctly implemented within the processUrl function on the actual target page.
@@ -774,22 +644,10 @@ function sleep(ms) {
     try {
       page = await browserInstance.newPage();
       
-      // Set consistent timeouts for the page
-      page.setDefaultTimeout(Math.max(timeout, 60000)); // At least 60 seconds
-      page.setDefaultNavigationTimeout(Math.max(timeout, 60000));
-
-      // Add page error handlers
-      page.on('error', (err) => {
-        if (forceDebug) console.log(`[debug] Page error: ${err.message}`);
-      });
-      
-      page.on('pageerror', (err) => {
-        if (forceDebug) {
-          // Safely extract error message - err might not be an Error object
-          const errorMessage = err?.message || err?.toString() || String(err) || 'Unknown error';
-          console.log(`[debug] Page script error: ${errorMessage}`);
-        }
-      });
+      // Set aggressive timeouts for problematic operations
+      page.setDefaultTimeout(20000);  // Reduced from 30000
+      page.setDefaultNavigationTimeout(25000);  // Reduced from 30000
+      // Note: timeout variable from siteConfig.timeout || 30000 is overridden for stability
       
       page.on('console', (msg) => {
         if (forceDebug && msg.type() === 'error') console.log(`[debug] Console error: ${msg.text()}`);
@@ -1372,16 +1230,17 @@ function sleep(ms) {
       }
 
       try {
-        // Use custom goto options if provided, otherwise default to 'domcontentloaded'
-        // load                  Wait for all resources (can timeout on broken sites)
-        // domcontentloaded      Wait for DOM only (more reliable for flaky connections)
-        // networkidle0          Wait until 0 network requests for 500ms
-        // networkidle2          Wait until ≤2 network requests for 500ms
-        const defaultGotoOptions = { waitUntil: 'domcontentloaded', timeout: Math.max(timeout, 45000) };
-        const gotoOptions = siteConfig.goto_options ? { ...defaultGotoOptions, ...siteConfig.goto_options } : defaultGotoOptions;
-        
-        // Use enhanced navigation with retry
-        await navigateWithRetry(page, currentUrl, gotoOptions, 2, timeout);
+        // Use custom goto options if provided, otherwise default to 'load'
+		// load                  Wait for all resources (default)
+		// domcontentloaded      Wait for DOM only
+		// networkidle0          Wait until 0 network requests for 500ms
+		// networkidle2          Wait until ≤2 network requests for 500ms 
+        const defaultGotoOptions = { waitUntil: 'load', timeout: timeout };
+        const gotoOptions = siteConfig.goto_options 
+          ? { ...defaultGotoOptions, ...siteConfig.goto_options }
+          : defaultGotoOptions;
+          
+        await page.goto(currentUrl, gotoOptions);
         siteCounter++;
 
         // Handle all Cloudflare protections using the dedicated module
@@ -1496,7 +1355,16 @@ function sleep(ms) {
       return { url: currentUrl, rules: formattedRules, success: true };
 
     } catch (err) {
-      console.warn(messageColors.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`));
+      const isTimeoutError = err.message.includes('timeout') || err.message.includes('timed out');
+      const isProtocolError = err.message.includes('Protocol error') || err.message.includes('Target closed');
+      
+      if (isTimeoutError) {
+        console.warn(messageColors.warn(`⚠ Timeout loading: ${currentUrl} (${err.message})`));
+      } else if (isProtocolError) {
+        console.warn(messageColors.warn(`⚠ Protocol error: ${currentUrl} (browser may need restart)`));
+      } else {
+        console.warn(messageColors.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`));
+      }
 	  
       // Save any matches found even if page failed to load completely
       if (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0)) {
@@ -1604,20 +1472,10 @@ function sleep(ms) {
     // Restart browser if we've processed enough URLs and this isn't the last site
     if (wouldExceedLimit && urlsSinceLastCleanup > 0 && isNotLastSite) {
 
-      // Get user data dir before closing browser for cleanup
-      const userDataDir = browser._userDataDir || browser.process()?.spawnargs?.find(arg => arg.includes('--user-data-dir='))?.split('=')[1];
-
-      // Check browser health before restart
-      const isHealthy = await isBrowserHealthy(browser);
-      if (!isHealthy) {
-        if (!silentMode) {
-          console.log(`\n${messageColors.fileOp('⚠ Browser unhealthy')}, forcing restart before site ${siteIndex + 1}/${siteGroups.length}...`);
-        }
-      } else {
       if (!silentMode) {
           console.log(`\n${messageColors.fileOp('🔄 Processed')} ${processedUrlCount} URLs. ${messageColors.fileOp('Restarting browser')} before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
         }
-      }
+    
       
       try {
         await handleBrowserExit(browser, {
@@ -1653,20 +1511,14 @@ function sleep(ms) {
     }
     
     // Create tasks with current browser instance and process them
-    // Double-check browser health before processing this site group
-    const isBrowserStillHealthy = await isBrowserHealthy(browser);
-    if (!isBrowserStillHealthy) {
-      console.warn(messageColors.warn(`⚠ Browser became unhealthy, attempting restart before site ${siteIndex + 1}...`));
-      browser = await createBrowser();
-    }
-
-    const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrlWithRetry(url, siteGroup.config, browser)));
+    const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrl(url, siteGroup.config, browser)));
     const siteResults = await Promise.all(siteTasks);
     results.push(...siteResults);
     
     processedUrlCount += siteUrlCount;
     urlsSinceLastCleanup += siteUrlCount;
   }
+
 
   // Handle all output using the output module
   const outputConfig = {
@@ -1789,29 +1641,5 @@ function sleep(ms) {
   // Clean process termination
   if (forceDebug) console.log(formatLogMessage('debug', `About to exit process...`));
   process.exit(0);
-  
-  // Add graceful shutdown handling
-  process.on('SIGINT', async () => {
-    console.log('\n🛑 Received interrupt signal, shutting down gracefully...');
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (err) {
-        console.log('Browser cleanup error during shutdown:', err.message);
-      }
-    }
-    process.exit(0);
-  });
-  process.on('SIGTERM', async () => {
-    console.log('\n🛑 Received termination signal, shutting down gracefully...');
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (err) {
-        console.log('Browser cleanup error during shutdown:', err.message);
-      }
-    }
-    process.exit(0);
-  }); 
   
 })();
