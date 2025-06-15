@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.18 ===
+// === Network scanner script (nwss.js) v1.0.19 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -11,14 +11,21 @@ const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
+// CF Bypass
 const { handleCloudflareProtection } = require('./lib/cloudflare');
+// Graceful exit
 const { handleBrowserExit } = require('./lib/browserexit');
+// Whois & Dig
 const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
+// File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
+// Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
+// Ensure web browser is working correctly
+const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.18'; // Script version
+const VERSION = '1.0.19'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -642,6 +649,11 @@ function setupFrameHandling(page, forceDebug) {
     if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
 
     try {
+      // Quick health check before creating new page (non-blocking version)
+      const isHealthy = await isBrowserHealthy(browserInstance);
+      if (!isHealthy && forceDebug) {
+        console.log(formatLogMessage('debug', `Browser health degraded before processing ${currentUrl} - proceeding anyway`));
+      }
       page = await browserInstance.newPage();
       
       // Set aggressive timeouts for problematic operations
@@ -1463,17 +1475,31 @@ function setupFrameHandling(page, forceDebug) {
   // Process sites one by one, but restart browser when hitting URL limits
   for (let siteIndex = 0; siteIndex < siteGroups.length; siteIndex++) {
     const siteGroup = siteGroups[siteIndex];
+    
+    // Check browser health before processing each site
+    const healthCheck = await monitorBrowserHealth(browser, {}, {
+      siteIndex,
+      totalSites: siteGroups.length,
+      urlsSinceCleanup: urlsSinceLastCleanup,
+      cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
+      forceDebug,
+      silentMode
+    });
     const siteUrlCount = siteGroup.urls.length;
     
-    // Check if processing this entire site would exceed cleanup interval
+    // Check if processing this entire site would exceed cleanup interval OR health check suggests restart
     const wouldExceedLimit = urlsSinceLastCleanup + siteUrlCount >= RESOURCE_CLEANUP_INTERVAL;
     const isNotLastSite = siteIndex < siteGroups.length - 1;
     
-    // Restart browser if we've processed enough URLs and this isn't the last site
-    if (wouldExceedLimit && urlsSinceLastCleanup > 0 && isNotLastSite) {
+    // Restart browser if we've processed enough URLs, health check suggests it, and this isn't the last site
+    if ((wouldExceedLimit || healthCheck.shouldRestart) && urlsSinceLastCleanup > 0 && isNotLastSite) {
 
       if (!silentMode) {
+        if (healthCheck.shouldRestart) {
+          console.log(`\n${messageColors.fileOp('🔄 Browser restart triggered:')} ${healthCheck.reason}`);
+        } else {
           console.log(`\n${messageColors.fileOp('🔄 Processed')} ${processedUrlCount} URLs. ${messageColors.fileOp('Restarting browser')} before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
+        }
         }
     
       
