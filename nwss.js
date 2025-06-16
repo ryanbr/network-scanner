@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.21 ===
+// === Network scanner script (nwss.js) v1.0.22 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -13,6 +13,8 @@ const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 // CF Bypass
 const { handleCloudflareProtection } = require('./lib/cloudflare');
+// FP Bypass
+const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
 // Graceful exit
 const { handleBrowserExit } = require('./lib/browserexit');
 // Whois & Dig
@@ -25,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.21'; // Script version
+const VERSION = '1.0.22'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -228,8 +230,20 @@ Per-site config.json options:
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
   adblock_rules: true/false                    Generate adblock filter rules with resource types for this site
+
+Cloudflare Protection Options:
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
   cloudflare_bypass: true/false               Auto-solve Cloudflare "Verify you are human" challenges (default: false)
+
+FlowProxy Protection Options:
+  flowproxy_detection: true/false              Enable flowProxy protection detection and handling (default: false)
+  flowproxy_page_timeout: <milliseconds>       Page timeout for flowProxy sites (default: 45000)
+  flowproxy_nav_timeout: <milliseconds>        Navigation timeout for flowProxy sites (default: 45000)
+  flowproxy_js_timeout: <milliseconds>         JavaScript challenge timeout (default: 15000)
+  flowproxy_delay: <milliseconds>              Delay for rate limiting (default: 30000)
+  flowproxy_additional_delay: <milliseconds>   Additional processing delay (default: 5000)
+
+Advanced Options:
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
@@ -635,6 +649,7 @@ function setupFrameHandling(page, forceDebug) {
     const cloudflareBypass = siteConfig.cloudflare_bypass === true;
     const sitePrivoxy = siteConfig.privoxy === true;
     const sitePihole = siteConfig.pihole === true;
+    const flowproxyDetection = siteConfig.flowproxy_detection === true;
     
     // Log site-level comments if debug mode is enabled
     if (forceDebug && siteConfig.comments) {
@@ -694,6 +709,16 @@ function setupFrameHandling(page, forceDebug) {
         if (forceDebug) console.log(formatLogMessage('debug', `Page crashed: ${err.message}`));
         // Don't throw here as it might cause hanging - let the timeout handle it
       });
+
+      // Apply flowProxy timeouts if detection is enabled
+      if (flowproxyDetection) {
+        const flowproxyTimeouts = getFlowProxyTimeouts(siteConfig);
+        page.setDefaultTimeout(flowproxyTimeouts.pageTimeout);
+        page.setDefaultNavigationTimeout(flowproxyTimeouts.navigationTimeout);
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Applied flowProxy timeouts - page: ${flowproxyTimeouts.pageTimeout}ms, nav: ${flowproxyTimeouts.navigationTimeout}ms`));
+        }
+      }
 
       // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
       // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
@@ -1319,6 +1344,28 @@ function setupFrameHandling(page, forceDebug) {
           // Continue with scan despite Cloudflare issues
         }
 
+        // Handle flowProxy protection if enabled
+        if (flowproxyDetection) {
+          const flowproxyResult = await handleFlowProxyProtection(page, currentUrl, siteConfig, forceDebug);
+
+          if (flowproxyResult.flowProxyDetection.detected) {
+            console.log(`🛡️  [flowproxy] FlowProxy protection detected on ${currentUrl}`);
+
+            if (!flowproxyResult.overallSuccess) {
+              console.warn(`⚠ [flowproxy] Protection handling failed for ${currentUrl}:`);
+              flowproxyResult.errors.forEach(error => {
+                console.warn(`   - ${error}`);
+              });
+            }
+
+            if (flowproxyResult.warnings.length > 0) {
+              flowproxyResult.warnings.forEach(warning => {
+                console.warn(`⚠ [flowproxy] ${warning}`);
+              });
+            }
+          }
+        }
+
         console.log(formatLogMessage('info', `${messageColors.loaded('Loaded:')} (${siteCounter}/${totalUrls}) ${currentUrl}`));
         await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
         
@@ -1373,6 +1420,13 @@ function setupFrameHandling(page, forceDebug) {
         timeout: networkIdleTimeout 
       });
       await new Promise(resolve => setTimeout(resolve, actualDelay));
+
+      // Apply additional delay for flowProxy if detected
+      if (flowproxyDetection) {
+        const additionalDelay = siteConfig.flowproxy_additional_delay || 5000;
+        if (forceDebug) console.log(formatLogMessage('debug', `Applying flowProxy additional delay: ${additionalDelay}ms`));
+        await new Promise(resolve => setTimeout(resolve, additionalDelay));
+      }
 
       for (let i = 1; i < (siteConfig.reload || 1); i++) {
        if (siteConfig.clear_sitedata === true) {
