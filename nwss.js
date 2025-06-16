@@ -527,20 +527,25 @@ function setupFrameHandling(page, forceDebug) {
         '--no-default-browser-check',
         '--safebrowsing-disable-auto-update',
         '--max_old_space_size=1024',
-        '--disable-dev-shm-usage',
-	'--disable-background-timer-throttling',
-	'--disable-backgrounding-occluded-windows', 
-	'--disable-renderer-backgrounding',
-	'--disable-features=TranslateUI',
-	'--disable-features=VizDisplayCompositor',
-	'--run-all-compositor-stages-before-draw',
-	'--disable-threaded-animation',
-	'--disable-threaded-scrolling',
-	'--disable-checker-imaging',
-	'--disable-image-animation-resync'
-      ],
-      headless: launchHeadless,
-      protocolTimeout: 500000
+        '--ignore-ssl-errors',
+        '--ignore-certificate-errors',
+        '--ignore-certificate-errors-spki-list',
+        '--ignore-certificate-errors-ca-list',
+        '--disable-web-security',
+        '--allow-running-insecure-content',
+	    '--disable-background-timer-throttling',
+	    '--disable-backgrounding-occluded-windows',
+	    '--disable-renderer-backgrounding',
+	    '--disable-features=TranslateUI',
+	    '--disable-features=VizDisplayCompositor',
+	    '--run-all-compositor-stages-before-draw',
+	    '--disable-threaded-animation',
+	    '--disable-threaded-scrolling',
+	    '--disable-checker-imaging',
+	    '--disable-image-animation-resync'
+        ],
+        headless: launchHeadless,
+        protocolTimeout: 500000
     });
     
     // Store the user data directory on the browser object for cleanup
@@ -1299,7 +1304,7 @@ function setupFrameHandling(page, forceDebug) {
         const gotoOptions = siteConfig.goto_options 
           ? { ...defaultGotoOptions, ...siteConfig.goto_options }
           : defaultGotoOptions;
-          
+
         await page.goto(currentUrl, gotoOptions);
         siteCounter++;
 
