@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.20 ===
+// === Network scanner script (nwss.js) v1.0.21 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -25,7 +25,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.20'; // Script version
+const VERSION = '1.0.21'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -676,8 +676,8 @@ function setupFrameHandling(page, forceDebug) {
       page = await browserInstance.newPage();
       
       // Set aggressive timeouts for problematic operations
-      page.setDefaultTimeout(20000);  // Reduced from 30000
-      page.setDefaultNavigationTimeout(25000);  // Reduced from 30000
+      page.setDefaultTimeout(Math.min(timeout, 20000));  // Use site timeout or 20s max
+      page.setDefaultNavigationTimeout(Math.min(timeout, 25000));  // Use site timeout or 25s max
       // Note: timeout variable from siteConfig.timeout || 30000 is overridden for stability
       
       page.on('console', (msg) => {
@@ -1287,8 +1287,15 @@ function setupFrameHandling(page, forceDebug) {
 		// load                  Wait for all resources (default)
 		// domcontentloaded      Wait for DOM only
 		// networkidle0          Wait until 0 network requests for 500ms
-		// networkidle2          Wait until ≤2 network requests for 500ms 
-        const defaultGotoOptions = { waitUntil: 'load', timeout: timeout };
+		// networkidle2          Wait until ≤2 network requests for 500ms
+
+        // Use faster defaults for sites with long timeouts to improve responsiveness
+        const isFastSite = timeout <= 15000;
+        const defaultWaitUntil = isFastSite ? 'load' : 'domcontentloaded';
+        const defaultGotoOptions = {
+          waitUntil: defaultWaitUntil,
+          timeout: timeout
+        };
         const gotoOptions = siteConfig.goto_options 
           ? { ...defaultGotoOptions, ...siteConfig.goto_options }
           : defaultGotoOptions;
@@ -1349,8 +1356,18 @@ function setupFrameHandling(page, forceDebug) {
       }
 
       const delayMs = siteConfig.delay || 4000;
-      await page.waitForNetworkIdle({ idleTime: 4000, timeout: timeout });
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      
+      // Optimize network idle and delay times for better responsiveness
+      const isFastSite = timeout <= 15000;
+      const networkIdleTime = isFastSite ? 4000 : 2000;  // Faster idle for slow sites
+      const networkIdleTimeout = isFastSite ? timeout : Math.min(timeout / 2, 12000);
+      const actualDelay = isFastSite ? delayMs : Math.min(delayMs, 2000);  // Cap delay for slow sites
+      
+      await page.waitForNetworkIdle({ 
+        idleTime: networkIdleTime, 
+        timeout: networkIdleTimeout 
+      });
+      await new Promise(resolve => setTimeout(resolve, actualDelay));
 
       for (let i = 1; i < (siteConfig.reload || 1); i++) {
        if (siteConfig.clear_sitedata === true) {
@@ -1408,14 +1425,20 @@ function setupFrameHandling(page, forceDebug) {
       return { url: currentUrl, rules: formattedRules, success: true };
 
     } catch (err) {
+      // For timeout errors, provide immediate feedback rather than waiting
       const isTimeoutError = err.message.includes('timeout') || err.message.includes('timed out');
+      if (isTimeoutError && !silentMode) {
+        const quickUrl = currentUrl.length > 50 ? currentUrl.substring(0, 47) + '...' : currentUrl;
+        console.warn(messageColors.warn(`⚠ Timeout: ${quickUrl} (${timeout/1000}s) - continuing...`));
+      }
       const isProtocolError = err.message.includes('Protocol error') || err.message.includes('Target closed');
       const isNetworkError = err.message.includes('Network.enable timed out');
       const isBrowserBroken = err.message.includes('Browser protocol broken') || 
                               err.message.includes('Browser process was killed') ||
                               err.message.includes('Browser health degraded');
       
-      if (isTimeoutError) {
+      if (isTimeoutError && forceDebug) {
+        // Only show detailed timeout in debug mode to reduce noise
         console.warn(messageColors.warn(`⚠ Timeout loading: ${currentUrl} (${err.message})`));
       } else if (isProtocolError) {
         console.warn(messageColors.warn(`⚠ Protocol error: ${currentUrl} (browser may need restart)`));
