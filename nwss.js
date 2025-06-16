@@ -477,6 +477,7 @@ function setupFrameHandling(page, forceDebug) {
   async function createBrowser() {
     // Create temporary user data directory that we can fully control and clean up
     const tempUserDataDir = `/tmp/puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    let userDataDir = tempUserDataDir; // Store for cleanup tracking
 
     // Try to find system Chrome installation to avoid Puppeteer downloads
     const systemChromePaths = [
@@ -497,7 +498,7 @@ function setupFrameHandling(page, forceDebug) {
         break;
       }
     }
-    return await puppeteer.launch({
+    const browser = await puppeteer.launch({
       // Use system Chrome if available to avoid downloads
       executablePath: executablePath,
       // Force temporary user data directory for complete cleanup control
@@ -541,7 +542,11 @@ function setupFrameHandling(page, forceDebug) {
       headless: launchHeadless,
       protocolTimeout: 500000
     });
-  }
+    
+    // Store the user data directory on the browser object for cleanup
+    browser._nwssUserDataDir = tempUserDataDir;
+    return browser;
+   }
 
   /**
    * Cleanup Chrome temporary files and directories
@@ -1624,21 +1629,36 @@ function setupFrameHandling(page, forceDebug) {
  
   if (forceDebug) console.log(formatLogMessage('debug', `Starting browser cleanup...`));
 
-  // Graceful browser shutdown with force closure fallback
-  // Handle browser cleanup with force closure fallback (15 sec)
-  // Get user data dir before final cleanup
-  const finalUserDataDir = browser._userDataDir || browser.process()?.spawnargs?.find(arg => arg.includes('--user-data-dir='))?.split('=')[1];
+  // Get user data dir before final cleanup (using our stored value)
+  const finalUserDataDir = browser._nwssUserDataDir;
+
+  // Kill all Chrome processes first using enhanced cleanup
+  if (forceDebug) console.log(formatLogMessage('debug', `Killing all Chrome processes...`));
+  
+  try {
+    const { killAllPuppeteerChrome } = require('./lib/browserexit');
+    await killAllPuppeteerChrome(forceDebug);
+    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for processes to die
+  } catch (preKillErr) {
+    if (forceDebug) console.log(formatLogMessage('debug', `Pre-kill failed: ${preKillErr.message}`));
+  }
 
   await handleBrowserExit(browser, {
     forceDebug,
-    timeout: 15000,
+    timeout: 10000,
     exitOnFailure: true
   });
 
-  // Final cleanup of Chrome files
+  // NOW cleanup files after processes are definitely dead
   if (finalUserDataDir && fs.existsSync(finalUserDataDir)) {
-    fs.rmSync(finalUserDataDir, { recursive: true, force: true });
-  }
+    try {
+      fs.rmSync(finalUserDataDir, { recursive: true, force: true });
+      if (forceDebug) console.log(formatLogMessage('debug', `Cleaned user data dir: ${finalUserDataDir}`));
+    } catch (rmErr) {
+      if (forceDebug) console.log(formatLogMessage('debug', `Failed to remove user data dir: ${rmErr.message}`));
+    }
+   }
+
   await cleanupChromeFiles();
 
   // Calculate timing, success rates, and provide summary information
