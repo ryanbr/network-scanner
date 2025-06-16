@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.19 ===
+// === Network scanner script (nwss.js) v1.0.20 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -25,7 +25,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.19'; // Script version
+const VERSION = '1.0.20'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -654,10 +654,24 @@ function setupFrameHandling(page, forceDebug) {
     if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
 
     try {
-      // Quick health check before creating new page (non-blocking version)
+      // Health check before creating new page
       const isHealthy = await isBrowserHealthy(browserInstance);
-      if (!isHealthy && forceDebug) {
-        console.log(formatLogMessage('debug', `Browser health degraded before processing ${currentUrl} - proceeding anyway`));
+      if (!isHealthy) {
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Browser health degraded before processing ${currentUrl} - forcing immediate restart`));
+        }
+        // Return special code to trigger immediate browser restart
+        return { 
+          url: currentUrl, 
+          rules: [], 
+          success: false, 
+          needsImmediateRestart: true,
+          error: 'Browser health degraded - restart required'
+        };
+      }
+      // Check for Protocol timeout errors that indicate browser is broken
+      if (browserInstance.process() && browserInstance.process().killed) {
+        throw new Error('Browser process was killed - restart required');
       }
       page = await browserInstance.newPage();
       
@@ -668,6 +682,12 @@ function setupFrameHandling(page, forceDebug) {
       
       page.on('console', (msg) => {
         if (forceDebug && msg.type() === 'error') console.log(`[debug] Console error: ${msg.text()}`);
+      });
+      
+      // Add page crash handler
+      page.on('error', (err) => {
+        if (forceDebug) console.log(formatLogMessage('debug', `Page crashed: ${err.message}`));
+        // Don't throw here as it might cause hanging - let the timeout handle it
       });
 
       // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
@@ -752,6 +772,11 @@ function setupFrameHandling(page, forceDebug) {
             });
         } catch (cdpErr) {
             cdpSession = null; // Reset on failure
+            if (cdpErr.message.includes('Network.enable timed out') || 
+                cdpErr.message.includes('Protocol error')) {
+              // This indicates browser is completely broken
+              throw new Error(`Browser protocol broken: ${cdpErr.message}`);
+            }
             console.warn(formatLogMessage('warn', `[cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`));
         }
       }
@@ -966,6 +991,17 @@ function setupFrameHandling(page, forceDebug) {
         const checkedHostname = safeGetDomain(checkedUrl, true);
         const currentHostname = safeGetDomain(currentUrl, true);
         const isFirstParty = checkedHostname && currentHostname && checkedHostname === currentHostname;
+        
+        // Block infinite iframe loops
+        const frameUrl = request.frame() ? request.frame().url() : '';
+        if (frameUrl && frameUrl.includes('creative.dmzjmp.com') && 
+            request.url().includes('go.dmzjmp.com/api/models')) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${request.url()}`));
+          }
+          request.abort();
+          return;
+        }
 
         if (isFirstParty && siteConfig.firstParty === false) {
           request.continue();
@@ -1374,11 +1410,22 @@ function setupFrameHandling(page, forceDebug) {
     } catch (err) {
       const isTimeoutError = err.message.includes('timeout') || err.message.includes('timed out');
       const isProtocolError = err.message.includes('Protocol error') || err.message.includes('Target closed');
+      const isNetworkError = err.message.includes('Network.enable timed out');
+      const isBrowserBroken = err.message.includes('Browser protocol broken') || 
+                              err.message.includes('Browser process was killed') ||
+                              err.message.includes('Browser health degraded');
       
       if (isTimeoutError) {
         console.warn(messageColors.warn(`⚠ Timeout loading: ${currentUrl} (${err.message})`));
       } else if (isProtocolError) {
         console.warn(messageColors.warn(`⚠ Protocol error: ${currentUrl} (browser may need restart)`));
+      } else if (isNetworkError || isBrowserBroken) {
+        console.warn(messageColors.warn(`⚠ Browser broken: ${currentUrl} (forcing immediate restart)`));
+        // Signal that browser restart is needed
+        if (page && !page.isClosed()) {
+          await page.close().catch(() => {});
+        }
+        return { url: currentUrl, rules: [], success: false, needsImmediateRestart: true };
       } else {
         console.warn(messageColors.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`));
       }
@@ -1490,6 +1537,12 @@ function setupFrameHandling(page, forceDebug) {
       forceDebug,
       silentMode
     });
+
+    // Also check if browser was unhealthy during recent processing
+    const recentResults = results.slice(-3);
+    const hasRecentFailures = recentResults.filter(r => !r.success).length >= 2;
+    const shouldRestartFromFailures = hasRecentFailures && urlsSinceLastCleanup > 5;
+
     const siteUrlCount = siteGroup.urls.length;
     
     // Check if processing this entire site would exceed cleanup interval OR health check suggests restart
@@ -1497,16 +1550,20 @@ function setupFrameHandling(page, forceDebug) {
     const isNotLastSite = siteIndex < siteGroups.length - 1;
     
     // Restart browser if we've processed enough URLs, health check suggests it, and this isn't the last site
-    if ((wouldExceedLimit || healthCheck.shouldRestart) && urlsSinceLastCleanup > 0 && isNotLastSite) {
+    if ((wouldExceedLimit || healthCheck.shouldRestart || shouldRestartFromFailures) && urlsSinceLastCleanup > 0 && isNotLastSite) {
+      
+      let restartReason = 'Unknown';
+      if (healthCheck.shouldRestart) {
+        restartReason = healthCheck.reason;
+      } else if (shouldRestartFromFailures) {
+        restartReason = 'Multiple recent failures detected';
+      } else if (wouldExceedLimit) {
+        restartReason = `Processed ${urlsSinceLastCleanup} URLs`;
+      }
 
       if (!silentMode) {
-        if (healthCheck.shouldRestart) {
-          console.log(`\n${messageColors.fileOp('🔄 Browser restart triggered:')} ${healthCheck.reason}`);
-        } else {
-          console.log(`\n${messageColors.fileOp('🔄 Processed')} ${processedUrlCount} URLs. ${messageColors.fileOp('Restarting browser')} before processing site ${siteIndex + 1}/${siteGroups.length} to free resources...`);
-        }
-        }
-    
+        console.log(`\n${messageColors.fileOp('🔄 Browser restart triggered:')} ${restartReason}`);
+      }
       
       try {
         await handleBrowserExit(browser, {
@@ -1544,10 +1601,32 @@ function setupFrameHandling(page, forceDebug) {
     // Create tasks with current browser instance and process them
     const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrl(url, siteGroup.config, browser)));
     const siteResults = await Promise.all(siteTasks);
+
+    // Check if any results indicate immediate restart is needed
+    const needsImmediateRestart = siteResults.some(r => r.needsImmediateRestart);
+
     results.push(...siteResults);
     
     processedUrlCount += siteUrlCount;
     urlsSinceLastCleanup += siteUrlCount;
+
+    // Force browser restart if any URL had critical errors
+    if (needsImmediateRestart && siteIndex < siteGroups.length - 1) {
+      if (!silentMode) {
+        console.log(`\n${messageColors.fileOp('🔄 Emergency browser restart:')} Critical browser errors detected`);
+      }
+      
+      // Force browser restart immediately
+      try {
+        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false });
+        await cleanupChromeFiles();
+        browser = await createBrowser();
+        urlsSinceLastCleanup = 0; // Reset counter
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Give browser time to stabilize
+      } catch (emergencyRestartErr) {
+        if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
+      }
+    }
   }
 
 
