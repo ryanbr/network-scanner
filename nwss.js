@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.22 ===
+// === Network scanner script (nwss.js) v1.0.23 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -16,7 +16,7 @@ const { handleCloudflareProtection } = require('./lib/cloudflare');
 // FP Bypass
 const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
 // Graceful exit
-const { handleBrowserExit } = require('./lib/browserexit');
+const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
 // Whois & Dig
 const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
 // File compare
@@ -27,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.22'; // Script version
+const VERSION = '1.0.23'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -76,6 +76,7 @@ const privoxyMode = args.includes('--privoxy');
 const piholeMode = args.includes('--pihole');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const compressLogs = args.includes('--compress-logs');
+const removeTempFiles = args.includes('--remove-tempfiles');
 
 const enableColors = args.includes('--color') || args.includes('--colour');
 let adblockRulesMode = args.includes('--adblock-rules');
@@ -188,6 +189,7 @@ General Options:
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
+  --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
   
 Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
@@ -567,37 +569,6 @@ function setupFrameHandling(page, forceDebug) {
     return browser;
    }
 
-  /**
-   * Cleanup Chrome temporary files and directories
-   */
-  async function cleanupChromeFiles() {
-    try {
-      const { execSync } = require('child_process');
-
-      // Clean Chrome cache directories with shell commands for wildcards
-      const cleanupCommands = [
-        'rm -rf /tmp/.org.chromium.Chromium.* 2>/dev/null || true',
-        'rm -rf /tmp/puppeteer-* 2>/dev/null || true',
-        'rm -rf /dev/shm/.org.chromium.Chromium.* 2>/dev/null || true'
-      ];
-
-      for (const command of cleanupCommands) {
-        try {
-          execSync(command, { stdio: 'ignore' });
-        } catch (cmdErr) {
-          // Ignore individual command errors
-        }
-      }
-
-      if (forceDebug) {
-        console.log(formatLogMessage('debug', 'Chrome temporary files cleaned'));
-      }
-    } catch (cleanupErr) {
-      if (forceDebug) {
-        console.log(formatLogMessage('debug', `Chrome cleanup error: ${cleanupErr.message}`));
-      }
-    }
-  }
 
   const pLimit = (await import('p-limit')).default;
   const limit = pLimit(MAX_CONCURRENT_SITES);
@@ -608,8 +579,51 @@ function setupFrameHandling(page, forceDebug) {
   let browser = await createBrowser();
   if (forceDebug) console.log(formatLogMessage('debug', `Launching browser with headless: ${launchHeadless}`));
 
-  // Initial cleanup of any existing Chrome temp files
-  await cleanupChromeFiles();
+  // Initial cleanup of any existing Chrome temp files - always comprehensive on startup
+  if (forceDebug) console.log(formatLogMessage('debug', 'Cleaning up any leftover temp files from previous runs...'));
+  await cleanupChromeTempFiles({ 
+    includeSnapTemp: true,  // Always clean snap dirs on startup
+    forceDebug,
+    comprehensive: true     // Always comprehensive on startup to clean leftovers
+  });
+
+  // Set up cleanup on process termination
+  process.on('SIGINT', async () => {
+    if (forceDebug) console.log(formatLogMessage('debug', 'SIGINT received, performing cleanup...'));
+    await performEmergencyCleanup();
+    process.exit(0);
+  });
+
+  process.on('SIGTERM', async () => {
+    if (forceDebug) console.log(formatLogMessage('debug', 'SIGTERM received, performing cleanup...'));
+    await performEmergencyCleanup();
+    process.exit(0);
+  });
+
+  // Emergency cleanup function
+  async function performEmergencyCleanup() {
+    try {
+      if (browser && !browser.process()?.killed) {
+        await handleBrowserExit(browser, {
+          forceDebug,
+          timeout: 5000,
+          exitOnFailure: false,
+          cleanTempFiles: true,
+          comprehensiveCleanup: true,  // Always comprehensive on emergency
+          userDataDir: browser._nwssUserDataDir
+        });
+      } else {
+        // Browser already dead, just clean temp files
+        await cleanupChromeTempFiles({ 
+          includeSnapTemp: true, 
+          forceDebug,
+          comprehensive: true 
+        });
+      }
+    } catch (emergencyErr) {
+      if (forceDebug) console.log(formatLogMessage('debug', `Emergency cleanup failed: ${emergencyErr.message}`));
+    }
+  }
  
   let siteCounter = 0;
   const totalUrls = sites.reduce((sum, site) => {
@@ -1651,7 +1665,9 @@ function setupFrameHandling(page, forceDebug) {
         await handleBrowserExit(browser, {
           forceDebug,
           timeout: 10000,
-          exitOnFailure: false
+          exitOnFailure: false,
+          cleanTempFiles: true,
+          comprehensiveCleanup: removeTempFiles  // Respect --remove-tempfiles during restarts
         });
 
         // Clean up the specific user data directory
@@ -1659,9 +1675,15 @@ function setupFrameHandling(page, forceDebug) {
           fs.rmSync(userDataDir, { recursive: true, force: true });
           if (forceDebug) console.log(formatLogMessage('debug', `Cleaned user data dir: ${userDataDir}`));
         }
-        
-        // Clean all Chrome temp files
-        await cleanupChromeFiles();
+
+        // Additional cleanup for any remaining Chrome processes
+        if (removeTempFiles) {
+          await cleanupChromeTempFiles({ 
+            includeSnapTemp: true, 
+            forceDebug,
+            comprehensive: true 
+          });
+        }
 
       } catch (browserCloseErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Browser cleanup warning: ${browserCloseErr.message}`));
@@ -1700,8 +1722,15 @@ function setupFrameHandling(page, forceDebug) {
       
       // Force browser restart immediately
       try {
-        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false });
-        await cleanupChromeFiles();
+        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true, comprehensiveCleanup: removeTempFiles });
+        // Additional cleanup after emergency restart
+        if (removeTempFiles) {
+          await cleanupChromeTempFiles({ 
+            includeSnapTemp: true, 
+            forceDebug,
+            comprehensive: true 
+          });
+        }
         browser = await createBrowser();
         urlsSinceLastCleanup = 0; // Reset counter
         await new Promise(resolve => setTimeout(resolve, 2000)); // Give browser time to stabilize
@@ -1788,39 +1817,37 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
  
-  if (forceDebug) console.log(formatLogMessage('debug', `Starting browser cleanup...`));
+  // Perform comprehensive final cleanup using enhanced browserexit module
+  if (forceDebug) console.log(formatLogMessage('debug', `Starting comprehensive browser cleanup...`));
+ 
 
-  // Get user data dir before final cleanup (using our stored value)
-  const finalUserDataDir = browser._nwssUserDataDir;
-
-  // Kill all Chrome processes first using enhanced cleanup
-  if (forceDebug) console.log(formatLogMessage('debug', `Killing all Chrome processes...`));
-  
-  try {
-    const { killAllPuppeteerChrome } = require('./lib/browserexit');
-    await killAllPuppeteerChrome(forceDebug);
-    await new Promise(resolve => setTimeout(resolve, 2000)); // Wait for processes to die
-  } catch (preKillErr) {
-    if (forceDebug) console.log(formatLogMessage('debug', `Pre-kill failed: ${preKillErr.message}`));
-  }
-
-  await handleBrowserExit(browser, {
+  const cleanupResult = await handleBrowserExit(browser, {
     forceDebug,
     timeout: 10000,
-    exitOnFailure: true
+    exitOnFailure: true,
+    cleanTempFiles: true,
+    comprehensiveCleanup: removeTempFiles,  // Use --remove-tempfiles flag
+    userDataDir: browser._nwssUserDataDir,
+    verbose: !silentMode && removeTempFiles  // Show verbose output only if removing temp files and not silent
   });
 
-  // NOW cleanup files after processes are definitely dead
-  if (finalUserDataDir && fs.existsSync(finalUserDataDir)) {
-    try {
-      fs.rmSync(finalUserDataDir, { recursive: true, force: true });
-      if (forceDebug) console.log(formatLogMessage('debug', `Cleaned user data dir: ${finalUserDataDir}`));
-    } catch (rmErr) {
-      if (forceDebug) console.log(formatLogMessage('debug', `Failed to remove user data dir: ${rmErr.message}`));
+  if (forceDebug) {
+    console.log(formatLogMessage('debug', `Final cleanup results: ${cleanupResult.success ? 'success' : 'failed'}`));
+    console.log(formatLogMessage('debug', `Browser closed: ${cleanupResult.browserClosed}, Temp files cleaned: ${cleanupResult.tempFilesCleanedCount || 0}, User data cleaned: ${cleanupResult.userDataCleaned}`));
+    
+    if (cleanupResult.errors.length > 0) {
+      cleanupResult.errors.forEach(err => console.log(formatLogMessage('debug', `Cleanup error: ${err}`)));
     }
-   }
+  }
 
-  await cleanupChromeFiles();
+  // Final aggressive cleanup to catch any remaining temp files
+  if (forceDebug) console.log(formatLogMessage('debug', 'Performing final aggressive temp file cleanup...'));
+  await cleanupChromeTempFiles({ 
+    includeSnapTemp: true, 
+    forceDebug,
+    comprehensive: true 
+  });
+  await new Promise(resolve => setTimeout(resolve, 1000)); // Give filesystem time to sync
 
   // Calculate timing, success rates, and provide summary information
   if (forceDebug) console.log(formatLogMessage('debug', `Calculating timing statistics...`));
