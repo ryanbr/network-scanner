@@ -1047,15 +1047,6 @@ function setupFrameHandling(page, forceDebug) {
           return;
         }
 
-        if (isFirstParty && siteConfig.firstParty === false) {
-          request.continue();
-          return;
-        }
-        if (!isFirstParty && siteConfig.thirdParty === false) {
-          request.continue();
-          return;
-        }
-
         // Enhanced debug logging to show which frame the request came from
         if (forceDebug) {
           const frameUrl = request.frame() ? request.frame().url() : 'unknown-frame';
@@ -1116,11 +1107,6 @@ function setupFrameHandling(page, forceDebug) {
           return;
         }
 
-        if (matchesIgnoreDomain(reqDomain, ignoreDomains)) {
-          request.continue();
-          return;
-        }
-
         for (const re of regexes) {
           if (re.test(reqUrl)) {
             const resourceType = request.resourceType();
@@ -1137,7 +1123,29 @@ function setupFrameHandling(page, forceDebug) {
                break; // Skip this URL entirely - doesn't match required resource types
              }
            }
-            
+           
+           // Check party filtering AFTER regex match but BEFORE domain processing
+           if (isFirstParty && siteConfig.firstParty === false) {
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `Skipping first-party match: ${reqUrl} (firstParty disabled)`));
+             }
+             break; // Skip this URL - it's first-party but firstParty is disabled
+           }
+           if (!isFirstParty && siteConfig.thirdParty === false) {
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `Skipping third-party match: ${reqUrl} (thirdParty disabled)`));
+             }
+             break; // Skip this URL - it's third-party but thirdParty is disabled
+           }
+
+           // Check ignoreDomains AFTER regex match but BEFORE domain processing
+           if (matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`));
+             }
+            break; // Skip this URL - domain is in ignore list
+          }
+ 
             // Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
             if (allBlockedRegexes.some(re => re.test(reqUrl))) {
               if (forceDebug) {
@@ -1146,14 +1154,6 @@ function setupFrameHandling(page, forceDebug) {
               break; // Skip detection but don't interfere with browser blocking
             }
             
-            // Check ignoreDomains before any processing 
-            if (!reqDomain || matchesIgnoreDomain(reqDomain, ignoreDomains)) {
-              if (forceDebug) {
-                console.log(formatLogMessage('debug', `Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`));
-              }
-              break; // Skip this URL entirely
-            }
-
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
              addMatchedDomain(reqDomain, resourceType);
