@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.24 ===
+// === Network scanner script (nwss.js) v1.0.25 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,7 +18,7 @@ const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowp
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
 // File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // Colorize various text when used
@@ -27,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.24'; // Script version
+const VERSION = '1.0.25'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -75,6 +75,7 @@ const removeDupes = args.includes('--remove-dupes') || args.includes('--remove-d
 const privoxyMode = args.includes('--privoxy');
 const piholeMode = args.includes('--pihole');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
+const dryRunMode = args.includes('--dry-run');
 const compressLogs = args.includes('--compress-logs');
 const removeTempFiles = args.includes('--remove-tempfiles');
 
@@ -138,6 +139,18 @@ if (compressLogs && !dumpUrls) {
   process.exit(1);
 }
 
+// Validate --dry-run usage
+if (dryRunMode) {
+  if (outputFile) {
+    console.error(`❌ --dry-run cannot be used with --output (-o) - use one or the other`);
+    process.exit(1);
+  }
+  if (compressLogs || compareFile) {
+    console.error(`❌ --dry-run cannot be used with --compress-logs or --compare`);
+    process.exit(1);
+  }
+}
+
 // Validate --compare usage
 if (compareFile && !outputFile) {
   console.error(`❌ --compare requires --output (-o) to specify an output file`);
@@ -179,6 +192,7 @@ General Options:
   --silent                       Suppress normal console logs
   --titles                       Add ! <url> title before each site's group
   --dumpurls                     Dump matched URLs into matched_urls.log
+  --dry-run                      Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules
   --compress-logs                Compress log files with gzip (requires --dumpurls)
   --sub-domains                  Output full subdomains instead of collapsing to root
   --no-interact                  Disable page interactions globally
@@ -373,6 +387,64 @@ function safeGetDomain(url, getFullHostname = false) {
     }
     return '';
   }
+}
+
+/**
+ * Outputs dry run results to console with formatted display
+ * @param {string} url - The URL being processed  
+ * @param {Array} matchedItems - Array of matched items with regex, domain, and resource type
+ * @param {Array} netToolsResults - Array of whois/dig results
+ * @param {string} pageTitle - Title of the page (if available)
+ */
+function outputDryRunResults(url, matchedItems, netToolsResults, pageTitle) {
+  console.log(`\n${messageColors.scanning('=== DRY RUN RESULTS ===')} ${url}`);
+  
+  if (pageTitle && pageTitle.trim()) {
+    console.log(`${messageColors.info('Title:')} ${pageTitle.trim()}`);
+  }
+  
+  if (matchedItems.length === 0 && netToolsResults.length === 0) {
+    console.log(messageColors.warn(`No matching rules found on ${url}`));
+    return;
+  }
+  
+  const totalMatches = matchedItems.length + netToolsResults.length;
+  console.log(`${messageColors.success('Matches found:')} ${totalMatches}`);
+  
+  matchedItems.forEach((item, index) => {
+    console.log(`\n${messageColors.highlight(`[${index + 1}]`)} ${messageColors.match('Regex Match:')}`);
+    console.log(`  Pattern: ${item.regex}`);
+    console.log(`  Domain: ${item.domain}`);
+    console.log(`  Resource Type: ${item.resourceType}`);
+    console.log(`  Full URL: ${item.fullUrl}`);
+    
+    // Show searchstring results if available
+    if (item.searchStringMatch) {
+      console.log(`  ${messageColors.success('✓ Searchstring Match:')} ${item.searchStringMatch.type} - "${item.searchStringMatch.term}"`);
+    } else if (item.searchStringChecked) {
+      console.log(`  ${messageColors.warn('✗ Searchstring:')} No matches found in content`);
+    }
+    
+    // Generate adblock rule
+    const adblockRule = `||${item.domain}^$${item.resourceType}`;
+    console.log(`  ${messageColors.info('Adblock Rule:')} ${adblockRule}`);
+  });
+  
+  // Display nettools results
+  netToolsResults.forEach((result, index) => {
+    const resultIndex = matchedItems.length + index + 1;
+    console.log(`\n${messageColors.highlight(`[${resultIndex}]`)} ${messageColors.match('NetTools Match:')}`);
+    console.log(`  Domain: ${result.domain}`);
+    console.log(`  Tool: ${result.tool.toUpperCase()}`);
+    console.log(`  ${messageColors.success('✓ Match:')} ${result.matchType} - "${result.matchedTerm}"`);
+    if (result.details) {
+      console.log(`  Details: ${result.details}`);
+    }
+    
+    // Generate adblock rule for nettools matches
+    const adblockRule = `||${result.domain}^`;
+    console.log(`  ${messageColors.info('Adblock Rule:')} ${adblockRule}`);
+  });
 }
 
 // ability to use widcards in ignoreDomains
@@ -681,8 +753,15 @@ function setupFrameHandling(page, forceDebug) {
 
     let page = null;
     let cdpSession = null;
-    // Use Map to track domains and their resource types for --adblock-rules
-    const matchedDomains = adblockRulesMode || siteConfig.adblock_rules ? new Map() : new Set();
+    // Use Map to track domains and their resource types for --adblock-rules or --dry-run
+    const matchedDomains = (adblockRulesMode || siteConfig.adblock_rules || dryRunMode) ? new Map() : new Set();
+    
+    // Initialize dry run matches collection
+    if (dryRunMode) {
+      matchedDomains.set('dryRunMatches', []);
+      matchedDomains.set('dryRunNetTools', []);
+      matchedDomains.set('dryRunSearchString', new Map()); // Map URL to search results
+    }
     const timeout = siteConfig.timeout || 30000;
 
     if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
@@ -1156,7 +1235,17 @@ function setupFrameHandling(page, forceDebug) {
             
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
-             addMatchedDomain(reqDomain, resourceType);
+             if (dryRunMode) {
+               matchedDomains.get('dryRunMatches').push({
+                 regex: re.source,
+                 domain: reqDomain,
+                 resourceType: resourceType,
+                 fullUrl: reqUrl,
+                 isFirstParty: isFirstParty
+               });
+             } else {
+               addMatchedDomain(reqDomain, resourceType);
+             }
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
@@ -1174,6 +1263,18 @@ function setupFrameHandling(page, forceDebug) {
              if (forceDebug) {
                console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`));
              }
+
+             if (dryRunMode) {
+               // For dry run, we'll collect the domain for nettools checking
+               matchedDomains.get('dryRunMatches').push({
+                 regex: re.source,
+                 domain: reqDomain,
+                 resourceType: resourceType,
+                 fullUrl: reqUrl,
+                 isFirstParty: isFirstParty,
+                 needsNetToolsCheck: true
+               });
+             }
              
              // Create and execute nettools handler
              const netToolsHandler = createNetToolsHandler({
@@ -1188,6 +1289,8 @@ function setupFrameHandling(page, forceDebug) {
                digOrTerms,
                digRecordType,
                digSubdomain: siteConfig.dig_subdomain === true,
+               // Add dry run callback for nettools results
+               dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
                matchedDomains,
                addMatchedDomain,
                currentUrl,
@@ -1207,6 +1310,16 @@ function setupFrameHandling(page, forceDebug) {
              if (forceDebug) {
                const searchType = hasSearchStringAnd ? 'searchstring_and' : 'searchstring';
                console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for ${searchType} content search`));
+             }
+             if (dryRunMode) {
+               matchedDomains.get('dryRunMatches').push({
+                 regex: re.source,
+                 domain: reqDomain,
+                 resourceType: resourceType,
+                 fullUrl: reqUrl,
+                 isFirstParty: isFirstParty,
+                 needsSearchStringCheck: true
+               });
              }
            }
            
@@ -1481,8 +1594,41 @@ function setupFrameHandling(page, forceDebug) {
         }
       }
 
-      // Format rules using the output module
-      const globalOptions = {
+      if (dryRunMode) {
+        // Get page title for dry run output
+        let pageTitle = '';
+        try {
+          pageTitle = await page.title();
+        } catch (titleErr) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Failed to get page title for ${currentUrl}: ${titleErr.message}`));
+          }
+        }
+        
+        // Get collected matches and enhance with searchstring results
+        const dryRunMatches = matchedDomains.get('dryRunMatches') || [];
+        const dryRunNetTools = matchedDomains.get('dryRunNetTools') || [];
+        const dryRunSearchString = matchedDomains.get('dryRunSearchString') || new Map();
+        
+        // Enhance matches with searchstring results
+        const enhancedMatches = dryRunMatches.map(match => {
+          const searchResult = dryRunSearchString.get(match.fullUrl);
+          return {
+            ...match,
+            searchStringMatch: searchResult && searchResult.matched ? searchResult : null,
+            searchStringChecked: match.needsSearchStringCheck
+          };
+        });
+        
+        // Wait a moment for async nettools/searchstring operations to complete
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Increased for nettools operations
+        
+        outputDryRunResults(currentUrl, enhancedMatches, dryRunNetTools, pageTitle);
+        
+        return { url: currentUrl, rules: [], success: true, dryRun: true, matchCount: dryRunMatches.length + dryRunNetTools.length };
+      } else {
+        // Format rules using the output module
+        const globalOptions = {
         localhostMode,
         localhostModeAlt,
         plainOutput,
@@ -1493,41 +1639,29 @@ function setupFrameHandling(page, forceDebug) {
         privoxyMode,
         piholeMode
       };
-      const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
+        const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
+        
+        return { url: currentUrl, rules: formattedRules, success: true };
+      }
       
-      return { url: currentUrl, rules: formattedRules, success: true };
-
     } catch (err) {
-      // For timeout errors, provide immediate feedback rather than waiting
-      const isTimeoutError = err.message.includes('timeout') || err.message.includes('timed out');
-      if (isTimeoutError && !silentMode) {
-        const quickUrl = currentUrl.length > 50 ? currentUrl.substring(0, 47) + '...' : currentUrl;
-        console.warn(messageColors.warn(`⚠ Timeout: ${quickUrl} (${timeout/1000}s) - continuing...`));
+      // Enhanced error handling with rule preservation for partial matches
+      if (err.message.includes('Protocol error') || 
+          err.message.includes('Target closed') ||
+          err.message.includes('Browser process was killed') ||
+          err.message.includes('Browser protocol broken')) {
+        console.error(formatLogMessage('error', `Critical browser error on ${currentUrl}: ${err.message}`));
+        return { 
+          url: currentUrl, 
+          rules: [], 
+          success: false, 
+          needsImmediateRestart: true,
+          error: err.message
+        };
       }
-      const isProtocolError = err.message.includes('Protocol error') || err.message.includes('Target closed');
-      const isNetworkError = err.message.includes('Network.enable timed out');
-      const isBrowserBroken = err.message.includes('Browser protocol broken') || 
-                              err.message.includes('Browser process was killed') ||
-                              err.message.includes('Browser health degraded');
       
-      if (isTimeoutError && forceDebug) {
-        // Only show detailed timeout in debug mode to reduce noise
-        console.warn(messageColors.warn(`⚠ Timeout loading: ${currentUrl} (${err.message})`));
-      } else if (isProtocolError) {
-        console.warn(messageColors.warn(`⚠ Protocol error: ${currentUrl} (browser may need restart)`));
-      } else if (isNetworkError || isBrowserBroken) {
-        console.warn(messageColors.warn(`⚠ Browser broken: ${currentUrl} (forcing immediate restart)`));
-        // Signal that browser restart is needed
-        if (page && !page.isClosed()) {
-          await page.close().catch(() => {});
-        }
-        return { url: currentUrl, rules: [], success: false, needsImmediateRestart: true };
-      } else {
-        console.warn(messageColors.warn(`⚠ Failed to load or process: ${currentUrl} (${err.message})`));
-      }
-	  
-      // Save any matches found even if page failed to load completely
-      if (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0)) {
+      // For other errors, preserve any matches we found before the error
+      if (matchedDomains && (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0))) {
         const globalOptions = {
           localhostMode,
           localhostModeAlt,
@@ -1536,6 +1670,7 @@ function setupFrameHandling(page, forceDebug) {
           dnsmasqMode,
           dnsmasqOldMode,
           unboundMode,
+          privoxyMode,
           piholeMode
         };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
@@ -1543,14 +1678,12 @@ function setupFrameHandling(page, forceDebug) {
         return { url: currentUrl, rules: formattedRules, success: false, hasMatches: true };
       }
       
-      
       if (siteConfig.screenshot === true && page) {
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
         const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_');
         const filename = `${safeUrl}-${timestamp}.jpg`;
         try {
           await page.screenshot({ path: filename, type: 'jpeg', fullPage: true });
-
           if (forceDebug) console.log(formatLogMessage('debug', `Screenshot saved: ${filename}`));
         } catch (screenshotErr) {
           console.warn(messageColors.warn(`[screenshot failed] ${currentUrl}: ${screenshotErr.message}`));
@@ -1741,23 +1874,36 @@ function setupFrameHandling(page, forceDebug) {
   }
 
 
-  // Handle all output using the output module
-  const outputConfig = {
-    outputFile,
-    compareFile,
-    forceDebug,
-    showTitles,
-    removeDupes: removeDupes && outputFile,
-    silentMode,
-    dumpUrls,
+  let outputResult;
+  
+  if (!dryRunMode) {
+    // Handle all output using the output module
+    const outputConfig = {
+      outputFile,
+      compareFile,
+      forceDebug,
+      showTitles,
+      removeDupes: removeDupes && outputFile,
+      silentMode,
+      dumpUrls,
     adblockRulesLogFile
   };
   
-  const outputResult = handleOutput(results, outputConfig);
+  outputResult = handleOutput(results, outputConfig);
   
   if (!outputResult.success) {
     console.error(messageColors.error('❌ Failed to write output files'));
     process.exit(1);
+  }
+
+  } else {
+    // For dry run mode, create a mock output result
+    const totalMatches = results.reduce((sum, r) => sum + (r.matchCount || 0), 0);
+    outputResult = {
+      success: true,
+      successfulPageLoads: results.filter(r => r.success).length,
+      totalRules: totalMatches
+    };
   }
 
   // Use the success count from output handler
@@ -1785,7 +1931,7 @@ function setupFrameHandling(page, forceDebug) {
   }
   
   // Compress log files if --compress-logs is enabled
-  if (compressLogs && dumpUrls) {
+  if (compressLogs && dumpUrls && !dryRunMode) {
     // Collect all existing log files for compression
     const filesToCompress = [];
     if (debugLogFile && fs.existsSync(debugLogFile)) filesToCompress.push(debugLogFile);
@@ -1861,14 +2007,17 @@ function setupFrameHandling(page, forceDebug) {
   // Final summary report with timing and success statistics
   if (!silentMode) {
     if (pagesWithMatches > outputResult.successfulPageLoads) {
-      console.log(`\n${messageColors.success('Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs loaded successfully, ${pagesWithMatches} had matches in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
+      console.log(`\n${messageColors.success(dryRunMode ? 'Dry run completed.' : 'Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs loaded successfully, ${pagesWithMatches} had matches in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
 
     } else {
-      console.log(`\n${messageColors.success('Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
+      console.log(`\n${messageColors.success(dryRunMode ? 'Dry run completed.' : 'Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs processed successfully in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
+
 
     }
-    if (outputResult.totalRules > 0) {
+    if (outputResult.totalRules > 0 && !dryRunMode) {
       console.log(messageColors.success('Generated') + ` ${outputResult.totalRules} unique rules`);
+    } else if (outputResult.totalRules > 0 && dryRunMode) {
+      console.log(messageColors.success('Found') + ` ${outputResult.totalRules} total matches across all URLs`);
     }
   }
   
