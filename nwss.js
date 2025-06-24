@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.25 ===
+// === Network scanner script (nwss.js) v1.0.26 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.25'; // Script version
+const VERSION = '1.0.26'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -141,10 +141,6 @@ if (compressLogs && !dumpUrls) {
 
 // Validate --dry-run usage
 if (dryRunMode) {
-  if (outputFile) {
-    console.error(`❌ --dry-run cannot be used with --output (-o) - use one or the other`);
-    process.exit(1);
-  }
   if (compressLogs || compareFile) {
     console.error(`❌ --dry-run cannot be used with --compress-logs or --compare`);
     process.exit(1);
@@ -305,6 +301,9 @@ const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay
 // Add global cycling index tracker for whois server selection
 let globalWhoisServerIndex = 0;
 
+// Track dry run output for file writing
+let dryRunOutput = [];
+
 // --- Log File Setup ---
 let debugLogFile = null;
 let matchedUrlsLogFile = null;
@@ -391,27 +390,48 @@ function safeGetDomain(url, getFullHostname = false) {
 
 /**
  * Outputs dry run results to console with formatted display
+ * If outputFile is specified, also captures output for file writing
  * @param {string} url - The URL being processed  
  * @param {Array} matchedItems - Array of matched items with regex, domain, and resource type
  * @param {Array} netToolsResults - Array of whois/dig results
  * @param {string} pageTitle - Title of the page (if available)
  */
 function outputDryRunResults(url, matchedItems, netToolsResults, pageTitle) {
+  const lines = [];
+  
+  lines.push(`\n=== DRY RUN RESULTS === ${url}`);
+
   console.log(`\n${messageColors.scanning('=== DRY RUN RESULTS ===')} ${url}`);
   
   if (pageTitle && pageTitle.trim()) {
+    lines.push(`Title: ${pageTitle.trim()}`);
     console.log(`${messageColors.info('Title:')} ${pageTitle.trim()}`);
   }
   
   if (matchedItems.length === 0 && netToolsResults.length === 0) {
+    lines.push(`No matching rules found on ${url}`);
+    
+    // Store output for file writing if outputFile is specified
+    if (outputFile) {
+      dryRunOutput.push(...lines);
+      dryRunOutput.push(''); // Add empty line
+    }
     console.log(messageColors.warn(`No matching rules found on ${url}`));
     return;
   }
   
   const totalMatches = matchedItems.length + netToolsResults.length;
+  lines.push(`Matches found: ${totalMatches}`);
   console.log(`${messageColors.success('Matches found:')} ${totalMatches}`);
   
   matchedItems.forEach((item, index) => {
+    lines.push('');
+    lines.push(`[${index + 1}] Regex Match:`);
+    lines.push(`  Pattern: ${item.regex}`);
+    lines.push(`  Domain: ${item.domain}`);
+    lines.push(`  Resource Type: ${item.resourceType}`);
+    lines.push(`  Full URL: ${item.fullUrl}`);
+
     console.log(`\n${messageColors.highlight(`[${index + 1}]`)} ${messageColors.match('Regex Match:')}`);
     console.log(`  Pattern: ${item.regex}`);
     console.log(`  Domain: ${item.domain}`);
@@ -420,19 +440,30 @@ function outputDryRunResults(url, matchedItems, netToolsResults, pageTitle) {
     
     // Show searchstring results if available
     if (item.searchStringMatch) {
+      lines.push(`  ✓ Searchstring Match: ${item.searchStringMatch.type} - "${item.searchStringMatch.term}"`);
       console.log(`  ${messageColors.success('✓ Searchstring Match:')} ${item.searchStringMatch.type} - "${item.searchStringMatch.term}"`);
     } else if (item.searchStringChecked) {
+      lines.push(`  ✗ Searchstring: No matches found in content`);
       console.log(`  ${messageColors.warn('✗ Searchstring:')} No matches found in content`);
     }
     
     // Generate adblock rule
     const adblockRule = `||${item.domain}^$${item.resourceType}`;
+    lines.push(`  Adblock Rule: ${adblockRule}`);
     console.log(`  ${messageColors.info('Adblock Rule:')} ${adblockRule}`);
   });
   
   // Display nettools results
   netToolsResults.forEach((result, index) => {
     const resultIndex = matchedItems.length + index + 1;
+    lines.push('');
+    lines.push(`[${resultIndex}] NetTools Match:`);
+    lines.push(`  Domain: ${result.domain}`);
+    lines.push(`  Tool: ${result.tool.toUpperCase()}`);
+    lines.push(`  ✓ Match: ${result.matchType} - "${result.matchedTerm}"`);
+    if (result.details) {
+      lines.push(`  Details: ${result.details}`);
+    }
     console.log(`\n${messageColors.highlight(`[${resultIndex}]`)} ${messageColors.match('NetTools Match:')}`);
     console.log(`  Domain: ${result.domain}`);
     console.log(`  Tool: ${result.tool.toUpperCase()}`);
@@ -443,8 +474,15 @@ function outputDryRunResults(url, matchedItems, netToolsResults, pageTitle) {
     
     // Generate adblock rule for nettools matches
     const adblockRule = `||${result.domain}^`;
+    lines.push(`  Adblock Rule: ${adblockRule}`);
     console.log(`  ${messageColors.info('Adblock Rule:')} ${adblockRule}`);
   });
+
+  // Store output for file writing if outputFile is specified
+  if (outputFile) {
+    dryRunOutput.push(...lines);
+    dryRunOutput.push(''); // Add empty line between sites
+  }
 }
 
 // ability to use widcards in ignoreDomains
@@ -1873,6 +1911,18 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
+  // Handle dry run output file writing
+  if (dryRunMode && outputFile && dryRunOutput.length > 0) {
+    try {
+      const dryRunContent = dryRunOutput.join('\n');
+      fs.writeFileSync(outputFile, dryRunContent);
+      if (!silentMode) {
+        console.log(`${messageColors.fileOp('📄 Dry run results saved to:')} ${outputFile}`);
+      }
+    } catch (writeErr) {
+      console.error(`❌ Failed to write dry run output to ${outputFile}: ${writeErr.message}`);
+    }
+  }
 
   let outputResult;
   
