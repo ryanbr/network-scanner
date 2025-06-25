@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.26 ===
+// === Network scanner script (nwss.js) v1.0.27 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.26'; // Script version
+const VERSION = '1.0.27'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -1936,7 +1936,8 @@ function setupFrameHandling(page, forceDebug) {
       removeDupes: removeDupes && outputFile,
       silentMode,
       dumpUrls,
-    adblockRulesLogFile
+     adblockRulesLogFile,
+     ignoreDomains
   };
   
   outputResult = handleOutput(results, outputConfig);
