@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.27 ===
+// === Network scanner script (nwss.js) v1.0.28 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.27'; // Script version
+const VERSION = '1.0.28'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -267,6 +267,7 @@ Advanced Options:
   whois_use_fallback: true                   Add TLD-specific fallback servers (default: true)
   whois_retry_on_timeout: true               Retry on timeout errors (default: true)
   whois_retry_on_error: false                Retry on connection/other errors (default: false)
+  whois_delay: <milliseconds>                Delay between whois requests for this site (default: global whois_delay)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
   dig-or: ["term1", "term2"]                  Check dig output for ANY specified term (OR logic)
   goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
@@ -295,7 +296,7 @@ try {
   process.exit(1);
 }
 // Extract config values while ignoring 'comments' field at global and site levels
-const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 2000, whois_server_mode = 'random', comments: globalComments, ...otherGlobalConfig } = config;
+const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 3000, whois_server_mode = 'random', comments: globalComments, ...otherGlobalConfig } = config;
 
 
 // Add global cycling index tracker for whois server selection
@@ -1318,7 +1319,7 @@ function setupFrameHandling(page, forceDebug) {
              const netToolsHandler = createNetToolsHandler({
                whoisTerms,
                whoisOrTerms,
-               whoisDelay: whois_delay,
+               whoisDelay: siteConfig.whois_delay || whois_delay, // Site-specific or global fallback
 	       whoisServer, // Pass whois server configuration
                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
                debugLogFile, // Pass debug log file for whois error logging
