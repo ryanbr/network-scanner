@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.28 ===
+// === Network scanner script (nwss.js) v1.0.29 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,7 +27,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.28'; // Script version
+const VERSION = '1.0.29'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -49,6 +49,8 @@ const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
 if (outputIndex !== -1 && args[outputIndex + 1]) {
   outputFile = args[outputIndex + 1];
 }
+
+const appendMode = args.includes('--append');
 
 let compareFile = null;
 const compareIndex = args.findIndex(arg => arg === '--compare');
@@ -139,6 +141,17 @@ if (compressLogs && !dumpUrls) {
   process.exit(1);
 }
 
+// Validate --append usage  
+if (appendMode && !outputFile) {
+  console.error(`❌ --append requires --output (-o) to specify an output file`);
+  process.exit(1);
+}
+
+if (appendMode && (compareFile || dryRunMode)) {
+  console.error(`❌ --append cannot be used with --compare or --dry-run`);
+  process.exit(1);
+}
+
 // Validate --dry-run usage
 if (dryRunMode) {
   if (compressLogs || compareFile) {
@@ -170,6 +183,7 @@ Options:
   --color, --colour              Enable colored console output for status messages
   -o, --output <file>            Output file for rules. If omitted, prints to console
   --compare <file>               Remove rules that already exist in this file before output
+  --append                       Append new rules to output file instead of overwriting (requires -o)
     
 Output Format Options:
   --localhost                    Output as 127.0.0.1 domain.com
@@ -1931,6 +1945,7 @@ function setupFrameHandling(page, forceDebug) {
     // Handle all output using the output module
     const outputConfig = {
       outputFile,
+      appendMode,
       compareFile,
       forceDebug,
       showTitles,
