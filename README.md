@@ -27,6 +27,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `-o, --output <file>`       | Output file for rules. If omitted, prints to console |
 | `--compare <file>`          | Remove rules that already exist in this file before output |
 | `--color, --colour`         | Enable colored console output for status messages |
+| `--append`                  | Append new rules to output file instead of overwriting (requires `-o`) |
 
 ### Output Format Options
 
@@ -51,6 +52,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--silent`                  | Suppress normal console logs |
 | `--titles`                  | Add `! <url>` title before each site's group |
 | `--dumpurls`                | Dump matched URLs into matched_urls.log |
+| `--remove-tempfiles`        | Remove Chrome/Puppeteer temporary files before exit |
 | `--compress-logs`           | Compress log files with gzip (requires `--dumpurls`) |
 | `--sub-domains`             | Output full subdomains instead of collapsing to root |
 | `--no-interact`             | Disable page interactions globally |
@@ -58,9 +60,20 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--headful`                 | Launch browser with GUI (not headless) |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
 | `--remove-dupes`            | Remove duplicate domains from output (only with `-o`) |
+| `--dry-run`                 | Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules |
 | `--eval-on-doc`             | Globally enable evaluateOnNewDocument() for Fetch/XHR interception |
+| `--remove-tempfiles`        | Remove Chrome/Puppeteer temporary files before exit |
 | `--help`, `-h`              | Show this help menu |
 | `--version`                 | Show script version |
+
+### Validation Options
+
+| Argument                  | Description |
+|:---------------------------|:------------|
+| `--validate-config`         | Validate config.json file and exit |
+| `--validate-rules [file]`   | Validate rule file format (uses --output/--compare files if no file specified) |
+| `--clean-rules [file]`      | Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified) |
+| `--test-validation`         | Run domain validation tests and exit |
 
 ---
 
@@ -128,8 +141,9 @@ Example:
 |:---------------------|:-------|:-------:|:------------|
 | `whois`              | Array | - | Check whois data for ALL specified terms (AND logic) |
 | `whois-or`           | Array | - | Check whois data for ANY specified term (OR logic) |
-| `whois_delay`        | Integer | 2000 | Delay whois requests to avoid throttling (2sec Default) | 
+| `whois_delay`        | Integer | 3000 | Delay whois requests to avoid throttling (2sec Default) | 
 | `whois_server`       | String or Array | - | Custom whois server(s) - single server or randomized list |
+| `whois_server_mode`  | String | `"random"` | Server selection mode: `"random"` or `"cycle"` |
 | `whois_max_retries`  | Integer | `2` | Maximum retry attempts per domain |
 | `whois_timeout_multiplier` | Number | `1.5` | Timeout increase multiplier per retry |
 | `whois_use_fallback` | Boolean | `true` | Add TLD-specific fallback servers |
@@ -163,11 +177,48 @@ Example:
 
 ---
 
+## Usage Examples
+
+### Basic Scanning
+```
+# Scan with default config and output to console
+node nwss.js
+
+# Scan and save rules to file
+node nwss.js -o blocklist.txt
+
+# Append new rules to existing file
+node nwss.js --append -o blocklist.txt
+
+# Clean existing rules and append new ones
+node nwss.js --clean-rules --append -o blocklist.txt
+```
+
+### Advanced Options
+```
+# Debug mode with URL dumping and colored output
+node nwss.js --debug --dumpurls --color -o rules.txt
+
+# Dry run to see what would be matched
+node nwss.js --dry-run --debug
+
+# Validate configuration before running
+node nwss.js --validate-config
+
+# Clean rule files
+node nwss.js --clean-rules existing_rules.txt
+```
+
 ## Notes
 
 - If both `firstParty: 0` and `thirdParty: 0` are set for a site, it will be skipped.
 - `ignoreDomains` applies globally across all sites.
+- `ignoreDomains` supports wildcards (e.g., `*.ads.com` matches `tracker.ads.com`)
 - Blocking (`blocked`) can match full domains or regex.
 - If a site's `blocked` field is missing, no extra blocking is applied.
+- `--clean-rules` with `--append` will clean existing files first, then append new rules
+- `--remove-dupes` works with all output modes and removes duplicates from final output
+- Validation tools help ensure rule files are properly formatted before use
+- `remove-tempfiles` Remove Chrome/Puppeteer temporary files before exiting, avoids disk space issues
 
 ---
