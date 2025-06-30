@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.29 ===
+// === Network scanner script (nwss.js) v1.0.30 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -11,6 +11,8 @@ const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
+// Rule validation
+const { validateRulesetFile, validateFullConfig, testDomainValidation, cleanRulesetFile } = require('./lib/validate_rules');
 // CF Bypass
 const { handleCloudflareProtection } = require('./lib/cloudflare');
 // FP Bypass
@@ -27,7 +29,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.29'; // Script version
+const VERSION = '1.0.30'; // Script version
 const MAX_CONCURRENT_SITES = 3;
 const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
 
@@ -80,6 +82,24 @@ const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interce
 const dryRunMode = args.includes('--dry-run');
 const compressLogs = args.includes('--compress-logs');
 const removeTempFiles = args.includes('--remove-tempfiles');
+const validateConfig = args.includes('--validate-config');
+const validateRules = args.includes('--validate-rules');
+const testValidation = args.includes('--test-validation');
+let cleanRules = args.includes('--clean-rules');
+
+let validateRulesFile = null;
+const validateRulesIndex = args.findIndex(arg => arg === '--validate-rules');
+if (validateRulesIndex !== -1 && args[validateRulesIndex + 1] && !args[validateRulesIndex + 1].startsWith('--')) {
+  validateRulesFile = args[validateRulesIndex + 1];
+  validateRules = true; // Override the boolean if file specified
+}
+
+let cleanRulesFile = null;
+const cleanRulesIndex = args.findIndex(arg => arg === '--clean-rules');
+if (cleanRulesIndex !== -1 && args[cleanRulesIndex + 1] && !args[cleanRulesIndex + 1].startsWith('--')) {
+  cleanRulesFile = args[cleanRulesIndex + 1];
+  cleanRules = true; // Override the boolean if file specified
+}
 
 const enableColors = args.includes('--color') || args.includes('--colour');
 let adblockRulesMode = args.includes('--adblock-rules');
@@ -176,6 +196,85 @@ if (args.includes('--version')) {
   process.exit(0);
 }
 
+// Handle validation-only operations before main help
+if (testValidation) {
+  console.log(`\n${messageColors.processing('Running domain validation tests...')}`);
+  const testResult = testDomainValidation();
+  if (testResult) {
+    console.log(`${messageColors.success('✅ All validation tests passed!')}`);
+    process.exit(0);
+  } else {
+    console.log(`${messageColors.error('❌ Some validation tests failed!')}`);
+    process.exit(1);
+  }
+}
+
+if (validateConfig) {
+  console.log(`\n${messageColors.processing('Validating configuration file...')}`);
+  try {
+    const validation = validateFullConfig(config, { forceDebug, silentMode });
+    if (validation.isValid) {
+      console.log(`${messageColors.success('✅ Configuration is valid!')}`);
+      console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
+      if (validation.summary.sitesWithWarnings > 0) {
+        console.log(`${messageColors.warn('⚠ Warnings:')} ${validation.summary.sitesWithWarnings} sites have warnings`);
+      }
+      process.exit(0);
+    } else {
+      console.log(`${messageColors.error('❌ Configuration validation failed!')}`);
+      console.log(`${messageColors.error('Errors:')} ${validation.globalErrors.length} global, ${validation.summary.sitesWithErrors} site-specific`);
+      process.exit(1);
+    }
+  } catch (validationErr) {
+    console.error(`❌ Validation failed: ${validationErr.message}`);
+    process.exit(1);
+  }
+}
+
+if (validateRules || validateRulesFile) {
+  const filesToValidate = validateRulesFile ? [validateRulesFile] : [outputFile, compareFile].filter(Boolean);
+  
+  if (filesToValidate.length === 0) {
+    console.error('❌ --validate-rules requires either a file argument or --output/--compare files to be specified');
+    process.exit(1);
+  }
+  
+  console.log(`\n${messageColors.processing('Validating rule files...')}`);
+  let overallValid = true;
+  
+  for (const file of filesToValidate) {
+    console.log(`\n${messageColors.info('Validating:')} ${file}`);
+    try {
+      const validation = validateRulesetFile(file, { forceDebug, silentMode, maxErrors: 20 });
+      
+      if (validation.isValid) {
+        console.log(`${messageColors.success('✅ Valid:')} ${validation.stats.valid} rules, ${validation.stats.comments} comments`);
+        if (validation.duplicates.length > 0) {
+          console.log(`${messageColors.warn('⚠ Duplicates:')} ${validation.duplicates.length} duplicate rules found`);
+        }
+        
+        if (Object.keys(validation.stats.formats).length > 0) {
+          console.log(`${messageColors.info('Formats:')} ${Object.entries(validation.stats.formats).map(([f, c]) => `${f}(${c})`).join(', ')}`);
+        }
+      } else {
+        console.log(`${messageColors.error('❌ Invalid:')} ${validation.stats.invalid} invalid rules out of ${validation.stats.total} total`);
+        overallValid = false;
+      }
+    } catch (validationErr) {
+      console.error(`❌ Failed to validate ${file}: ${validationErr.message}`);
+      overallValid = false;
+    }
+  }
+  
+  if (overallValid) {
+    console.log(`\n${messageColors.success('✅ All rule files are valid!')}`);
+    process.exit(0);
+  } else {
+    console.log(`\n${messageColors.error('❌ Some rule files have validation errors!')}`);
+    process.exit(1);
+  }
+}
+
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node nwss.js [options]
 
@@ -214,6 +313,12 @@ General Options:
   --help, -h                     Show this help menu
   --version                      Show script version
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
+
+Validation Options:
+  --validate-config              Validate config.json file and exit
+  --validate-rules [file]        Validate rule file format (uses --output/--compare files if no file specified)
+  --clean-rules [file]           Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified)
+  --test-validation              Run domain validation tests and exit
   
 Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
@@ -312,6 +417,110 @@ try {
 // Extract config values while ignoring 'comments' field at global and site levels
 const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 3000, whois_server_mode = 'random', comments: globalComments, ...otherGlobalConfig } = config;
 
+// Handle --clean-rules after config is loaded (so we have access to sites)
+if (cleanRules || cleanRulesFile) {
+  const filesToClean = cleanRulesFile ? [cleanRulesFile] : [outputFile, compareFile].filter(Boolean);
+  
+  if (filesToClean.length === 0) {
+    console.error('❌ --clean-rules requires either a file argument or --output/--compare files to be specified');
+    process.exit(1);
+  }
+  
+  console.log(`\n${messageColors.processing('Cleaning rule files...')}`);
+  let overallSuccess = true;
+  let totalCleaned = 0;
+  
+  // Check if we're cleaning the same file we want to use for output
+  const cleaningOutputFile = outputFile && filesToClean.includes(outputFile);
+  
+  if (cleaningOutputFile && forceDebug) {
+    console.log(formatLogMessage('debug', `Output file detected: will clean ${outputFile} first, then continue with scan`));
+  }
+  
+  for (const file of filesToClean) {
+    console.log(`\n${messageColors.info('Cleaning:')} ${file}`);
+
+    // Check if file exists before trying to clean it
+    if (!fs.existsSync(file)) {
+      if (file === outputFile) {
+        // If it's the output file that doesn't exist, that's OK - we'll create it during scan
+        const modeText = appendMode ? 'created (append mode)' : 'created';
+        console.log(`${messageColors.info('📄 Note:')} Output file ${file} doesn't exist yet - will be ${modeText} during scan`);
+        continue;
+      } else {
+        // For other files (like compare files), this is an error
+        console.log(`${messageColors.error('❌ Failed:')} File not found: ${file}`);
+        overallSuccess = false;
+        continue;
+      }
+    }
+
+    try {
+      const cleanResult = cleanRulesetFile(file, null, { 
+        forceDebug, 
+        silentMode, 
+        removeDuplicates: removeDupes,
+        backupOriginal: true,
+        dryRun: dryRunMode
+      });
+      
+      if (cleanResult.success) {
+        if (dryRunMode) {
+          if (cleanResult.wouldModify) {
+            console.log(`${messageColors.info('🔍 Dry run:')} Would remove ${cleanResult.stats.removed} lines (${cleanResult.stats.invalid} invalid, ${cleanResult.stats.duplicates} duplicates)`);
+          } else {
+            console.log(`${messageColors.success('✅ Dry run:')} File is already clean - no changes needed`);
+          }
+        } else {
+          if (cleanResult.modified) {
+            console.log(`${messageColors.success('✅ Cleaned:')} Removed ${cleanResult.stats.removed} lines, preserved ${cleanResult.stats.valid} valid rules`);
+            if (cleanResult.backupCreated) {
+              console.log(`${messageColors.info('💾 Backup:')} Original file backed up`);
+            }
+            totalCleaned += cleanResult.stats.removed;
+
+            if (cleaningOutputFile && file === outputFile) {
+              console.log(`${messageColors.info('📄 Note:')} File cleaned - new rules will be ${appendMode ? 'appended' : 'written'} during scan`);
+            }
+          } else {
+            console.log(`${messageColors.success('✅ Clean:')} File was already valid - no changes needed`);
+          }
+        }
+      } else {
+        console.log(`${messageColors.error('❌ Failed:')} ${cleanResult.error}`);
+        overallSuccess = false;
+      }
+    } catch (cleanErr) {
+      console.error(`❌ Failed to clean ${file}: ${cleanErr.message}`);
+      overallSuccess = false;
+    }
+  }
+  
+  // Determine if we should continue with scanning
+  const shouldContinueScanning = sites && sites.length > 0 && outputFile;
+  const cleanedOutputFileForScanning = outputFile && filesToClean.includes(outputFile);
+  
+  if (overallSuccess) {
+    if (dryRunMode) {
+      console.log(`\n${messageColors.info('🔍 Dry run completed successfully!')}`);
+      process.exit(0);
+    } else {
+      console.log(`\n${messageColors.success('✅ All rule files cleaned successfully!')} Total lines removed: ${totalCleaned}`);
+      
+      // Continue with scan if we have sites to process and we cleaned the output file
+      if (shouldContinueScanning && cleanedOutputFileForScanning) {
+        const actionText = appendMode ? 'append new rules to' : 'write rules to';
+        console.log(`${messageColors.info('📄 Continuing:')} Proceeding with scan to ${actionText} ${outputFile}`);
+        // Don't exit - continue with scanning
+      } else {
+        process.exit(0);
+      }
+    }
+  } else {
+    console.log(`\n${messageColors.error('❌ Some rule files failed to clean!')}`);
+    process.exit(1);
+  }
+}
 
 // Add global cycling index tracker for whois server selection
 let globalWhoisServerIndex = 0;
