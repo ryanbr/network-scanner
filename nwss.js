@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.30 ===
+// === Network scanner script (nwss.js) v1.0.31 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -29,7 +29,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.30'; // Script version
+const VERSION = '1.0.31'; // Script version
 const MAX_CONCURRENT_SITES = 4;
 const RESOURCE_CLEANUP_INTERVAL = 50; // Close browser and restart every N sites to free resources
 
@@ -361,6 +361,7 @@ Per-site config.json options:
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
   adblock_rules: true/false                    Generate adblock filter rules with resource types for this site
+  even_blocked: true/false                     Add matching rules even if requests are blocked (default: false)
 
 Cloudflare Protection Options:
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
@@ -1004,6 +1005,7 @@ function setupFrameHandling(page, forceDebug) {
     const sitePihole = siteConfig.pihole === true;
     const flowproxyDetection = siteConfig.flowproxy_detection === true;
     
+    const evenBlocked = siteConfig.even_blocked === true;
     // Log site-level comments if debug mode is enabled
     if (forceDebug && siteConfig.comments) {
       const siteComments = Array.isArray(siteConfig.comments) ? siteConfig.comments : [siteConfig.comments];
@@ -1426,19 +1428,61 @@ function setupFrameHandling(page, forceDebug) {
             const allPatterns = [...(siteConfig.blocked || []), ...globalBlocked];
             const matchedPattern = allPatterns.find(pattern => new RegExp(pattern).test(reqUrl));
             const patternSource = siteConfig.blocked && siteConfig.blocked.includes(matchedPattern) ? 'site' : 'global';
-           const simplifiedUrl = getRootDomain(currentUrl);
-           console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
-           
-           // Also log to file if debug logging is enabled
-           if (debugLogFile) {
-             try {
-               const timestamp = new Date().toISOString();
-               fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (${patternSource} pattern: ${matchedPattern})\n`);
-             } catch (logErr) {
-               console.warn(formatLogMessage('warn', `Failed to write blocked domain to debug log: ${logErr.message}`));
-             }
-           }
-         }
+            const simplifiedUrl = getRootDomain(currentUrl);
+            console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
+            
+            // Also log to file if debug logging is enabled
+            if (debugLogFile) {
+              try {
+                const timestamp = new Date().toISOString();
+                fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (${patternSource} pattern: ${matchedPattern})\n`);
+              } catch (logErr) {
+                console.warn(formatLogMessage('warn', `Failed to write blocked domain to debug log: ${logErr.message}`));
+              }
+            }
+          }
+          
+          // NEW: Check if even_blocked is enabled and this URL matches filter regex
+          if (evenBlocked) {
+            const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains);
+            if (reqDomain && !matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+              for (const re of regexes) {
+                if (re.test(reqUrl)) {
+                  const resourceType = request.resourceType();
+                  
+                  // Apply same filtering logic as unblocked requests
+                  const allowedResourceTypes = siteConfig.resourceTypes;
+                  if (!allowedResourceTypes || !Array.isArray(allowedResourceTypes) || allowedResourceTypes.includes(resourceType)) {
+                    if (dryRunMode) {
+                      matchedDomains.get('dryRunMatches').push({
+                        regex: re.source,
+                        domain: reqDomain,
+                        resourceType: resourceType,
+                        fullUrl: reqUrl,
+                        isFirstParty: isFirstParty,
+                        wasBlocked: true
+                      });
+                    } else {
+                      addMatchedDomain(reqDomain, resourceType);
+                    }
+                    
+                    const simplifiedUrl = getRootDomain(currentUrl);
+                    if (siteConfig.verbose === 1) {
+                      const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
+                      console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo} [BLOCKED BUT ADDED]`));
+                    }
+                    if (dumpUrls) {
+                      const timestamp = new Date().toISOString();
+                      const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
+                      fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo} [BLOCKED BUT ADDED]\n`);
+                    }
+                    break; // Only match once per URL
+                  }
+                }
+              }
+            }
+          }
+          
           request.abort();
           return;
         }
@@ -1464,7 +1508,6 @@ function setupFrameHandling(page, forceDebug) {
              if (!allowedResourceTypes.includes(resourceType)) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`));
-
                }
                break; // Skip this URL entirely - doesn't match required resource types
              }
@@ -1492,13 +1535,8 @@ function setupFrameHandling(page, forceDebug) {
             break; // Skip this URL - domain is in ignore list
           }
  
-            // Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
-            if (allBlockedRegexes.some(re => re.test(reqUrl))) {
-              if (forceDebug) {
-                console.log(formatLogMessage('debug', `URL ${reqUrl} matches blocked pattern, skipping detection (but request already blocked)`));
-              }
-              break; // Skip detection but don't interfere with browser blocking
-            }
+            // REMOVED: Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
+            // This check is no longer needed here since even_blocked handles it above
             
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
@@ -1517,13 +1555,11 @@ function setupFrameHandling(page, forceDebug) {
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
               console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo}`));
-
              }
              if (dumpUrls) {
                const timestamp = new Date().toISOString();
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
                fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo}\n`);
-
              }
             } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
