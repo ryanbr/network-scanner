@@ -10,9 +10,9 @@
     "version": "node nwss.js --version"
   },
   "dependencies": {
-    "puppeteer": "^21.3.8",
+    "p-limit": "^4.0.0",
     "psl": "^1.9.0",
-    "p-limit": "^4.0.0"
+    "puppeteer": "^22.15.0"
   },
   "keywords": [
     "puppeteer",
