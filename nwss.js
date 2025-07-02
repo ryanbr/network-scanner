@@ -894,7 +894,7 @@ function setupFrameHandling(page, forceDebug) {
 	    '--disable-checker-imaging',
 	    '--disable-image-animation-resync'
         ],
-        headless: launchHeadless,
+        headless: launchHeadless ? 'shell' : false,
         protocolTimeout: 500000
     });
     
@@ -912,6 +912,11 @@ function setupFrameHandling(page, forceDebug) {
   // launch with no safe browsing
   let browser = await createBrowser();
   if (forceDebug) console.log(formatLogMessage('debug', `Launching browser with headless: ${launchHeadless}`));
+
+  // Log which headless mode is being used
+  if (forceDebug && launchHeadless) {
+    console.log(formatLogMessage('debug', `Using chrome-headless-shell for maximum performance`));
+  }
 
   // Initial cleanup of any existing Chrome temp files - always comprehensive on startup
   if (forceDebug) console.log(formatLogMessage('debug', 'Cleaning up any leftover temp files from previous runs...'));
