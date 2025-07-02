@@ -30,8 +30,8 @@ const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth'
 
 // --- Script Configuration & Constants ---
 const VERSION = '1.0.30'; // Script version
-const MAX_CONCURRENT_SITES = 3;
-const RESOURCE_CLEANUP_INTERVAL = 40; // Close browser and restart every N sites to free resources
+const MAX_CONCURRENT_SITES = 4;
+const RESOURCE_CLEANUP_INTERVAL = 50; // Close browser and restart every N sites to free resources
 
 // get startTime
 const startTime = Date.now();
