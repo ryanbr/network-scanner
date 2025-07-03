@@ -11,6 +11,8 @@ Validate using;
 | `/rto.min.js`            | `\\/rto\\.min\\.js$` |
 | `.com/`                  | `\\.com\\/` |
 | `/test/`                 | `\\/test\\/` |
+| `/ab/cd.php?ev=`         | `\\/ab\\/cd\\.php\\?ev=` |
+| `/ab/cde/ow/bra?`        | `\\/ab\\/cde\\/ow\\/bra\\?.*` |
 | `dcbgh`                  | `dcbgh` |
 | `/gts_test=`             | `\\/\\?gts_test=` |
 | `abcdefghjk.top/`        | `^https?:\\/\\/[a-z]{8,19}\\.top\\/$` |
