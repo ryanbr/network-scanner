@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.31 ===
+// === Network scanner script (nwss.js) v1.0.32 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -17,6 +17,8 @@ const { validateRulesetFile, validateFullConfig, testDomainValidation, cleanRule
 const { handleCloudflareProtection } = require('./lib/cloudflare');
 // FP Bypass
 const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
+// ignore_similar rules
+const { shouldIgnoreSimilarDomain } = require('./lib/ignore_similar');
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
 // Whois & Dig
@@ -29,7 +31,7 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.31'; // Script version
+const VERSION = '1.0.32'; // Script version
 const MAX_CONCURRENT_SITES = 5;
 const RESOURCE_CLEANUP_INTERVAL = 60; // Close browser and restart every N sites to free resources
 
@@ -324,6 +326,9 @@ Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
   blocked: ["regex1", "regex2"]                   Global regex patterns to block requests (combined with per-site blocked)
   whois_server_mode: "random" or "cycle"      Default server selection mode for all sites (default: random)
+  ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
+  ignore_similar_threshold: 80                    Similarity threshold percentage for ignore_similar (default: 80)
+  ignore_similar_ignored_domains: true/false      Ignore domains similar to ignoreDomains list (default: true)
 
 
 Per-site config.json options:
@@ -331,6 +336,9 @@ Per-site config.json options:
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
   comments: "text" or ["text1", "text2"]       Documentation/notes - ignored by script
   searchstring: "text" or ["text1", "text2"]   Text to search in response content (requires filterRegex match)
+  ignore_similar: true/false                   Override global ignore_similar setting for this site
+  ignore_similar_threshold: 80                 Override global similarity threshold for this site
+  ignore_similar_ignored_domains: true/false   Override global ignore_similar_ignored_domains for this site
   searchstring_and: "text" or ["text1", "text2"] Text to search with AND logic - ALL terms must be present (requires filterRegex match)
   curl: true/false                             Use curl to download content for analysis (default: false)
                                                Note: curl respects filterRegex but ignores resourceTypes filtering
@@ -416,7 +424,7 @@ try {
   process.exit(1);
 }
 // Extract config values while ignoring 'comments' field at global and site levels
-const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 3000, whois_server_mode = 'random', comments: globalComments, ...otherGlobalConfig } = config;
+const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 3000, whois_server_mode = 'random', ignore_similar = true, ignore_similar_threshold = 80, ignore_similar_ignored_domains = true, comments: globalComments, ...otherGlobalConfig } = config;
 
 // Handle --clean-rules after config is loaded (so we have access to sites)
 if (cleanRules || cleanRulesFile) {
@@ -1358,6 +1366,46 @@ function setupFrameHandling(page, forceDebug) {
        * @param {string} resourceType - Resource type (for --adblock-rules mode)
        */
       function addMatchedDomain(domain, resourceType = null) {
+       // Check if we should ignore similar domains
+       const ignoreSimilarEnabled = siteConfig.ignore_similar !== undefined ? siteConfig.ignore_similar : ignore_similar;
+       const similarityThreshold = siteConfig.ignore_similar_threshold || ignore_similar_threshold;
+       const ignoreSimilarIgnoredDomains = siteConfig.ignore_similar_ignored_domains !== undefined ? siteConfig.ignore_similar_ignored_domains : ignore_similar_ignored_domains;
+       
+       if (ignoreSimilarEnabled) {
+         const existingDomains = matchedDomains instanceof Map 
+           ? Array.from(matchedDomains.keys()).filter(key => !['dryRunMatches', 'dryRunNetTools', 'dryRunSearchString'].includes(key))
+           : Array.from(matchedDomains);
+           
+         const similarCheck = shouldIgnoreSimilarDomain(domain, existingDomains, {
+           enabled: true,
+           threshold: similarityThreshold,
+           forceDebug
+         });
+         
+         if (similarCheck.shouldIgnore) {
+           if (forceDebug) {
+             console.log(formatLogMessage('debug', `[ignore_similar] Skipping ${domain}: ${similarCheck.reason}`));
+           }
+           return; // Skip adding this domain
+         }
+       }
+
+      // Check if domain is similar to any in ignoreDomains list
+      if (ignoreSimilarIgnoredDomains && ignoreDomains && ignoreDomains.length > 0) {
+        const ignoredSimilarCheck = shouldIgnoreSimilarDomain(domain, ignoreDomains, {
+          enabled: true,
+          threshold: similarityThreshold,
+          forceDebug
+        });
+        
+        if (ignoredSimilarCheck.shouldIgnore) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `[ignore_similar_ignored_domains] Skipping ${domain}: ${ignoredSimilarCheck.reason} (similar to ignoreDomains)`));
+          }
+          return; // Skip adding this domain
+        }
+      }
+      
         if (matchedDomains instanceof Map) {
           if (!matchedDomains.has(domain)) {
             matchedDomains.set(domain, new Set());
