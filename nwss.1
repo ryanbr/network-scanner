@@ -1,6 +1,6 @@
-.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.15" "User Commands"
+.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.32" "User Commands"
 .SH NAME
-NWSS scanner-script \- Network scanner for malware detection and domain analysis
+NWSS scanner-script \- Network scanner for malware detection and domain analysis with advanced similarity filtering
 
 .SH SYNOPSIS
 .B node nwss.js
@@ -10,7 +10,7 @@ NWSS scanner-script \- Network scanner for malware detection and domain analysis
 .B nwss.js
 is a comprehensive network scanner that uses Puppeteer to analyze web pages for malicious content, tracking scripts, and suspicious domains. It can detect threats through URL pattern matching, content analysis, DNS/WHOIS lookups, and behavioral analysis.
 
-The scanner supports multiple detection methods including regex filtering, content searching with curl/grep, network tools integration, and advanced browser-based analysis with frame monitoring and fingerprint spoofing.
+The scanner supports multiple detection methods including regex filtering, content searching with curl/grep, network tools integration, and advanced browser-based analysis with frame monitoring and fingerprint spoofing. It includes intelligent domain similarity filtering to reduce noise and improve detection accuracy.
 
 .SH OPTIONS
 
@@ -22,6 +22,10 @@ Write rules to \fIFILE\fR instead of standard output.
 .TP
 .BR \--compare " \fIFILE\fR"
 Remove rules that already exist in \fIFILE\fR before output (requires \fB\-o\fR).
+
+.TP
+.B \--append
+Append new rules to output file instead of overwriting (requires \fB\-o\fR).
 
 .SS Output Format Options
 .TP
@@ -114,12 +118,37 @@ Remove duplicate domains from output (only with \fB\-o\fR).
 Globally enable JavaScript injection for Fetch/XHR interception.
 
 .TP
+.B \--dry-run
+Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules without writing files.
+
+.TP
+.B \--remove-tempfiles
+Remove Chrome/Puppeteer temporary files before exit.
+
+.TP
 .BR \-h ", " \--help
 Show help message and exit.
 
 .TP
 .B \--version
 Show version information and exit.
+
+.SS Validation Options
+.TP
+.B \--validate-config
+Validate config.json file and exit.
+
+.TP
+.B \--validate-rules [\fIFILE\fR]
+Validate rule file format (uses \fB\--output\fR/\fB\--compare\fR files if no file specified).
+
+.TP
+.B \--clean-rules [\fIFILE\fR]
+Clean rule files by removing invalid lines and optionally duplicates (uses \fB\--output\fR/\fB\--compare\fR files if no file specified).
+
+.TP
+.B \--test-validation
+Run domain validation tests and exit.
 
 .SH CONFIGURATION
 
@@ -134,6 +163,26 @@ Array of domains to completely ignore. Supports wildcards (e.g., \fB"*.ads.com"\
 .TP
 .B blocked
 Array of global regex patterns to block requests.
+
+.TP
+.B whois_delay
+Default delay between whois requests in milliseconds (default: 3000).
+
+.TP
+.B whois_server_mode
+Default server selection mode for all sites: \fB"random"\fR or \fB"cycle"\fR (default: "random").
+
+.TP
+.B ignore_similar
+Boolean. Ignore domains similar to already found domains (default: true).
+
+.TP
+.B ignore_similar_threshold
+Number. Similarity threshold percentage for ignore_similar (default: 80).
+
+.TP
+.B ignore_similar_ignored_domains
+Boolean. Ignore domains similar to ignoreDomains list (default: true).
 
 .SS Per-Site Configuration Options
 
@@ -210,6 +259,22 @@ Boolean. Allow third-party request matching (default: true).
 Boolean or \fB"random"\fR. Enable browser fingerprint spoofing.
 
 .TP
+.B ignore_similar
+Boolean. Override global ignore_similar setting for this site.
+
+.TP
+.B ignore_similar_threshold
+Number. Override global similarity threshold for this site.
+
+.TP
+.B ignore_similar_ignored_domains
+Boolean. Override global ignore_similar_ignored_domains for this site.
+
+.TP
+.B even_blocked
+Boolean. Add matching rules even if requests are blocked (default: false).
+
+.TP
 .B whois
 Array of terms that must ALL be found in WHOIS data (AND logic).
 
@@ -220,6 +285,34 @@ Array of terms where ANY must be found in WHOIS data (OR logic).
 .TP
 .B whois_server
 Custom WHOIS server(s) to use for lookups.
+
+.TP
+.B whois_server_mode
+Server selection mode: \fB"random"\fR (default) or \fB"cycle"\fR through list.
+
+.TP
+.B whois_max_retries
+Number. Maximum retry attempts per domain for WHOIS queries (default: 2).
+
+.TP
+.B whois_timeout_multiplier
+Number. Timeout increase multiplier per retry (default: 1.5).
+
+.TP
+.B whois_use_fallback
+Boolean. Add TLD-specific fallback servers for WHOIS (default: true).
+
+.TP
+.B whois_retry_on_timeout
+Boolean. Retry on timeout errors (default: true).
+
+.TP
+.B whois_retry_on_error
+Boolean. Retry on connection/other errors (default: false).
+
+.TP
+.B whois_delay
+Milliseconds. Delay between whois requests for this site (default: global whois_delay).
 
 .TP
 .B dig
@@ -305,24 +398,28 @@ Boolean. Auto-click through Cloudflare phishing warnings (default: false).
 Boolean. Auto-solve Cloudflare "Verify you are human" challenges (default: false).
 
 .TP
-.B whois_max_retries
-Number. Maximum retry attempts per domain for WHOIS queries (default: 2).
+.B flowproxy_detection
+Boolean. Enable flowProxy protection detection and handling (default: false).
 
 .TP
-.B whois_timeout_multiplier
-Number. Timeout increase multiplier per retry (default: 1.5).
+.B flowproxy_page_timeout
+Milliseconds. Page timeout for flowProxy sites (default: 45000).
 
 .TP
-.B whois_use_fallback
-Boolean. Add TLD-specific fallback servers for WHOIS (default: true).
+.B flowproxy_nav_timeout
+Milliseconds. Navigation timeout for flowProxy sites (default: 45000).
 
 .TP
-.B whois_retry_on_timeout
-Boolean. Retry on timeout errors (default: true).
+.B flowproxy_js_timeout
+Milliseconds. JavaScript challenge timeout (default: 15000).
 
 .TP
-.B whois_retry_on_error
-Boolean. Retry on connection/other errors (default: false).
+.B flowproxy_delay
+Milliseconds. Delay for rate limiting (default: 30000).
+
+.TP
+.B flowproxy_additional_delay
+Milliseconds. Additional processing delay (default: 5000).
 
 .TP
 .B verbose
@@ -364,6 +461,64 @@ Boolean. Force Pi-hole regex output format for this site.
 .B plain
 Boolean. Force plain domain output for this site.
 
+.SH SIMILARITY FILTERING
+
+The scanner includes advanced similarity filtering to reduce noise and improve detection accuracy by automatically ignoring domains that are very similar to ones already found or explicitly ignored.
+
+.SS Two-Layer Similarity Protection
+
+.TP
+.B Standard Similarity Filtering
+Ignores domains similar to already-found domains during scanning. For example, if \fBanimerco.com\fR is found, \fBanimerco.org\fR and \fBanimerco.net\fR will be automatically ignored (100% base domain similarity).
+
+.TP
+.B Ignored Domains Similarity Filtering
+Ignores domains similar to those in the \fBignoreDomains\fR list. For example, if \fBgoogle.com\fR is in ignoreDomains, then \fBgoogle.co.uk\fR, \fBgoogle.com.au\fR, and \fBgooglee.com\fR will be automatically ignored.
+
+.SS Multi-Part TLD Support
+
+The similarity engine correctly handles 70+ international multi-part TLDs including:
+.RS
+.IP \(bu 4
+\fBEurope\fR: .co.uk, .org.uk, .com.de, .com.fr, .com.es, .com.it, .com.pl, .com.ru
+.IP \(bu 4
+\fBAsia-Pacific\fR: .co.jp, .or.jp, .com.au, .org.au, .co.nz, .org.nz, .com.cn, .org.cn
+.IP \(bu 4
+\fBAmericas\fR: .com.br, .org.br, .com.ar, .org.ar, .com.mx, .org.mx, .com.co
+.IP \(bu 4
+\fBOthers\fR: .co.za, .org.za, .co.il, .org.il, .com.eg, .org.eg
+.RE
+
+.SS Similarity Configuration
+
+.TP
+.B ignore_similar
+Global and per-site boolean to enable/disable similarity filtering (default: true).
+
+.TP
+.B ignore_similar_threshold
+Similarity threshold percentage 0-100. Higher values = more strict filtering (default: 80).
+
+.TP
+.B ignore_similar_ignored_domains
+Global and per-site boolean to enable similarity filtering against ignoreDomains (default: true).
+
+.SS Similarity Examples
+
+With default settings (\fBignore_similar_threshold: 80\fR):
+.RS
+.IP \(bu 4
+\fBanimerco.com\fR vs \fBanimerco.org\fR → 100% similar → Ignored
+.IP \(bu 4
+\fBgoogle.com\fR vs \fBgoogle.co.uk\fR → 100% similar → Ignored
+.IP \(bu 4
+\fBamazon.com\fR vs \fBamazon2.org\fR → 89% similar → Ignored
+.IP \(bu 4
+\fBfacebook.com\fR vs \fBfaceboook.com\fR → 91% similar → Ignored
+.IP \(bu 4
+\fBapple.com\fR vs \fBmicrosoft.com\fR → 0% similar → Kept
+.RE
+
 .SH EXAMPLES
 
 .SS Basic malware domain detection:
@@ -372,6 +527,25 @@ Boolean. Force plain domain output for this site.
   "url": "https://suspicious-site.com",
   "filterRegex": "\\\\.(space|website|tech|buzz)\\\\b",
   "resourceTypes": ["script", "xhr", "fetch"]
+}
+.EE
+
+.SS Configuration with similarity filtering:
+.EX
+{
+  "ignoreDomains": ["google.com", "facebook.com", "amazon.com"],
+  "ignore_similar": true,
+  "ignore_similar_threshold": 80,
+  "ignore_similar_ignored_domains": true,
+  "sites": [
+    {
+      "url": "https://ad-network.com",
+      "filterRegex": "\\\\.(top|click|buzz)\\\\b",
+      "ignore_similar": true,
+      "ignore_similar_threshold": 85,
+      "resourceTypes": ["script", "fetch"]
+    }
+  ]
 }
 .EE
 
@@ -408,68 +582,23 @@ Boolean. Force plain domain output for this site.
 }
 .EE
 
-.SS WHOIS with OR logic (any term matches):
+.SS Combined content and network analysis with similarity filtering:
 .EX
 {
-  "url": "https://suspicious-ads.com",
-  "filterRegex": "\\\\.(website|online|tech)\\\\b",
-  "whois-or": ["namecheap", "privacy", "proxy", "guard"],
-  "whois_max_retries": 3,
-  "resourceTypes": ["script", "xhr"]
-}
-.EE
-
-.SS DNS-based threat detection:
-.EX
-{
-  "url": "https://malware-dropper.com",
-  "filterRegex": "\\\\.(space|buzz|click)\\\\b",
-  "dig": ["sinkhole", "blocked"],
-  "digRecordType": "A",
-  "resourceTypes": ["script", "other"]
-}
-.EE
-
-.SS DNS with subdomain analysis:
-.EX
-{
-  "url": "https://cdn-network.com",
-  "filterRegex": "\\\\.(top|global|world)\\\\b",
-  "dig-or": ["cloudflare", "fastly", "amazonaws"],
-  "dig_subdomain": true,
-  "digRecordType": "CNAME"
-}
-.EE
-
-.SS Combined content and network analysis:
-.EX
-{
-  "url": "https://complex-threat.com",
-  "filterRegex": "\\\\.(space|website|tech)\\\\b",
-  "searchstring_and": ["bitcoin", "mining"],
-  "whois": ["privacy"],
-  "dig-or": ["tor", "onion"],
-  "curl": true,
-  "resourceTypes": ["script", "fetch", "xhr"]
-}
-.EE
-
-.SS Advanced configuration with multiple detection methods:
-.EX
-{
+  "ignoreDomains": ["google.com", "googlee.com"],
+  "ignore_similar": true,
+  "ignore_similar_threshold": 75,
+  "ignore_similar_ignored_domains": true,
   "sites": [
     {
-      "url": ["https://torrent-site.com", "https://streaming-site.org"],
-      "filterRegex": ["\\\\.(space|website|buzz)\\\\b", "\\\\.ads\\\\.|analytics"],
-      "searchstring": ["cryptocurrency", "mining", "wallet"],
-      "whois-or": ["privacy", "protection", "proxy"],
-      "dig": ["sinkhole"],
+      "url": "https://complex-threat.com",
+      "filterRegex": "\\\\.(space|website|tech)\\\\b",
+      "searchstring_and": ["bitcoin", "mining"],
+      "whois": ["privacy"],
+      "dig-or": ["tor", "onion"],
       "curl": true,
-      "grep": true,
-      "userAgent": "chrome",
-      "resourceTypes": ["script", "xhr", "fetch"],
-      "delay": 5000,
-      "reload": 2
+      "ignore_similar_threshold": 90,
+      "resourceTypes": ["script", "fetch", "xhr"]
     }
   ]
 }
@@ -479,6 +608,8 @@ Boolean. Force plain domain output for this site.
 .EX
 {
   "comments": ["Testing malware sites", "Updated 2025-01-15", "https://docs.example.com/config"],
+  "ignore_similar": true,
+  "ignore_similar_threshold": 80,
   "sites": [
     {
       "url": "https://suspicious-site.com",
@@ -491,7 +622,8 @@ Boolean. Force plain domain output for this site.
       "comments": ["Cryptojacking site", "Added by security team", "Ticket #12345"],
       "filterRegex": "\\\\.(top|click)\\\\b",
       "searchstring": ["mining", "crypto"],
-      "curl": true
+      "curl": true,
+      "ignore_similar": false
     }
   ]
 }
@@ -499,87 +631,34 @@ Boolean. Force plain domain output for this site.
 
 .SS Command line usage examples:
 
+.SS Run with debug mode and similarity filtering:
+.EX
+node nwss.js --debug --dry-run --verbose
+.EE
+
 .SS Run with adblock output format:
 .EX
-node nwss.js --output rules.txt --adblock-rules --verbose
+node nwss.js --output rules.txt --adblock-rules --remove-dupes
 .EE
 
-.SS Run with Privoxy output format:
+.SS Validate configuration and rules:
 .EX
-node nwss.js --output user.action --privoxy --remove-dupes
+node nwss.js --validate-config
+node nwss.js --validate-rules rules.txt
+node nwss.js --clean-rules --remove-dupes --dry-run
 .EE
 
-.SS Run with Pi-hole regex format:
+.SS Advanced validation and cleaning:
 .EX
-node nwss.js --output pihole_regex.txt --pihole --titles
-.EE
-
-.SS Debug mode with URL logging:
-.EX
-node nwss.js --debug --dumpurls --compress-logs
+node nwss.js --clean-rules rules.txt --remove-dupes
+node nwss.js --test-validation
 .EE
 
 .SS Multiple output formats:
 .EX
 node nwss.js -o hosts.txt --localhost --remove-dupes
 node nwss.js -o dnsmasq.conf --dnsmasq --titles
-node nwss.js -o unbound.conf --unbound --sub-domains
-node nwss.js -o user.action --privoxy --verbose
-node nwss.js -o regex.txt --pihole --debug
-.EE
-
-.SS Advanced browser configuration:
-.EX
-{
-  "url": "https://complex-site.com",
-  "filterRegex": "\\\\.(space|website)\\\\b",
-  "goto_options": {
-    "waitUntil": "networkidle2",
-    "timeout": 60000
-  },
-  "clear_sitedata": true,
-  "forcereload": true,
-  "screenshot": true,
-  "source": true,
-  "evaluateOnNewDocument": true,
-  "cdp": true
-}
-.EE
-
-.SS Different page loading strategies:
-.EX
-{
-  "sites": [
-    {
-      "url": "https://fast-site.com",
-      "filterRegex": "\\\\.(space)\\\\b", 
-      "goto_options": {
-        "waitUntil": "domcontentloaded",
-        "timeout": 15000
-      },
-      "comment": "Fast loading for simple sites"
-    },
-    {
-      "url": "https://heavy-ajax-site.com",
-      "filterRegex": "\\\\.(website)\\\\b",
-      "goto_options": {
-        "waitUntil": "networkidle0", 
-        "timeout": 90000
-      },
-      "comment": "Wait for all AJAX requests to complete"
-    },
-    {
-      "url": "https://streaming-site.com",
-      "filterRegex": "\\\\.(top)\\\\b",
-      "goto_options": {
-        "waitUntil": "networkidle2",
-        "timeout": 45000,
-        "referer": "https://search-engine.com"
-      },
-      "comment": "Allow some ongoing requests, spoof referer"
-    }
-  ]
-}
+node nwss.js -o pihole_regex.txt --pihole --debug
 .EE
 
 .SS Cloudflare bypass and fingerprint spoofing:
@@ -591,76 +670,21 @@ node nwss.js -o regex.txt --pihole --debug
   "cloudflare_phish": true,
   "fingerprint_protection": "random",
   "isBrave": true,
-  "userAgent": "chrome",
-  "headful": false
+  "userAgent": "chrome"
 }
 .EE
 
-.SS Enhanced WHOIS configuration:
+.SS FlowProxy protection handling:
 .EX
 {
-  "url": "https://domain-analysis.com",
-  "filterRegex": "\\\\.(space|website|tech)\\\\b",
-  "whois": ["privacy", "protection"],
-  "whois_server": ["whois.verisign-grs.com", "whois.markmonitor.com"],
-  "whois_max_retries": 3,
-  "whois_timeout_multiplier": 2.0,
-  "whois_use_fallback": true,
-  "whois_retry_on_timeout": true,
-  "whois_retry_on_error": false
-}
-.EE
-
-.SS Site-specific output formatting:
-.EX
-{
-  "sites": [
-    {
-      "url": "https://site1.com",
-      "filterRegex": "\\\\.(space)\\\\b",
-      "localhost": true,
-      "subDomains": 1
-    },
-    {
-      "url": "https://site2.com", 
-      "filterRegex": "\\\\.(website)\\\\b",
-      "dnsmasq": true,
-      "plain": false
-    },
-    {
-      "url": "https://site3.com",
-      "filterRegex": "\\\\.(buzz)\\\\b",
-      "privoxy": true
-    },
-    {
-      "url": "https://site4.com",
-      "filterRegex": "\\\\.(tech)\\\\b",
-      "pihole": true
-    }
-  ]
-}
-.EE
-
-.SS Privoxy-specific configuration:
-.EX
-{
-  "url": "https://ad-heavy-site.com",
-  "filterRegex": "\\\\.(ads|doubleclick|googlesyndication)\\\\.",
-  "privoxy": true,
-  "resourceTypes": ["script", "image", "xhr"],
-  "blocked": ["analytics", "tracking"],
-  "delay": 3000
-}
-.EE
-
-.SS Pi-hole regex generation:
-.EX
-{
-  "url": "https://tracker-network.com",
-  "filterRegex": "\\\\.(top|click|buzz|space)\\\\b",
-  "pihole": true,
-  "whois-or": ["privacy", "protection"],
-  "resourceTypes": ["script", "fetch", "xhr"]
+  "url": "https://flowproxy-protected.com",
+  "filterRegex": "\\\\.(space|website)\\\\b",
+  "flowproxy_detection": true,
+  "flowproxy_page_timeout": 45000,
+  "flowproxy_nav_timeout": 45000,
+  "flowproxy_js_timeout": 15000,
+  "flowproxy_delay": 30000,
+  "flowproxy_additional_delay": 5000
 }
 .EE
 
@@ -737,6 +761,9 @@ Uses Puppeteer to monitor network requests, analyze frames, and detect dynamic t
 .SS Resource Type Filtering
 Filters analysis by HTTP resource type (script, xhr, fetch, image, etc.).
 
+.SS Similarity-Based Filtering
+Automatically filters out domains similar to already-found domains or those in the ignore list, supporting 70+ international TLD formats.
+
 .SH SECURITY FEATURES
 
 .SS Fingerprint Spoofing
@@ -750,6 +777,12 @@ Safely analyzes iframe content without executing malicious scripts.
 
 .SS Cloudflare Bypass
 Automatically handles Cloudflare protection challenges.
+
+.SS FlowProxy Protection
+Detects and handles FlowProxy protection systems.
+
+.SS Intelligent Domain Filtering
+Advanced similarity algorithms prevent duplicate detection across international domains and variations.
 
 .SH EXIT STATUS
 .TP
