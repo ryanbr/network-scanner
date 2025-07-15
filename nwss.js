@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.32 ===
+// === Network scanner script (nwss.js) v1.0.33 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -31,9 +31,9 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.32'; // Script version
+const VERSION = '1.0.33'; // Script version
 const MAX_CONCURRENT_SITES = 5;
-const RESOURCE_CLEANUP_INTERVAL = 60; // Close browser and restart every N sites to free resources
+const RESOURCE_CLEANUP_INTERVAL = 80; // Close browser and restart every N sites to free resources
 
 // get startTime
 const startTime = Date.now();
@@ -215,6 +215,17 @@ if (validateConfig) {
   console.log(`\n${messageColors.processing('Validating configuration file...')}`);
   try {
     const validation = validateFullConfig(config, { forceDebug, silentMode });
+    
+    // Validate referrer_headers format
+    for (const site of sites) {
+       if (site.referrer_headers && typeof site.referrer_headers === 'object' && !Array.isArray(site.referrer_headers)) {
+         const validModes = ['random_search', 'social_media', 'direct_navigation', 'custom'];
+         if (site.referrer_headers.mode && !validModes.includes(site.referrer_headers.mode)) {
+           console.warn(`⚠ Invalid referrer_headers mode: ${site.referrer_headers.mode}. Valid modes: ${validModes.join(', ')}`);
+         }
+       }
+    }
+
     if (validation.isValid) {
       console.log(`${messageColors.success('✅ Configuration is valid!')}`);
       console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
@@ -370,6 +381,9 @@ Per-site config.json options:
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
   adblock_rules: true/false                    Generate adblock filter rules with resource types for this site
   even_blocked: true/false                     Add matching rules even if requests are blocked (default: false)
+  
+  referrer_headers: "url" or ["url1", "url2"] Set referrer header for realistic traffic sources
+  custom_headers: {"Header": "value"}         Add custom HTTP headers to requests
 
 Cloudflare Protection Options:
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
@@ -401,6 +415,14 @@ Advanced Options:
   goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
+
+Referrer Header Options:
+  referrer_headers: "https://google.com"       Single referrer URL
+  referrer_headers: ["url1", "url2"]           Random selection from array  
+  referrer_headers: {"mode": "random_search", "search_terms": ["term1"]} Smart search engine traffic
+  referrer_headers: {"mode": "social_media"}   Random social media referrers
+  referrer_headers: {"mode": "direct_navigation"} No referrer (direct access)
+  custom_headers: {"Header": "Value"}          Additional HTTP headers
 `);
   process.exit(0);
 }
@@ -1228,9 +1250,9 @@ function setupFrameHandling(page, forceDebug) {
    let curlUserAgent = '';
    if (useCurl && siteConfig.userAgent) {
      const userAgents = {
-       chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36",
-       firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:117.0) Gecko/20100101 Firefox/117.0",
-       safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_0) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15"
+       chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+       firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0",
+       safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.2 Safari/605.1.15"
      };
      curlUserAgent = userAgents[siteConfig.userAgent.toLowerCase()] || '';
    }
