@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.33 ===
+// === Network scanner script (nwss.js) v1.0.34 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,11 +27,13 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
+// Enhanced redirect handling
+const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.33'; // Script version
+const VERSION = '1.0.34'; // Script version
 const MAX_CONCURRENT_SITES = 5;
 const RESOURCE_CLEANUP_INTERVAL = 80; // Close browser and restart every N sites to free resources
 
@@ -345,6 +347,14 @@ Global config.json options:
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
+  
+Redirect Handling Options:
+  follow_redirects: true/false               Follow redirects to new domains (default: true)
+  max_redirects: 10                          Maximum number of redirects to follow (default: 10)
+  js_redirect_timeout: 5000                  Milliseconds to wait for JavaScript redirects (default: 5000)
+  detect_js_patterns: true/false             Analyze page source for redirect patterns (default: true)
+  redirect_timeout_multiplier: 1.5          Increase timeout for redirected URLs (default: 1.5)
+
   comments: "text" or ["text1", "text2"]       Documentation/notes - ignored by script
   searchstring: "text" or ["text1", "text2"]   Text to search in response content (requires filterRegex match)
   ignore_similar: true/false                   Override global ignore_similar setting for this site
@@ -1065,6 +1075,12 @@ function setupFrameHandling(page, forceDebug) {
 
     if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
 
+    // Track redirect domains to exclude from matching
+    let redirectDomainsToExclude = [];
+    
+    // Track the effective current URL for first-party detection (updates after redirects)
+    let effectiveCurrentUrl = currentUrl;
+
     try {
       // Health check before creating new page
       const isHealthy = await isBrowserHealthy(browserInstance);
@@ -1451,8 +1467,10 @@ function setupFrameHandling(page, forceDebug) {
       page.on('request', request => {
         const checkedUrl = request.url();
         const checkedHostname = safeGetDomain(checkedUrl, true);
-        const currentHostname = safeGetDomain(currentUrl, true);
-        const isFirstParty = checkedHostname && currentHostname && checkedHostname === currentHostname;
+        // Use effectiveCurrentUrl which gets updated after redirects
+        // This ensures first-party detection uses the final redirected domain
+        const effectiveCurrentHostname = safeGetDomain(effectiveCurrentUrl, true);
+      const isFirstParty = checkedHostname && effectiveCurrentHostname && checkedHostname === effectiveCurrentHostname;
         
         // Block infinite iframe loops
         const frameUrl = request.frame() ? request.frame().url() : '';
@@ -1562,6 +1580,15 @@ function setupFrameHandling(page, forceDebug) {
         if (!reqDomain) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Skipping request with unparseable URL: ${reqUrl}`));
+          }
+          request.continue();
+          return;
+        }
+
+        // Skip matching if this domain is one of the redirect intermediaries
+        if (redirectDomainsToExclude && redirectDomainsToExclude.includes(reqDomain)) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Skipping redirect intermediary domain: ${reqDomain}`));
           }
           request.continue();
           return;
@@ -1830,7 +1857,43 @@ function setupFrameHandling(page, forceDebug) {
           ? { ...defaultGotoOptions, ...siteConfig.goto_options }
           : defaultGotoOptions;
 
-        await page.goto(currentUrl, gotoOptions);
+        // Enhanced navigation with redirect handling - passes existing gotoOptions
+        const navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
+        
+        const { finalUrl, redirected, redirectChain, originalUrl, redirectDomains } = navigationResult;
+        
+        // Handle redirect to new domain
+        if (redirected) {
+          const originalDomain = safeGetDomain(originalUrl);
+          const finalDomain = safeGetDomain(finalUrl);
+          
+          if (originalDomain !== finalDomain) {
+            if (!silentMode) {
+              console.log(`🔄 Redirect detected: ${originalDomain} → ${finalDomain}`);
+            }
+            
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `Full redirect chain: ${redirectChain.join(' → ')}`));
+            }
+            
+            // Update currentUrl for all subsequent processing to use the final redirected URL
+            currentUrl = finalUrl;
+
+            // IMPORTANT: Also update effectiveCurrentUrl for first-party detection
+            // This ensures the request handler uses the redirected domain for party detection
+            effectiveCurrentUrl = finalUrl;
+            
+            // Update the redirect domains to exclude from matching
+            if (redirectDomains && redirectDomains.length > 0) {
+              redirectDomainsToExclude = redirectDomains;
+              
+              if (forceDebug) {
+                console.log(formatLogMessage('debug', `Excluding redirect domains from matching: ${redirectDomains.join(', ')}`));
+              }
+            }
+          }
+        }
+        
         siteCounter++;
 
         // Handle all Cloudflare protections using the dedicated module
@@ -1893,8 +1956,18 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
       } catch (err) {
-        console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
-        throw err;
+        // Enhanced error handling for redirect timeouts using redirect module
+        const timeoutResult = await handleRedirectTimeout(page, currentUrl, err, safeGetDomain, forceDebug, formatLogMessage);
+        
+        if (timeoutResult.success) {
+          console.log(`⚠ Partial redirect timeout recovered: ${safeGetDomain(currentUrl)} → ${safeGetDomain(timeoutResult.finalUrl)}`);
+          currentUrl = timeoutResult.finalUrl; // Use the partial redirect URL
+          siteCounter++;
+          // Continue processing with the redirected URL instead of throwing error
+        } else {
+          console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
+          throw err;
+        }
       }
 
       if (interactEnabled && !disableInteract) {

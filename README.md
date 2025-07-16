@@ -16,6 +16,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 - Save output in normal Adblock format or localhost (127.0.0.1/0.0.0.0)
 - Subdomain handling (collapse to root or full subdomain)
 - Optionally match only first-party, third-party, or both
+- Enhanced redirect handling with JavaScript and meta refresh detection
 
 ---
 
@@ -143,6 +144,19 @@ Example:
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
 | `even_blocked`       | Boolean | `false` | Add matching rules even if requests are blocked |
+
+### Redirect Handling Options
+
+| Field                | Values | Default | Description |
+|:---------------------|:-------|:-------:|:------------|
+| `follow_redirects`   | Boolean | `true` | Follow redirects to new domains |
+| `max_redirects`      | Integer | `10` | Maximum number of redirects to follow |
+| `js_redirect_timeout` | Milliseconds | `5000` | Time to wait for JavaScript redirects |
+| `detect_js_patterns` | Boolean | `true` | Analyze page source for redirect patterns |
+| `redirect_timeout_multiplier` | Number | `1.5` | Increase timeout for redirected URLs |
+
+When a page redirects to a new domain, first-party/third-party detection is based on the **final redirected domain**, and all intermediate redirect domains (like `bit.ly`, `t.co`) are automatically excluded from the generated rules.
+
 
 ### Advanced Stealth & Fingerprinting
 
