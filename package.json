@@ -35,6 +35,9 @@
     "type": "git",
     "url": "git+https://github.com/ryanbr/network-scanner"
   },
+  "publishConfig": {
+	    "access": "public"
+  },
   "bugs": {
     "url": "https://github.com/ryanbr/network-scanner/issues"
   },
