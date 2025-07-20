@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.36 ===
+// === Network scanner script (nwss.js) v1.0.37 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -33,7 +33,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.36'; // Script version
+const VERSION = '1.0.37'; // Script version
 const MAX_CONCURRENT_SITES = 5;
 const RESOURCE_CLEANUP_INTERVAL = 80; // Close browser and restart every N sites to free resources
 
@@ -936,7 +936,7 @@ function setupFrameHandling(page, forceDebug) {
 	    '--disable-image-animation-resync'
         ],
         headless: launchHeadless ? 'shell' : false,
-        protocolTimeout: 500000
+        protocolTimeout: 60000  // 60 seconds
     });
     
     // Store the user data directory on the browser object for cleanup
@@ -2091,7 +2091,21 @@ function setupFrameHandling(page, forceDebug) {
       }
       
     } catch (err) {
-      // Enhanced error handling with rule preservation for partial matches
+    // Enhanced error handling with rule preservation for partial matches
+    if (err.message.includes('Runtime.callFunctionOn timed out') || 
+        err.message.includes('Protocol error') ||
+        err.message.includes('Target closed') ||
+        err.message.includes('Browser has been closed')) {
+      console.error(formatLogMessage('error', `Critical browser protocol error on ${currentUrl}: ${err.message}`));
+      return { 
+        url: currentUrl, 
+        rules: [], 
+        success: false, 
+        needsImmediateRestart: true,
+        error: `Critical protocol error: ${err.message}`
+      };
+    }
+    
       if (err.message.includes('Protocol error') || 
           err.message.includes('Target closed') ||
           err.message.includes('Browser process was killed') ||
