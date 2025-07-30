@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.38 ===
+// === Network scanner script (nwss.js) v1.0.39 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -33,9 +33,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.38'; // Script version
-const MAX_CONCURRENT_SITES = 12;
-const RESOURCE_CLEANUP_INTERVAL = 180; // Close browser and restart every N sites to free resources
+const VERSION = '1.0.39'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -103,6 +101,18 @@ const cleanRulesIndex = args.findIndex(arg => arg === '--clean-rules');
 if (cleanRulesIndex !== -1 && args[cleanRulesIndex + 1] && !args[cleanRulesIndex + 1].startsWith('--')) {
   cleanRulesFile = args[cleanRulesIndex + 1];
   cleanRules = true; // Override the boolean if file specified
+}
+
+let maxConcurrentSites = null;
+const maxConcurrentIndex = args.findIndex(arg => arg === '--max-concurrent');
+if (maxConcurrentIndex !== -1 && args[maxConcurrentIndex + 1]) {
+  maxConcurrentSites = parseInt(args[maxConcurrentIndex + 1]);
+}
+
+let cleanupInterval = null;
+const cleanupIntervalIndex = args.findIndex(arg => arg === '--cleanup-interval');
+if (cleanupIntervalIndex !== -1 && args[cleanupIntervalIndex + 1]) {
+  cleanupInterval = parseInt(args[cleanupIntervalIndex + 1]);
 }
 
 const enableColors = args.includes('--color') || args.includes('--colour');
@@ -327,6 +337,8 @@ General Options:
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
   --help, -h                     Show this help menu
   --version                      Show script version
+  --max-concurrent <number>      Maximum concurrent site processing (1-50, overrides config/default)
+  --cleanup-interval <number>    Browser restart interval in URLs processed (1-1000, overrides config/default)
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
 
 Validation Options:
@@ -342,7 +354,8 @@ Global config.json options:
   ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
   ignore_similar_threshold: 80                    Similarity threshold percentage for ignore_similar (default: 80)
   ignore_similar_ignored_domains: true/false      Ignore domains similar to ignoreDomains list (default: true)
-
+  max_concurrent_sites: 6                        Maximum concurrent site processing (1-50, default: 6)
+  resource_cleanup_interval: 180                  Browser restart interval in URLs processed (1-1000, default: 180)
 
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
@@ -456,7 +469,68 @@ try {
   process.exit(1);
 }
 // Extract config values while ignoring 'comments' field at global and site levels
-const { sites = [], ignoreDomains = [], blocked: globalBlocked = [], whois_delay = 3000, whois_server_mode = 'random', ignore_similar = true, ignore_similar_threshold = 80, ignore_similar_ignored_domains = true, comments: globalComments, ...otherGlobalConfig } = config;
+const { 
+  sites = [], 
+  ignoreDomains = [], 
+  blocked: globalBlocked = [], 
+  whois_delay = 3000, 
+  whois_server_mode = 'random', 
+  ignore_similar = true, 
+  ignore_similar_threshold = 80, 
+  ignore_similar_ignored_domains = true, 
+  max_concurrent_sites = 6,
+  resource_cleanup_interval = 180,
+  comments: globalComments, 
+  ...otherGlobalConfig 
+} = config;
+
+// Apply global configuration overrides with validation
+// Priority: Command line args > config.json > defaults
+const MAX_CONCURRENT_SITES = (() => {
+  // Check command line argument first
+  if (maxConcurrentSites !== null) {
+    if (maxConcurrentSites > 0 && maxConcurrentSites <= 50) {
+      if (forceDebug) console.log(formatLogMessage('debug', `Using command line max_concurrent_sites: ${maxConcurrentSites}`));
+      return maxConcurrentSites;
+    } else {
+      console.warn(`⚠ Invalid --max-concurrent value: ${maxConcurrentSites}. Must be 1-50. Using config/default value.`);
+    }
+  }
+  
+  // Check config.json value
+  if (typeof max_concurrent_sites === 'number' && max_concurrent_sites > 0 && max_concurrent_sites <= 50) {
+    if (forceDebug) console.log(formatLogMessage('debug', `Using config max_concurrent_sites: ${max_concurrent_sites}`));
+    return max_concurrent_sites;
+  } else if (max_concurrent_sites !== 6) {
+    console.warn(`⚠ Invalid config max_concurrent_sites value: ${max_concurrent_sites}. Using default: 6`);
+  }
+  
+  // Use default
+  return 6;
+})();
+
+const RESOURCE_CLEANUP_INTERVAL = (() => {
+  // Check command line argument first
+  if (cleanupInterval !== null) {
+    if (cleanupInterval > 0 && cleanupInterval <= 1000) {
+      if (forceDebug) console.log(formatLogMessage('debug', `Using command line resource_cleanup_interval: ${cleanupInterval}`));
+      return cleanupInterval;
+    } else {
+      console.warn(`⚠ Invalid --cleanup-interval value: ${cleanupInterval}. Must be 1-1000. Using config/default value.`);
+    }
+  }
+  
+  // Check config.json value
+  if (typeof resource_cleanup_interval === 'number' && resource_cleanup_interval > 0 && resource_cleanup_interval <= 1000) {
+    if (forceDebug) console.log(formatLogMessage('debug', `Using config resource_cleanup_interval: ${resource_cleanup_interval}`));
+    return resource_cleanup_interval;
+  } else if (resource_cleanup_interval !== 180) {
+    console.warn(`⚠ Invalid config resource_cleanup_interval value: ${resource_cleanup_interval}. Using default: 180`);
+  }
+  
+  // Use default
+  return 180;
+})();
 
 // Handle --clean-rules after config is loaded (so we have access to sites)
 if (cleanRules || cleanRulesFile) {

@@ -66,6 +66,8 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--eval-on-doc`             | Globally enable evaluateOnNewDocument() for Fetch/XHR interception |
 | `--help`, `-h`              | Show this help menu |
 | `--version`                 | Show script version |
+| `--max-concurrent <number>` | Maximum concurrent site processing (1-50, overrides config/default) |
+| `--cleanup-interval <number>` | Browser restart interval in URLs processed (1-1000, overrides config/default) |
 
 ### Validation Options
 
@@ -251,6 +253,8 @@ These options go at the root level of your config.json:
 | `ignore_similar`     | Boolean | `true` | Ignore domains similar to already found domains |
 | `ignore_similar_threshold` | Integer | `80` | Similarity threshold percentage for ignore_similar |
 | `ignore_similar_ignored_domains` | Boolean | `true` | Ignore domains similar to ignoreDomains list |
+| `max_concurrent_sites` | Integer | `6` | Maximum concurrent site processing (1-50) |
+| `resource_cleanup_interval` | Integer | `180` | Browser restart interval in URLs processed (1-1000) |
 
 ---
 
@@ -287,6 +291,12 @@ node nwss.js --clean-rules existing_rules.txt
 
 # Maximum stealth scanning
 node nwss.js --debug --color -o stealth_rules.txt
+```
+
+### Performance Tuning
+```bash
+# High-performance scanning with custom concurrency
+node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
 ```
 
 ### Stealth Configuration Examples
