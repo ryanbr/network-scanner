@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "p-limit": "^4.0.0",
-    "psl": "^1.9.0",
-    "puppeteer": "^22.15.0"
+    "psl": "^1.15.0",
+    "puppeteer": "^23.10.0"
   },
   "keywords": [
     "puppeteer",
@@ -29,14 +29,14 @@
   "author": "FanboyNZ",
   "license": "GPL-3.0",
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ryanbr/network-scanner"
   },
   "publishConfig": {
-	    "access": "public"
+    "access": "public"
   },
   "bugs": {
     "url": "https://github.com/ryanbr/network-scanner/issues"
