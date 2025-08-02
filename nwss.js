@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.43 ===
+// === Network scanner script (nwss.js) v1.0.44 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -35,7 +35,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.43'; // Script version
+const VERSION = '1.0.44'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1481,9 +1481,12 @@ function setupFrameHandling(page, forceDebug) {
       /**
        * Helper function to add domain to matched collection
        * @param {string} domain - Domain to add
+       * @param {string} fullSubdomain - Full subdomain for cache tracking
        * @param {string} resourceType - Resource type (for --adblock-rules mode)
        */
-      function addMatchedDomain(domain, resourceType = null) {
+      function addMatchedDomain(domain, resourceType = null, fullSubdomain = null) {
+       // Use fullSubdomain for cache tracking if provided, otherwise fall back to domain
+       const cacheKey = fullSubdomain || domain;
        // Check if we should ignore similar domains
        const ignoreSimilarEnabled = siteConfig.ignore_similar !== undefined ? siteConfig.ignore_similar : ignore_similar;
        const similarityThreshold = siteConfig.ignore_similar_threshold || ignore_similar_threshold;
@@ -1524,8 +1527,8 @@ function setupFrameHandling(page, forceDebug) {
         }
       }
 
-      // Mark domain as detected for future reference
-      markDomainAsDetected(domain);
+      // Mark full subdomain as detected for future reference
+      markDomainAsDetected(cacheKey);
       
         if (matchedDomains instanceof Map) {
           if (!matchedDomains.has(domain)) {
@@ -1592,6 +1595,10 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
         const reqUrl = request.url();
+        
+        // ALWAYS extract the FULL subdomain for cache checking to preserve unique subdomains
+        const fullSubdomain = safeGetDomain(reqUrl, true); // Always get full subdomain for cache
+        const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains); // Output domain based on config
 
         if (allBlockedRegexes.some(re => re.test(reqUrl))) {
          if (forceDebug) {
@@ -1615,7 +1622,7 @@ function setupFrameHandling(page, forceDebug) {
           
           // NEW: Check if even_blocked is enabled and this URL matches filter regex
           if (evenBlocked) {
-            const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains);
+            // reqDomain already defined above
             if (reqDomain && !matchesIgnoreDomain(reqDomain, ignoreDomains)) {
               for (const re of regexes) {
                 if (re.test(reqUrl)) {
@@ -1634,7 +1641,7 @@ function setupFrameHandling(page, forceDebug) {
                         wasBlocked: true
                       });
                     } else {
-                      addMatchedDomain(reqDomain, resourceType);
+                      addMatchedDomain(reqDomain, resourceType, fullSubdomain);
                     }
                     
                     const simplifiedUrl = getRootDomain(currentUrl);
@@ -1658,8 +1665,7 @@ function setupFrameHandling(page, forceDebug) {
           return;
         }
 
-        const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains);
-
+      
         if (!reqDomain) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Skipping request with unparseable URL: ${reqUrl}`));
@@ -1668,8 +1674,8 @@ function setupFrameHandling(page, forceDebug) {
           return;
         }
 
-        // Skip matching if this domain is one of the redirect intermediaries
-        if (redirectDomainsToExclude && redirectDomainsToExclude.includes(reqDomain)) {
+      // Skip matching if this full subdomain is one of the redirect intermediaries
+      if (redirectDomainsToExclude && redirectDomainsToExclude.includes(fullSubdomain)) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Skipping redirect intermediary domain: ${reqDomain}`));
           }
@@ -1708,9 +1714,9 @@ function setupFrameHandling(page, forceDebug) {
            }
 
            // Check ignoreDomains AFTER regex match but BEFORE domain processing
-           if (matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+           if (matchesIgnoreDomain(fullSubdomain, ignoreDomains)) {
              if (forceDebug) {
-               console.log(formatLogMessage('debug', `Ignoring domain ${reqDomain} (matches ignoreDomains pattern)`));
+               console.log(formatLogMessage('debug', `Ignoring domain ${fullSubdomain} (matches ignoreDomains pattern)`));
              }
             break; // Skip this URL - domain is in ignore list
           }
@@ -1743,10 +1749,10 @@ function setupFrameHandling(page, forceDebug) {
              }
             } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
-             // Skip nettools check if domain was already detected
-             if (isDomainAlreadyDetected(reqDomain)) {
+             // Skip nettools check if full subdomain was already detected
+             if (isDomainAlreadyDetected(fullSubdomain)) {
                if (forceDebug) {
-                 console.log(formatLogMessage('debug', `Skipping nettools check for already detected domain: ${reqDomain}`));
+                 console.log(formatLogMessage('debug', `Skipping nettools check for already detected subdomain: ${fullSubdomain}`));
                }
                break; // Skip to next URL
              }
@@ -1795,14 +1801,14 @@ function setupFrameHandling(page, forceDebug) {
              });
              
              // Execute nettools check asynchronously
-            const originalDomain = (new URL(reqUrl)).hostname;
+            const originalDomain = fullSubdomain; // Use full subdomain for nettools
             setImmediate(() => netToolsHandler(reqDomain, originalDomain));
            } else {
              // If searchstring or searchstring_and IS defined (with or without nettools), queue for content checking
-             // Skip searchstring check if domain was already detected
-             if (isDomainAlreadyDetected(reqDomain)) {
+             // Skip searchstring check if full subdomain was already detected
+             if (isDomainAlreadyDetected(fullSubdomain)) {
                if (forceDebug) {
-                 console.log(formatLogMessage('debug', `Skipping searchstring check for already detected domain: ${reqDomain}`));
+                 console.log(formatLogMessage('debug', `Skipping searchstring check for already detected subdomain: ${fullSubdomain}`));
                }
                break; // Skip to next URL
              }
