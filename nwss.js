@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.42 ===
+// === Network scanner script (nwss.js) v1.0.43 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,16 +27,22 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
+// Domain detection cache for performance optimization
+const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.42'; // Script version
+const VERSION = '1.0.43'; // Script version
 
 // get startTime
 const startTime = Date.now();
+
+// Initialize domain cache helpers with debug logging if enabled
+const domainCacheOptions = { enableLogging: false }; // Set to true for cache debug logs
+const { isDomainAlreadyDetected, markDomainAsDetected } = createGlobalHelpers(domainCacheOptions);
 
 // --- Command-Line Argument Parsing ---
 const args = process.argv.slice(2);
@@ -1517,6 +1523,9 @@ function setupFrameHandling(page, forceDebug) {
           return; // Skip adding this domain
         }
       }
+
+      // Mark domain as detected for future reference
+      markDomainAsDetected(domain);
       
         if (matchedDomains instanceof Map) {
           if (!matchedDomains.has(domain)) {
@@ -1734,6 +1743,14 @@ function setupFrameHandling(page, forceDebug) {
              }
             } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
+             // Skip nettools check if domain was already detected
+             if (isDomainAlreadyDetected(reqDomain)) {
+               if (forceDebug) {
+                 console.log(formatLogMessage('debug', `Skipping nettools check for already detected domain: ${reqDomain}`));
+               }
+               break; // Skip to next URL
+             }
+             
              if (forceDebug) {
                console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`));
              }
@@ -1767,6 +1784,7 @@ function setupFrameHandling(page, forceDebug) {
                dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
                matchedDomains,
                addMatchedDomain,
+               isDomainAlreadyDetected,
                currentUrl,
                getRootDomain,
                siteConfig,
@@ -1781,6 +1799,13 @@ function setupFrameHandling(page, forceDebug) {
             setImmediate(() => netToolsHandler(reqDomain, originalDomain));
            } else {
              // If searchstring or searchstring_and IS defined (with or without nettools), queue for content checking
+             // Skip searchstring check if domain was already detected
+             if (isDomainAlreadyDetected(reqDomain)) {
+               if (forceDebug) {
+                 console.log(formatLogMessage('debug', `Skipping searchstring check for already detected domain: ${reqDomain}`));
+               }
+               break; // Skip to next URL
+             }
              if (forceDebug) {
                const searchType = hasSearchStringAnd ? 'searchstring_and' : 'searchstring';
                console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for ${searchType} content search`));
@@ -1808,6 +1833,7 @@ function setupFrameHandling(page, forceDebug) {
                    regexes,
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
+                   isDomainAlreadyDetected,
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -1838,6 +1864,7 @@ function setupFrameHandling(page, forceDebug) {
                    regexes,
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
+                   isDomainAlreadyDetected,
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -1876,6 +1903,7 @@ function setupFrameHandling(page, forceDebug) {
          regexes,
          matchedDomains,
          addMatchedDomain, // Pass the helper function
+         isDomainAlreadyDetected,
          currentUrl,
          perSiteSubDomains,
          ignoreDomains,
@@ -2462,6 +2490,8 @@ function setupFrameHandling(page, forceDebug) {
   const totalMatches = results.reduce((sum, r) => sum + (r.rules ? r.rules.length : 0), 0);
 
   // Debug: Show output format being used
+  const totalDomainsSkipped = getTotalDomainsSkipped();
+  const detectedDomainsCount = getDetectedDomainsCount();
   if (forceDebug) {
     const globalOptions = {
       localhostMode,
@@ -2476,6 +2506,7 @@ function setupFrameHandling(page, forceDebug) {
     };
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
+     console.log(formatLogMessage('debug', `Performance: ${totalDomainsSkipped} domains skipped (already detected), ${detectedDomainsCount} unique domains cached`));
   }
   
   // Compress log files if --compress-logs is enabled
@@ -2566,6 +2597,9 @@ function setupFrameHandling(page, forceDebug) {
       console.log(messageColors.success('Generated') + ` ${outputResult.totalRules} unique rules`);
     } else if (outputResult.totalRules > 0 && dryRunMode) {
       console.log(messageColors.success('Found') + ` ${outputResult.totalRules} total matches across all URLs`);
+    }
+    if (totalDomainsSkipped > 0) {
+      console.log(messageColors.info('Performance:') + ` ${totalDomainsSkipped} domains skipped (already detected)`);
     }
   }
   
