@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.45 ===
+// === Network scanner script (nwss.js) v1.0.46 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,6 +27,8 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
+// Enhanced mouse interaction and page simulation
+const { performPageInteraction, createInteractionConfig } = require('./lib/interaction');
 // Domain detection cache for performance optimization
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 // Enhanced redirect handling
@@ -35,7 +37,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.45'; // Script version
+const VERSION = '1.0.46'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -390,6 +392,7 @@ Redirect Handling Options:
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
   userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
+  interact_intensity: "low"|"medium"|"high"     Interaction simulation intensity (default: medium)
   delay: <milliseconds>                        Delay after load (default: 4000)
   reload: <number>                             Reload page n times after load (default: 1)
   forcereload: true/false                      Force an additional reload after reloads
@@ -429,6 +432,10 @@ FlowProxy Protection Options:
 Advanced Options:
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
+  interact_duration: <milliseconds>           Duration of interaction simulation (default: 2000)
+  interact_scrolling: true/false              Enable scrolling simulation (default: true)
+  interact_clicks: true/false                 Enable element clicking simulation (default: false)
+  interact_typing: true/false                 Enable typing simulation (default: false)
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
   whois_server_mode: "random" or "cycle"      Server selection mode: random (default) or cycle through list
@@ -1927,6 +1934,9 @@ function setupFrameHandling(page, forceDebug) {
 
       const interactEnabled = siteConfig.interact === true;
       
+      // Create optimized interaction configuration for this site
+      const interactionConfig = createInteractionConfig(currentUrl, siteConfig);
+      
       // --- Runtime CSS Element Blocking (Fallback) ---
       // Apply CSS blocking after page load as a fallback in case evaluateOnNewDocument didn't work
       if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
@@ -2080,12 +2090,8 @@ function setupFrameHandling(page, forceDebug) {
 
       if (interactEnabled && !disableInteract) {
         if (forceDebug) console.log(formatLogMessage('debug', `interaction simulation enabled for ${currentUrl}`));
-        const randomX = Math.floor(Math.random() * 500) + 50;
-        const randomY = Math.floor(Math.random() * 500) + 50;
-        await page.mouse.move(randomX, randomY, { steps: 10 });
-        await page.mouse.move(randomX + 50, randomY + 50, { steps: 15 });
-        await page.mouse.click(randomX + 25, randomY + 25);
-        await page.hover('body');
+        // Use enhanced interaction module
+        await performPageInteraction(page, currentUrl, interactionConfig, forceDebug);
       }
 
       const delayMs = siteConfig.delay || 4000;
