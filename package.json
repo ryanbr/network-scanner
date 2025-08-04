@@ -7,7 +7,8 @@
     "start": "node nwss.js",
     "scan": "node nwss.js",
     "help": "node nwss.js --help",
-    "version": "node nwss.js --version"
+    "version": "node nwss.js --version",
+    "lint": "eslint *.js lib/*.js"
   },
   "dependencies": {
     "p-limit": "^4.0.0",
@@ -41,5 +42,9 @@
   "bugs": {
     "url": "https://github.com/ryanbr/network-scanner/issues"
   },
-  "homepage": "https://github.com/ryanbr/network-scanner"
+  "homepage": "https://github.com/ryanbr/network-scanner",
+  "devDependencies": {
+    "eslint": "^9.32.0",
+    "globals": "^16.3.0"
+  }
 }

@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.47 ===
+// === Network scanner script (nwss.js) v1.0.48 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -25,6 +25,8 @@ const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit
 const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
 // File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
+// CDP functionality
+const { createCDPSession } = require('./lib/cdp');
 // Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 // Enhanced mouse interaction and page simulation
@@ -37,7 +39,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.47'; // Script version
+const VERSION = '1.0.48'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1149,6 +1151,7 @@ function setupFrameHandling(page, forceDebug) {
 
     let page = null;
     let cdpSession = null;
+    let cdpSessionManager = null;
     // Use Map to track domains and their resource types for --adblock-rules or --dry-run
     const matchedDomains = (adblockRulesMode || siteConfig.adblock_rules || dryRunMode) ? new Map() : new Set();
     
@@ -1274,36 +1277,19 @@ function setupFrameHandling(page, forceDebug) {
       // --- END: CSS Element Blocking Setup ---
 
       // --- Per-Page CDP Setup ---
-      const cdpLoggingNeededForPage = enableCDP || siteConfig.cdp === true;
-      if (cdpLoggingNeededForPage) {
-        if (forceDebug) {
-            if (enableCDP) {
-                console.log(formatLogMessage('debug', `CDP logging globally enabled by --cdp, applying to page: ${currentUrl}`));
-            } else if (siteConfig.cdp === true) {
-                console.log(formatLogMessage('debug', `CDP logging enabled for page ${currentUrl} via site-specific 'cdp: true' config.`));
-            }
+      
+      try {
+        cdpSessionManager = await createCDPSession(page, currentUrl, {
+          enableCDP,
+          siteSpecificCDP: siteConfig.cdp,
+          forceDebug
+        });
+      } catch (cdpErr) {
+        if (cdpErr.message.includes('Browser protocol broken')) {
+          throw cdpErr; // Re-throw critical browser errors
         }
-        try {
-            cdpSession = await page.target().createCDPSession();
-            await cdpSession.send('Network.enable');
-            cdpSession.on('Network.requestWillBeSent', (params) => {
-                const { url: requestUrl, method } = params.request;
-                const initiator = params.initiator ? params.initiator.type : 'unknown';
-                let hostnameForLog = 'unknown-host';
-                try {
-                    hostnameForLog = new URL(currentUrl).hostname;
-                } catch (_) { /* ignore if currentUrl is invalid for URL parsing */ }
-                console.log(formatLogMessage('debug', `[cdp][${hostnameForLog}] ${method} ${requestUrl} (initiator: ${initiator})`));
-            });
-        } catch (cdpErr) {
-            cdpSession = null; // Reset on failure
-            if (cdpErr.message.includes('Network.enable timed out') || 
-                cdpErr.message.includes('Protocol error')) {
-              // This indicates browser is completely broken
-              throw new Error(`Browser protocol broken: ${cdpErr.message}`);
-            }
-            console.warn(formatLogMessage('warn', `[cdp] Failed to attach CDP session for ${currentUrl}: ${cdpErr.message}`));
-        }
+        // Non-critical CDP errors are already handled in the module
+        cdpSessionManager = { session: null, cleanup: async () => {} };
       }
       // --- End of Per-Page CDP Setup ---
 
@@ -2267,19 +2253,8 @@ function setupFrameHandling(page, forceDebug) {
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
       
-      if (cdpSession) {
-        try {
-          await cdpSession.detach();
-          if (forceDebug) console.log(formatLogMessage('debug', `CDP session detached for ${currentUrl}`));
-        } catch (cdpCleanupErr) {
-          if (forceDebug) console.log(formatLogMessage('debug', `Failed to detach CDP session for ${currentUrl}: ${cdpCleanupErr.message}`));
-        }
-      }
-      // Add small delay to allow cleanup to complete
-      try {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      } catch (delayErr) {
-        // Ignore timeout errors
+      if (cdpSessionManager) {
+        await cdpSessionManager.cleanup();
       }
       
       if (page && !page.isClosed()) {
