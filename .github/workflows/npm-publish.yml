@@ -2,18 +2,18 @@ name: Publish to NPM
 on:
   push:
     branches: [ main, master ]
-    paths-ignore:
-      - 'README.md'
-      - 'docs/**'
-      - '.gitignore'
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # This is key!
+      
     steps:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
           
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -21,22 +21,22 @@ jobs:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
           
-      - name: Install dependencies
-        run: npm ci
-        
-      - name: Run linting
-        run: npm run lint
-        
+      - run: npm ci
+      - run: npm run lint
+      
       - name: Configure git
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           
-      - name: Version bump and publish
+      - name: Version and publish
         run: |
           npm version patch
           npm publish
-          git push --follow-tags
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          
+      - name: Push changes
+        run: git push --follow-tags
+        env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
