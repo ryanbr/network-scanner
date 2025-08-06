@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.52 ===
+// === Network scanner script (nwss.js) v1.0.57 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -18,7 +18,7 @@ const { handleCloudflareProtection } = require('./lib/cloudflare');
 // FP Bypass
 const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
 // ignore_similar rules
-const { shouldIgnoreSimilarDomain } = require('./lib/ignore_similar');
+const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore_similar');
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
 // Whois & Dig
@@ -33,13 +33,14 @@ const { colorize, colors, messageColors, tags, formatLogMessage } = require('./l
 const { performPageInteraction, createInteractionConfig } = require('./lib/interaction');
 // Domain detection cache for performance optimization
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
+const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.52'; // Script version
+const VERSION = '1.0.57'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -47,6 +48,9 @@ const startTime = Date.now();
 // Initialize domain cache helpers with debug logging if enabled
 const domainCacheOptions = { enableLogging: false }; // Set to true for cache debug logs
 const { isDomainAlreadyDetected, markDomainAsDetected } = createGlobalHelpers(domainCacheOptions);
+
+// Smart cache will be initialized after config is loaded
+let smartCache = null;
 
 // --- Command-Line Argument Parsing ---
 const args = process.argv.slice(2);
@@ -547,6 +551,16 @@ const RESOURCE_CLEANUP_INTERVAL = (() => {
   return 180;
 })();
 
+// Initialize smart cache system AFTER config is loaded
+smartCache = createSmartCache({
+  ...config,
+  forceDebug,
+  cache_persistence: config.cache_persistence !== false, // Enable by default
+  cache_autosave: config.cache_autosave !== false,
+  cache_autosave_minutes: config.cache_autosave_minutes || 1,
+  cache_max_size: config.cache_max_size || 5000
+});
+
 // Handle --clean-rules after config is loaded (so we have access to sites)
 if (cleanRules || cleanRulesFile) {
   const filesToClean = cleanRulesFile ? [cleanRulesFile] : [outputFile, compareFile].filter(Boolean);
@@ -949,6 +963,10 @@ function setupFrameHandling(page, forceDebug) {
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
+
+  // Declare userDataDir in outer scope for cleanup access
+  let userDataDir = null;
+  
   /**
    * Creates a new browser instance with consistent configuration
    * Uses system Chrome and temporary directories to minimize disk usage
@@ -957,7 +975,7 @@ function setupFrameHandling(page, forceDebug) {
   async function createBrowser() {
     // Create temporary user data directory that we can fully control and clean up
     const tempUserDataDir = `/tmp/puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-    let userDataDir = tempUserDataDir; // Store for cleanup tracking
+    userDataDir = tempUserDataDir; // Store for cleanup tracking (use outer scope variable)
 
     // Try to find system Chrome installation to avoid Puppeteer downloads
     const systemChromePaths = [
@@ -1485,6 +1503,46 @@ function setupFrameHandling(page, forceDebug) {
        const similarityThreshold = siteConfig.ignore_similar_threshold || ignore_similar_threshold;
        const ignoreSimilarIgnoredDomains = siteConfig.ignore_similar_ignored_domains !== undefined ? siteConfig.ignore_similar_ignored_domains : ignore_similar_ignored_domains;
        
+       // Use smart cache's similarity cache for performance
+       if (ignoreSimilarEnabled && smartCache) {
+         const existingDomains = matchedDomains instanceof Map 
+           ? Array.from(matchedDomains.keys()).filter(key => !['dryRunMatches', 'dryRunNetTools', 'dryRunSearchString'].includes(key))
+           : Array.from(matchedDomains);
+           
+         // Check cached similarity scores first
+         for (const existingDomain of existingDomains) {
+           const cachedSimilarity = smartCache.getCachedSimilarity(domain, existingDomain);
+           if (cachedSimilarity !== null && cachedSimilarity >= similarityThreshold) {
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `[SmartCache] Used cached similarity: ${domain} ~= ${existingDomain} (${cachedSimilarity}%)`));
+             }
+             return; // Skip adding this domain
+           }
+           
+           // If no cached similarity exists, calculate and cache it
+           if (cachedSimilarity === null) {
+             const similarity = calculateSimilarity(domain, existingDomain);
+             if (smartCache) {
+               smartCache.cacheSimilarity(domain, existingDomain, similarity);
+             }
+           }
+         }
+       }
+
+       // Check smart cache first
+       const context = {
+         filterRegex: siteConfig.filterRegex,
+         searchString: siteConfig.searchstring,
+         resourceType: resourceType
+       };
+       
+       if (smartCache && smartCache.shouldSkipDomain(domain, context)) {
+         if (forceDebug) {
+           console.log(formatLogMessage('debug', `[SmartCache] Skipping cached domain: ${domain}`));
+         }
+         return; // Skip adding this domain
+       }
+
        if (ignoreSimilarEnabled) {
          const existingDomains = matchedDomains instanceof Map 
            ? Array.from(matchedDomains.keys()).filter(key => !['dryRunMatches', 'dryRunNetTools', 'dryRunSearchString'].includes(key))
@@ -1523,6 +1581,11 @@ function setupFrameHandling(page, forceDebug) {
       // Mark full subdomain as detected for future reference
       markDomainAsDetected(cacheKey);
       
+      // Also mark in smart cache with context
+      if (smartCache) {
+        smartCache.markDomainProcessed(domain, context, { resourceType, fullSubdomain });
+      }
+
         if (matchedDomains instanceof Map) {
           if (!matchedDomains.has(domain)) {
             matchedDomains.set(domain, new Set());
@@ -1716,7 +1779,8 @@ function setupFrameHandling(page, forceDebug) {
  
             // REMOVED: Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
             // This check is no longer needed here since even_blocked handles it above
-            
+
+           
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
              if (dryRunMode) {
@@ -1767,6 +1831,15 @@ function setupFrameHandling(page, forceDebug) {
              }
              
              // Create and execute nettools handler
+             // Check smart cache for nettools results
+             const cachedWhois = smartCache ? smartCache.getCachedNetTools(reqDomain, 'whois') : null;
+             const cachedDig = smartCache ? smartCache.getCachedNetTools(reqDomain, 'dig', digRecordType) : null;
+             
+             if ((cachedWhois || cachedDig) && forceDebug) {
+               console.log(formatLogMessage('debug', `[SmartCache] Using cached nettools results for ${reqDomain}`));
+             }
+             
+             // Create nettools handler with cache callbacks
              const netToolsHandler = createNetToolsHandler({
                whoisTerms,
                whoisOrTerms,
@@ -1784,6 +1857,15 @@ function setupFrameHandling(page, forceDebug) {
                matchedDomains,
                addMatchedDomain,
                isDomainAlreadyDetected,
+               // Add cache callbacks if smart cache is available
+               onWhoisResult: smartCache ? (domain, result) => {
+                 smartCache.cacheNetTools(domain, 'whois', result);
+               } : undefined,
+               onDigResult: smartCache ? (domain, result, recordType) => {
+                 smartCache.cacheNetTools(domain, 'dig', result, recordType);
+               } : undefined,
+               cachedWhois,
+               cachedDig,
                currentUrl,
                getRootDomain,
                siteConfig,
@@ -1823,6 +1905,13 @@ function setupFrameHandling(page, forceDebug) {
            
            // If curl is enabled, download and analyze content immediately
            if (useCurl) {
+             // Check response cache first if smart cache is available
+             const cachedContent = smartCache ? smartCache.getCachedResponse(reqUrl) : null;
+             
+             if (cachedContent && forceDebug) {
+               console.log(formatLogMessage('debug', `[SmartCache] Using cached response content for ${reqUrl.substring(0, 50)}...`));
+               // Process cached content instead of fetching
+             } else {
              try {
                // Use grep handler if both grep and searchstring/searchstring_and are enabled
                if (useGrep && (hasSearchString || hasSearchStringAnd)) {
@@ -1833,6 +1922,9 @@ function setupFrameHandling(page, forceDebug) {
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
                    isDomainAlreadyDetected,
+                   onContentFetched: smartCache ? (url, content) => {
+                     smartCache.cacheResponse(url, content);
+                   } : undefined,
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -1884,6 +1976,7 @@ function setupFrameHandling(page, forceDebug) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `Curl handler failed for ${reqUrl}: ${curlErr.message}`));
                }
+             }
              }
            }
 
@@ -2494,6 +2587,19 @@ function setupFrameHandling(page, forceDebug) {
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
      console.log(formatLogMessage('debug', `Performance: ${totalDomainsSkipped} domains skipped (already detected), ${detectedDomainsCount} unique domains cached`));
+     // Log smart cache statistics
+    if (smartCache) {
+    const cacheStats = smartCache.getStats();  
+    console.log(formatLogMessage('debug', '=== Smart Cache Statistics ==='));
+    console.log(formatLogMessage('debug', `Runtime: ${cacheStats.runtime}s, Total entries: ${cacheStats.totalCacheEntries}`));
+    console.log(formatLogMessage('debug', `Hit Rates - Domain: ${cacheStats.hitRate}, Pattern: ${cacheStats.patternHitRate}`));
+    console.log(formatLogMessage('debug', `Response: ${cacheStats.responseHitRate}, NetTools: ${cacheStats.netToolsHitRate}`));
+    console.log(formatLogMessage('debug', `Regex compilations saved: ${cacheStats.regexCacheHits}`));
+    console.log(formatLogMessage('debug', `Similarity cache hits: ${cacheStats.similarityHits}`));
+    if (config.cache_persistence) {
+      console.log(formatLogMessage('debug', `Persistence - Loads: ${cacheStats.persistenceLoads}, Saves: ${cacheStats.persistenceSaves}`));
+    }
+    }
   }
   
   // Compress log files if --compress-logs is enabled
@@ -2571,6 +2677,11 @@ function setupFrameHandling(page, forceDebug) {
   const seconds = totalSeconds % 60;
 
   // Final summary report with timing and success statistics
+  // Clean up smart cache
+  if (smartCache) {
+    smartCache.destroy();
+  }
+ 
   if (!silentMode) {
     if (pagesWithMatches > outputResult.successfulPageLoads) {
       console.log(`\n${messageColors.success(dryRunMode ? 'Dry run completed.' : 'Scan completed.')} ${outputResult.successfulPageLoads} of ${totalUrls} URLs loaded successfully, ${pagesWithMatches} had matches in ${messageColors.timing(`${hours}h ${minutes}m ${seconds}s`)}`);
