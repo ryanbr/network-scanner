@@ -7,7 +7,6 @@
     "start": "node nwss.js",
     "scan": "node nwss.js",
     "help": "node nwss.js --help",
-    "version": "node nwss.js --version",
     "lint": "eslint *.js lib/*.js"
   },
   "dependencies": {
