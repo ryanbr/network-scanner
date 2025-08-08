@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.57 ===
+// === Network scanner script (nwss.js) v1.0.58 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -34,13 +34,14 @@ const { performPageInteraction, createInteractionConfig } = require('./lib/inter
 // Domain detection cache for performance optimization
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
+const { clearPersistentCache } = require('./lib/smart-cache');
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants ---
-const VERSION = '1.0.57'; // Script version
+const VERSION = '1.0.58'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -102,6 +103,8 @@ const validateConfig = args.includes('--validate-config');
 const validateRules = args.includes('--validate-rules');
 const testValidation = args.includes('--test-validation');
 let cleanRules = args.includes('--clean-rules');
+const clearCache = args.includes('--clear-cache');
+const ignoreCache = args.includes('--ignore-cache');
 
 let validateRulesFile = null;
 const validateRulesIndex = args.findIndex(arg => arg === '--validate-rules');
@@ -222,6 +225,15 @@ if (compareFile && !fs.existsSync(compareFile)) {
 if (args.includes('--version')) {
   console.log(`nwss.js version ${VERSION}`);
   process.exit(0);
+}
+
+// Handle --clear-cache before config loading (uses default cache path)
+if (clearCache && !dryRunMode) {
+  clearPersistentCache({
+    silent: silentMode,
+    forceDebug,
+    cachePath: '.cache' // Default path, will be updated after config loads if needed
+  });
 }
 
 // Handle validation-only operations before main help
@@ -360,6 +372,8 @@ Validation Options:
   --validate-rules [file]        Validate rule file format (uses --output/--compare files if no file specified)
   --clean-rules [file]           Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified)
   --test-validation              Run domain validation tests and exit
+  --clear-cache                  Clear persistent cache before scanning (improves fresh start performance)
+  --ignore-cache                 Bypass all smart caching functionality during scanning
   
 Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
@@ -551,15 +565,40 @@ const RESOURCE_CLEANUP_INTERVAL = (() => {
   return 180;
 })();
 
-// Initialize smart cache system AFTER config is loaded
+// Perform cache clear after config is loaded for custom cache paths
+if (clearCache && dryRunMode) {
+  clearPersistentCache({
+    silent: silentMode,
+    forceDebug,
+    cachePath: config.cache_path || '.cache'
+  });
+}
+
+// Also clear for custom cache paths in normal mode if not already cleared
+if (clearCache && !dryRunMode && config.cache_path && config.cache_path !== '.cache') {
+  clearPersistentCache({
+    silent: silentMode,
+    forceDebug,
+    cachePath: config.cache_path
+  });
+}
+
+// Initialize smart cache system AFTER config is loaded (unless --ignore-cache is used)
+if (ignoreCache) {
+  smartCache = null;
+  if (forceDebug) console.log(formatLogMessage('debug', 'Smart cache disabled by --ignore-cache flag'));
+} else {
 smartCache = createSmartCache({
   ...config,
   forceDebug,
-  cache_persistence: config.cache_persistence !== false, // Enable by default
-  cache_autosave: config.cache_autosave !== false,
+  max_concurrent_sites: MAX_CONCURRENT_SITES,  // Pass concurrency info
+  cache_aggressive_mode: MAX_CONCURRENT_SITES > 12,  // Auto-enable for high concurrency
+  cache_persistence: false, // Disable persistence completely
+  cache_autosave: false, // Disable auto-save completely
   cache_autosave_minutes: config.cache_autosave_minutes || 1,
   cache_max_size: config.cache_max_size || 5000
 });
+}
 
 // Handle --clean-rules after config is loaded (so we have access to sites)
 if (cleanRules || cleanRulesFile) {
@@ -1503,7 +1542,7 @@ function setupFrameHandling(page, forceDebug) {
        const similarityThreshold = siteConfig.ignore_similar_threshold || ignore_similar_threshold;
        const ignoreSimilarIgnoredDomains = siteConfig.ignore_similar_ignored_domains !== undefined ? siteConfig.ignore_similar_ignored_domains : ignore_similar_ignored_domains;
        
-       // Use smart cache's similarity cache for performance
+       // Use smart cache's similarity cache for performance (if cache is enabled)
        if (ignoreSimilarEnabled && smartCache) {
          const existingDomains = matchedDomains instanceof Map 
            ? Array.from(matchedDomains.keys()).filter(key => !['dryRunMatches', 'dryRunNetTools', 'dryRunSearchString'].includes(key))
@@ -1522,14 +1561,14 @@ function setupFrameHandling(page, forceDebug) {
            // If no cached similarity exists, calculate and cache it
            if (cachedSimilarity === null) {
              const similarity = calculateSimilarity(domain, existingDomain);
-             if (smartCache) {
+             if (smartCache && !ignoreCache) {
                smartCache.cacheSimilarity(domain, existingDomain, similarity);
              }
            }
          }
        }
 
-       // Check smart cache first
+       // Check smart cache first (if cache is enabled)
        const context = {
          filterRegex: siteConfig.filterRegex,
          searchString: siteConfig.searchstring,
@@ -1581,7 +1620,7 @@ function setupFrameHandling(page, forceDebug) {
       // Mark full subdomain as detected for future reference
       markDomainAsDetected(cacheKey);
       
-      // Also mark in smart cache with context
+      // Also mark in smart cache with context (if cache is enabled)
       if (smartCache) {
         smartCache.markDomainProcessed(domain, context, { resourceType, fullSubdomain });
       }
@@ -1831,7 +1870,7 @@ function setupFrameHandling(page, forceDebug) {
              }
              
              // Create and execute nettools handler
-             // Check smart cache for nettools results
+             // Check smart cache for nettools results (if cache is enabled)
              const cachedWhois = smartCache ? smartCache.getCachedNetTools(reqDomain, 'whois') : null;
              const cachedDig = smartCache ? smartCache.getCachedNetTools(reqDomain, 'dig', digRecordType) : null;
              
@@ -1839,7 +1878,7 @@ function setupFrameHandling(page, forceDebug) {
                console.log(formatLogMessage('debug', `[SmartCache] Using cached nettools results for ${reqDomain}`));
              }
              
-             // Create nettools handler with cache callbacks
+             // Create nettools handler with cache callbacks (if cache is enabled)
              const netToolsHandler = createNetToolsHandler({
                whoisTerms,
                whoisOrTerms,
@@ -1857,7 +1896,7 @@ function setupFrameHandling(page, forceDebug) {
                matchedDomains,
                addMatchedDomain,
                isDomainAlreadyDetected,
-               // Add cache callbacks if smart cache is available
+               // Add cache callbacks if smart cache is available and caching is enabled
                onWhoisResult: smartCache ? (domain, result) => {
                  smartCache.cacheNetTools(domain, 'whois', result);
                } : undefined,
@@ -1905,7 +1944,7 @@ function setupFrameHandling(page, forceDebug) {
            
            // If curl is enabled, download and analyze content immediately
            if (useCurl) {
-             // Check response cache first if smart cache is available
+             // Check response cache first if smart cache is available and caching is enabled
              const cachedContent = smartCache ? smartCache.getCachedResponse(reqUrl) : null;
              
              if (cachedContent && forceDebug) {
@@ -1922,7 +1961,7 @@ function setupFrameHandling(page, forceDebug) {
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
                    isDomainAlreadyDetected,
-                   onContentFetched: smartCache ? (url, content) => {
+                   onContentFetched: smartCache && !ignoreCache ? (url, content) => {
                      smartCache.cacheResponse(url, content);
                    } : undefined,
                    currentUrl,
@@ -2587,7 +2626,7 @@ function setupFrameHandling(page, forceDebug) {
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
      console.log(formatLogMessage('debug', `Performance: ${totalDomainsSkipped} domains skipped (already detected), ${detectedDomainsCount} unique domains cached`));
-     // Log smart cache statistics
+     // Log smart cache statistics (if cache is enabled)
     if (smartCache) {
     const cacheStats = smartCache.getStats();  
     console.log(formatLogMessage('debug', '=== Smart Cache Statistics ==='));
@@ -2677,7 +2716,7 @@ function setupFrameHandling(page, forceDebug) {
   const seconds = totalSeconds % 60;
 
   // Final summary report with timing and success statistics
-  // Clean up smart cache
+  // Clean up smart cache (if it exists)
   if (smartCache) {
     smartCache.destroy();
   }
@@ -2698,6 +2737,9 @@ function setupFrameHandling(page, forceDebug) {
     }
     if (totalDomainsSkipped > 0) {
       console.log(messageColors.info('Performance:') + ` ${totalDomainsSkipped} domains skipped (already detected)`);
+    }
+    if (ignoreCache && forceDebug) {
+      console.log(messageColors.info('Cache:') + ` Smart caching was disabled`);
     }
   }
   
