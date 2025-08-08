@@ -10,9 +10,10 @@
     "lint": "eslint *.js lib/*.js"
   },
   "dependencies": {
+    "lru-cache": "^10.4.3",
     "p-limit": "^4.0.0",
     "psl": "^1.15.0",
-    "puppeteer": "^23.10.0"
+    "puppeteer": "^23.11.1"
   },
   "keywords": [
     "puppeteer",
@@ -29,7 +30,7 @@
   "author": "FanboyNZ",
   "license": "GPL-3.0",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "repository": {
     "type": "git",
