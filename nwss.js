@@ -40,7 +40,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 // Ensure web browser is working correctly
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
-// --- Script Configuration & Constants --- //
+// --- Script Configuration & Constants --- 
 const VERSION = '1.0.61'; // Script version
 
 // get startTime
