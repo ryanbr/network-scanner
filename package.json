@@ -15,6 +15,10 @@
     "psl": "^1.15.0",
     "puppeteer": ">=20.0.0 <23.0.0"
   },
+  "overrides": {
+    "tar-fs": "3.1.0",
+    "ws": "8.18.3"
+  },
   "keywords": [
     "puppeteer",
     "network-scanner",
