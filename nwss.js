@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.63 ===
+// === Network scanner script (nwss.js) v1.0.64 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -42,13 +42,50 @@ function fastTimeout(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Detects the installed Puppeteer version dynamically
+ * @returns {Object} Version info and compatibility settings
+ */
+function detectPuppeteerVersion() {
+  try {
+    const puppeteer = require('puppeteer');
+    let versionString = null;
+    
+    // Try multiple methods to get version
+    if (puppeteer.version) {
+      versionString = puppeteer.version;
+    } else if (puppeteer._version) {
+      versionString = puppeteer._version;
+    } else {
+      // Fallback: try to get from Browser.version() after launch
+      return { majorVersion: 22, useShellMode: true, detected: false };
+    }
+    
+    const majorVersion = parseInt(versionString.split('.')[0]);
+    const useShellMode = majorVersion >= 22;
+    
+    return {
+      version: versionString,
+      majorVersion,
+      useShellMode,
+      detected: true
+    };
+  } catch (err) {
+    if (forceDebug) {
+      console.log(formatLogMessage('debug', `Could not detect Puppeteer version: ${err.message}`));
+    }
+    // Safe fallback - assume newer version
+    return { majorVersion: 22, useShellMode: true, detected: false };
+  }
+}
+
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.63'; // Script version
+const VERSION = '1.0.64'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -916,6 +953,23 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 function setupFrameHandling(page, forceDebug) {
   // Handle frame creation with error suppression
   page.on('frameattached', async (frame) => {
+    // Enhanced frame handling for Puppeteer 23.x
+    try {
+      // Check if frame is valid before processing
+      if (frame.isDetached()) {
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Skipping detached frame`));
+        }
+        return;
+      }
+    } catch (detachError) {
+      // Frame state checking can throw in 23.x, handle gracefully
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `Frame state check failed: ${detachError.message}`));
+      }
+      return;
+    }
+
     if (frame.parentFrame()) { // Only handle child frames, not main frame
       try {
         const frameUrl = frame.url();
@@ -1024,6 +1078,23 @@ function setupFrameHandling(page, forceDebug) {
     userDataDir = tempUserDataDir; // Store for cleanup tracking (use outer scope variable)
 
     // Try to find system Chrome installation to avoid Puppeteer downloads
+
+    // Detect Puppeteer version for headless mode compatibility
+    let headlessMode = launchHeadless;
+    if (launchHeadless) {
+      const puppeteerInfo = detectPuppeteerVersion();
+      
+      if (puppeteerInfo.useShellMode) {
+        headlessMode = 'shell'; // Use fast chrome-headless-shell for 22.x+
+        if (forceDebug) console.log(formatLogMessage('debug', `Using chrome-headless-shell (Puppeteer ${puppeteerInfo.version || 'v' + puppeteerInfo.majorVersion + '.x'})`));
+      } else {
+        headlessMode = true; // Use regular headless for older versions
+        if (forceDebug) console.log(formatLogMessage('debug', 'Could not detect Puppeteer version, using regular headless mode'));
+      }
+    } else {
+      headlessMode = false; // Headful mode
+    }
+
     const systemChromePaths = [
       '/usr/bin/google-chrome-stable',
       '/usr/bin/google-chrome',
@@ -1048,28 +1119,24 @@ function setupFrameHandling(page, forceDebug) {
       // Force temporary user data directory for complete cleanup control
       userDataDir: tempUserDataDir,
       // Puppeteer 22.x headless mode optimization
-      // 'shell' = chrome-headless-shell (performance optimized)
-      // true = new unified headless mode (full Chrome features)
-      // false = headful mode (GUI visible)
-      headless: launchHeadless ? 'shell' : false, // Use shell for maximum performance
+      // Auto-detect best headless mode based on Puppeteer version
+      headless: headlessMode,
       args: [
         // Disk space controls - 50MB cache limits
+        '--disable-features=VizDisplayCompositor',
         '--disk-cache-size=52428800', // 50MB disk cache (50 * 1024 * 1024)
         '--media-cache-size=52428800', // 50MB media cache  
         '--disable-application-cache',
         '--disable-offline-load-stale-cache',
         '--disable-background-downloads',
-        // PERFORMANCE: Additional Puppeteer 22.x optimizations
-        '--disable-features=VizDisplayCompositor,AudioServiceOutOfProcess',
+        // PERFORMANCE: Enhanced Puppeteer 23.x optimizations
+        '--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor',
+        '--disable-features=TranslateUI,BlinkGenPropertyTrees,Translate',
+        '--disable-features=BackForwardCache,AcceptCHFrame',
         '--disable-ipc-flooding-protection',
-        '--disable-renderer-backgrounding',
-        '--disable-backgrounding-occluded-windows',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees',
-        '--disable-features=Translate,BackForwardCache,AcceptCHFrame',
         '--aggressive-cache-discard',
         '--memory-pressure-off',
         '--max_old_space_size=2048',
-        '--disable-features=VizDisplayCompositor',
         '--no-first-run',
         '--disable-default-apps',
         '--disable-component-extensions-with-background-pages',
@@ -1094,13 +1161,19 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-web-security',
         '--allow-running-insecure-content',
         '--disable-features=HttpsFirstBalancedModeAutoEnable',
-        '--run-all-compositor-stages-before-draw',
-        '--disable-threaded-animation',
-        '--disable-threaded-scrolling',
-        '--disable-checker-imaging',
-        '--disable-image-animation-resync'
+        // Puppeteer 23.x: Enhanced performance and stability args
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
+        '--disable-background-timer-throttling',
+        '--disable-features=site-per-process', // Better for single-site scanning
+        '--disable-blink-features=AutomationControlled', // Avoid detection
+        '--no-zygote', // Better process isolation
         ],
-        protocolTimeout: 60000  // 60 seconds
+        // Optimized timeouts for Puppeteer 23.x performance
+        protocolTimeout: 60000,  // Reduced from 60s to 45s for faster failure detection
+        slowMo: 0, // No artificial delays
+        defaultViewport: null, // Use system default viewport
+        ignoreDefaultArgs: ['--enable-automation'] // Avoid automation detection
     });
     
     // Store the user data directory on the browser object for cleanup
@@ -1117,6 +1190,15 @@ function setupFrameHandling(page, forceDebug) {
   // launch with no safe browsing
   let browser = await createBrowser();
   if (forceDebug) console.log(formatLogMessage('debug', `Launching browser with headless: ${launchHeadless}`));
+  
+  // Enhanced browser validation for Puppeteer 23.x
+  try {
+    const browserVersion = await browser.version();
+    if (forceDebug) console.log(formatLogMessage('debug', `Browser launched successfully: ${browserVersion}`));
+  } catch (versionError) {
+    console.error(formatLogMessage('error', `Browser version check failed: ${versionError.message}`));
+    throw new Error(`Browser startup validation failed: ${versionError.message}`);
+  }
 
   // Log which headless mode is being used
   if (forceDebug && launchHeadless) {
@@ -1246,6 +1328,16 @@ function setupFrameHandling(page, forceDebug) {
     // Track the effective current URL for first-party detection (updates after redirects)
     let effectiveCurrentUrl = currentUrl;
 
+    // Enhanced error types for Puppeteer 23.x compatibility
+    const CRITICAL_BROWSER_ERRORS = [
+      'Protocol error',
+      'Target closed',
+      'Browser has been closed',
+      'Browser protocol broken',
+      'Browser process exited',
+      'Browser disconnected'
+    ];
+
     try {
       // Health check before creating new page
       const isHealthy = await isBrowserHealthy(browserInstance);
@@ -1267,11 +1359,17 @@ function setupFrameHandling(page, forceDebug) {
         throw new Error('Browser process was killed - restart required');
       }
       page = await browserInstance.newPage();
+
+      // Enhanced page validation for Puppeteer 23.x
+      if (!page || page.isClosed()) {
+        throw new Error('Failed to create valid page instance');
+      }
       
       // Set aggressive timeouts for problematic operations
-      page.setDefaultTimeout(Math.min(timeout, 15000));  // Reduced for Puppeteer 22.x
-      page.setDefaultNavigationTimeout(Math.min(timeout, 18000));  // Reduced for faster fails
-      // Aggressive timeouts prevent hanging in Puppeteer 22.x
+      // Optimized timeouts for Puppeteer 23.x responsiveness
+      page.setDefaultTimeout(Math.min(timeout, 20000));  // Reduced from 15000 for faster failures
+      page.setDefaultNavigationTimeout(Math.min(timeout, 25000));  // Reduced from 18000
+      // Aggressive timeouts prevent hanging in Puppeteer 23.x while maintaining speed
       
       page.on('console', (msg) => {
         if (forceDebug && msg.type() === 'error') console.log(`[debug] Console error: ${msg.text()}`);
@@ -1281,6 +1379,57 @@ function setupFrameHandling(page, forceDebug) {
       page.on('error', (err) => {
         if (forceDebug) console.log(formatLogMessage('debug', `Page crashed: ${err.message}`));
         // Don't throw here as it might cause hanging - let the timeout handle it
+      });
+      
+      // Enhanced error handling for Puppeteer 23.x
+      page.on('pageerror', (err) => {
+        // Safe error message extraction for Puppeteer 23.x compatibility
+        const getErrorMessage = (error) => {
+          if (!error) return 'Unknown error';
+          if (typeof error === 'string') return error;
+          if (error.message) return error.message;
+          if (error.toString && typeof error.toString === 'function') {
+            try {
+              return error.toString();
+            } catch (toStringErr) {
+              return 'Error object toString failed';
+            }
+          }
+          return JSON.stringify(error) || 'Unparseable error object';
+        };
+        
+        const errorMessage = getErrorMessage(err);
+        
+        // Handle specific service worker errors
+        if (errorMessage.includes('ServiceWorker') || 
+            errorMessage.includes('service worker') ||
+            errorMessage.includes('TCPusher service worker') ||
+            errorMessage.includes('failed to register')) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Service worker error suppressed: ${errorMessage}`));
+          }
+          // Don't propagate service worker errors
+          return;
+        }
+        
+        // Handle network-related service worker errors
+        if (errorMessage.includes('TypeError: failed to register') ||
+            errorMessage.includes('SecurityError') ||
+            errorMessage.includes('The operation is insecure')) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Registration security error suppressed: ${errorMessage}`));
+          }
+          return;
+        }
+        
+        // Log other page errors normally
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Page JavaScript error: ${errorMessage}`));
+        }
+      });
+      
+      page.on('response', (response) => {
+        // Response handler - removed incorrect error logging
       });
 
       // Apply flowProxy timeouts if detection is enabled
@@ -1310,14 +1459,36 @@ function setupFrameHandling(page, forceDebug) {
                   // from within the page context at the earliest possible moment.
                   const originalFetch = window.fetch;
                   window.fetch = (...args) => {
-                      console.log('[evalOnDoc][fetch]', args[0]); // Log fetch requests
-                      return originalFetch.apply(this, args);
+                      try {
+                          console.log('[evalOnDoc][fetch]', args[0]); // Log fetch requests
+                          const fetchPromise = originalFetch.apply(this, args);
+                          
+                          // Add network error handling to prevent page errors
+                          return fetchPromise.catch(fetchErr => {
+                              console.log('[evalOnDoc][fetch-error]', args[0], fetchErr.message);
+                              throw fetchErr; // Re-throw to maintain normal error flow
+                          });
+                      } catch (fetchWrapperErr) {
+                          console.log('[evalOnDoc][fetch-wrapper-error]', fetchWrapperErr.message);
+                          return originalFetch.apply(this, args);
+                      }
                   };
 
                   const originalXHROpen = XMLHttpRequest.prototype.open;
-                  XMLHttpRequest.prototype.open = function (method, xhrUrl) { // Renamed 'url' to 'xhrUrl' to avoid conflict
-                      console.log('[evalOnDoc][xhr]', xhrUrl); // Log XHR requests
-                      return originalXHROpen.apply(this, arguments);
+                  XMLHttpRequest.prototype.open = function (method, xhrUrl) {
+                      try {
+                          console.log('[evalOnDoc][xhr]', xhrUrl); // Log XHR requests
+                          
+                          // Add error handling for XHR
+                          this.addEventListener('error', function(event) {
+                              console.log('[evalOnDoc][xhr-error]', xhrUrl, 'Network error occurred');
+                          });
+                          
+                          return originalXHROpen.apply(this, arguments);
+                      } catch (xhrOpenErr) {
+                          console.log('[evalOnDoc][xhr-open-error]', xhrOpenErr.message);
+                          return originalXHROpen.apply(this, arguments);
+                      }
                   };
               });
           } catch (evalErr) {
@@ -2105,10 +2276,22 @@ function setupFrameHandling(page, forceDebug) {
 
         // Use faster defaults for sites with long timeouts to improve responsiveness
         const isFastSite = timeout <= 15000;
-        const defaultWaitUntil = 'domcontentloaded'; // Always use faster option in Puppeteer 22.x
+        const defaultWaitUntil = 'domcontentloaded'; // Always use faster option in Puppeteer 23.x
+ 
+        // Enhanced navigation options for Puppeteer 23.x
         const defaultGotoOptions = {
           waitUntil: defaultWaitUntil,
-          timeout: Math.min(timeout, 20000) // Cap timeout for faster failures
+          timeout: Math.min(timeout, 30000), // Reduced from 20000 for faster failures
+          // Puppeteer 23.x: Fixed referrer header handling
+          ...(siteConfig.referrer_headers && (() => {
+            const referrerUrl = Array.isArray(siteConfig.referrer_headers) 
+              ? siteConfig.referrer_headers[0] 
+              : siteConfig.referrer_headers;
+            // Ensure referrer is a valid string URL, not an object
+            return typeof referrerUrl === 'string' && referrerUrl.startsWith('http') 
+              ? { referer: referrerUrl } 
+              : {};
+          })())
         };
         const gotoOptions = siteConfig.goto_options 
           ? { ...defaultGotoOptions, ...siteConfig.goto_options } : defaultGotoOptions;
@@ -2132,20 +2315,30 @@ function setupFrameHandling(page, forceDebug) {
               console.log(formatLogMessage('debug', `Full redirect chain: ${redirectChain.join(' → ')}`));
             }
             
-            // Update currentUrl for all subsequent processing to use the final redirected URL
-            currentUrl = finalUrl;
+            // VALIDATION: Only update currentUrl if finalUrl is a valid HTTP/HTTPS URL
+            if (shouldProcessUrl(finalUrl, forceDebug)) {
+              // Update currentUrl for all subsequent processing to use the final redirected URL
+              currentUrl = finalUrl;
 
-            // IMPORTANT: Also update effectiveCurrentUrl for first-party detection
-            // This ensures the request handler uses the redirected domain for party detection
-            effectiveCurrentUrl = finalUrl;
-            
-            // Update the redirect domains to exclude from matching
-            if (redirectDomains && redirectDomains.length > 0) {
-              redirectDomainsToExclude = redirectDomains;
+              // IMPORTANT: Also update effectiveCurrentUrl for first-party detection
+              effectiveCurrentUrl = finalUrl;
               
-              if (forceDebug) {
-                console.log(formatLogMessage('debug', `Excluding redirect domains from matching: ${redirectDomains.join(', ')}`));
+              // Update the redirect domains to exclude from matching
+              if (redirectDomains && redirectDomains.length > 0) {
+                redirectDomainsToExclude = redirectDomains;
+                
+                if (forceDebug) {
+                  console.log(formatLogMessage('debug', `Excluding redirect domains from matching: ${redirectDomains.join(', ')}`));
+                }
               }
+            } else {
+              // Invalid final URL - don't update currentUrl, treat as failed redirect
+              console.warn(`⚠ Redirect to invalid URL ignored: ${originalDomain} → ${finalUrl}`);
+              if (forceDebug) {
+                console.log(formatLogMessage('debug', `Redirect chain ended with invalid URL, keeping original: ${originalUrl}`));
+              }
+              // Keep processing with the original URL or throw an error
+              throw new Error(`Redirect resulted in invalid URL: ${finalUrl}`);
             }
           }
         }
@@ -2235,17 +2428,17 @@ function setupFrameHandling(page, forceDebug) {
 
       const delayMs = siteConfig.delay || 4000;
       
-      // Aggressive optimization for Puppeteer 22.x responsiveness
+      // Optimized delays for Puppeteer 23.x performance
       const isFastSite = timeout <= 15000;
-      const networkIdleTime = 2000;  // Reduced for all sites
-      const networkIdleTimeout = Math.min(timeout / 2, 8000);  // Much shorter timeout
-      const actualDelay = Math.min(delayMs, 1500);  // Reduced delay for all sites
+      const networkIdleTime = 2000;  // Balanced: 2s for reliable network detection
+      const networkIdleTimeout = Math.min(timeout / 2, 10000);  // Balanced: 10s timeout
+      const actualDelay = Math.min(delayMs, 2000);  // Balanced: 2s delay for stability
       
       await page.waitForNetworkIdle({ 
         idleTime: networkIdleTime, 
         timeout: networkIdleTimeout 
       });
-      // Use fast timeout helper for Puppeteer 22.x compatibility with better performance
+      // Use fast timeout helper for Puppeteer 23.x compatibility with better performance
       await fastTimeout(actualDelay);
 
       // Apply additional delay for flowProxy if detected
@@ -2255,8 +2448,7 @@ function setupFrameHandling(page, forceDebug) {
         await fastTimeout(additionalDelay);
       }
 
-      // Replace deprecated page.waitForTimeout patterns with fast timeout helper
-      // This ensures compatibility with Puppeteer 22.x where waitForTimeout was removed
+      // Use fast timeout helper for consistent Puppeteer 23.x compatibility
 
       for (let i = 1; i < (siteConfig.reload || 1); i++) {
        if (siteConfig.clear_sitedata === true) {
@@ -2349,35 +2541,23 @@ function setupFrameHandling(page, forceDebug) {
       }
       
     } catch (err) {
-    // Enhanced error handling with rule preservation for partial matches
-    if (err.message.includes('Runtime.callFunctionOn timed out') || 
-        err.message.includes('Protocol error') ||
-        err.message.includes('Target closed') ||
-        err.message.includes('Browser has been closed')) {
-      console.error(formatLogMessage('error', `Critical browser protocol error on ${currentUrl}: ${err.message}`));
+      // Only restart for truly fatal browser errors
+      const isFatalError = CRITICAL_BROWSER_ERRORS.some(errorType => 
+        err.message.includes(errorType)
+      ) && !err.message.includes('timeout') && !err.message.includes('Navigation');
+      
+      if (isFatalError) {
+        console.error(formatLogMessage('error', `Fatal browser error on ${currentUrl}: ${err.message}`));
       return { 
         url: currentUrl, 
         rules: [], 
         success: false, 
         needsImmediateRestart: true,
-        error: `Critical protocol error: ${err.message}`
+        error: `Fatal error: ${err.message}`,
+        errorType: 'fatal'
       };
     }
-    
-      if (err.message.includes('Protocol error') || 
-          err.message.includes('Target closed') ||
-          err.message.includes('Browser process was killed') ||
-          err.message.includes('Browser protocol broken')) {
-        console.error(formatLogMessage('error', `Critical browser error on ${currentUrl}: ${err.message}`));
-        return { 
-          url: currentUrl, 
-          rules: [], 
-          success: false, 
-          needsImmediateRestart: true,
-          error: err.message
-        };
-      }
-      
+         
       // For other errors, preserve any matches we found before the error
       if (matchedDomains && (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0))) {
         const globalOptions = {
@@ -2549,6 +2729,23 @@ function setupFrameHandling(page, forceDebug) {
     // Check if any results indicate immediate restart is needed
     const needsImmediateRestart = siteResults.some(r => r.needsImmediateRestart);
 
+    // Enhanced error reporting for Puppeteer 23.x
+    if (forceDebug) {
+      const errorSummary = siteResults.reduce((acc, result) => {
+        if (!result.success && result.errorType) {
+          acc[result.errorType] = (acc[result.errorType] || 0) + 1;
+        }
+        return acc;
+      }, {});
+      
+      if (Object.keys(errorSummary).length > 0) {
+        console.log(formatLogMessage('debug', `Site ${siteIndex + 1} error summary:`));
+        Object.entries(errorSummary).forEach(([errorType, count]) => {
+          console.log(formatLogMessage('debug', `  ${errorType}: ${count} error(s)`));
+        });
+      }
+    }
+
     results.push(...siteResults);
     
     processedUrlCount += siteUrlCount;
@@ -2562,6 +2759,19 @@ function setupFrameHandling(page, forceDebug) {
       
       // Force browser restart immediately
       try {
+        // Enhanced emergency restart for Puppeteer 23.x
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Emergency restart triggered by errors: ${siteResults.filter(r => r.needsImmediateRestart).map(r => r.error).join(', ')}`));
+        }
+        
+        // Try to gracefully close all pages first
+        try {
+          const pages = await browser.pages();
+          await Promise.all(pages.map(page => page.close().catch(() => {})));
+        } catch (pageCloseErr) {
+          if (forceDebug) console.log(formatLogMessage('debug', `Page cleanup during emergency restart failed: ${pageCloseErr.message}`));
+        }
+
         await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true, comprehensiveCleanup: removeTempFiles });
         // Additional cleanup after emergency restart
         if (removeTempFiles) {
@@ -2702,7 +2912,14 @@ function setupFrameHandling(page, forceDebug) {
  
   // Perform comprehensive final cleanup using enhanced browserexit module
   if (forceDebug) console.log(formatLogMessage('debug', `Starting comprehensive browser cleanup...`));
- 
+
+  // Enhanced final validation for Puppeteer 23.x
+  try {
+    const isStillConnected = browser.isConnected();
+    if (forceDebug) console.log(formatLogMessage('debug', `Browser connection status before cleanup: ${isStillConnected}`));
+  } catch (connErr) {
+    if (forceDebug) console.log(formatLogMessage('debug', `Browser connection check failed: ${connErr.message}`));
+  }
 
   const cleanupResult = await handleBrowserExit(browser, {
     forceDebug,
