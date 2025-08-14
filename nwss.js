@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.66 ===
+// === Network scanner script (nwss.js) v1.0.67 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -85,7 +85,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.66'; // Script version
+const VERSION = '1.0.67'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1837,10 +1837,14 @@ function setupFrameHandling(page, forceDebug) {
       page.on('request', request => {
         const checkedUrl = request.url();
         const checkedHostname = safeGetDomain(checkedUrl, true);
+        const checkedRootDomain = safeGetDomain(checkedUrl, false); // Root domain for first-party detection
         // Use effectiveCurrentUrl which gets updated after redirects
         // This ensures first-party detection uses the final redirected domain
         const effectiveCurrentHostname = safeGetDomain(effectiveCurrentUrl, true);
-      const isFirstParty = checkedHostname && effectiveCurrentHostname && checkedHostname === effectiveCurrentHostname;
+        const effectiveCurrentRootDomain = safeGetDomain(effectiveCurrentUrl, false); // Root domain for comparison
+        
+        // FIXED: Compare root domains instead of full hostnames for first-party detection
+        const isFirstParty = checkedRootDomain && effectiveCurrentRootDomain && checkedRootDomain === effectiveCurrentRootDomain;
         
         // Block infinite iframe loops
         const frameUrl = request.frame() ? request.frame().url() : '';
