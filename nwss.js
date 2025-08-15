@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.67 ===
+// === Network scanner script (nwss.js) v1.0.68 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -27,6 +27,8 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // CDP functionality
 const { createCDPSession } = require('./lib/cdp');
+// Post-processing cleanup
+const { processResults } = require('./lib/post-processing');
 // Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 // Enhanced mouse interaction and page simulation
@@ -85,7 +87,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.67'; // Script version
+const VERSION = '1.0.68'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -936,6 +938,22 @@ function outputDryRunResults(url, matchedItems, netToolsResults, pageTitle) {
   }
 }
 
+/**
+ * Helper function to check if a URL should be processed (valid HTTP/HTTPS)
+ * @param {string} url - URL to validate
+ * @param {boolean} forceDebug - Debug logging flag
+ * @returns {boolean} True if URL is valid for processing
+ */
+function shouldProcessUrl(url, forceDebug) {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch (err) {
+    if (forceDebug) console.log(formatLogMessage('debug', `Invalid URL for processing: ${url}`));
+    return false;
+  }
+}
+
 // ability to use widcards in ignoreDomains
 function matchesIgnoreDomain(domain, ignorePatterns) {
   return ignorePatterns.some(pattern => {
@@ -1322,11 +1340,19 @@ function setupFrameHandling(page, forceDebug) {
 
     if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
 
+    // Track ALL domains that should be considered first-party (original + redirects)
+    const firstPartyDomains = new Set();
+    const originalRootDomain = safeGetDomain(currentUrl, false);
+    if (originalRootDomain) {
+      firstPartyDomains.add(originalRootDomain);
+    } 
+
     // Track redirect domains to exclude from matching
     let redirectDomainsToExclude = [];
     
-    // Track the effective current URL for first-party detection (updates after redirects)
+    // Track the effective current URL and final URL for first-party detection (updates after redirects)
     let effectiveCurrentUrl = currentUrl;
+    let finalUrlAfterRedirect = null;
 
     // Enhanced error types for Puppeteer 23.x compatibility
     const CRITICAL_BROWSER_ERRORS = [
@@ -1838,13 +1864,9 @@ function setupFrameHandling(page, forceDebug) {
         const checkedUrl = request.url();
         const checkedHostname = safeGetDomain(checkedUrl, true);
         const checkedRootDomain = safeGetDomain(checkedUrl, false); // Root domain for first-party detection
-        // Use effectiveCurrentUrl which gets updated after redirects
-        // This ensures first-party detection uses the final redirected domain
-        const effectiveCurrentHostname = safeGetDomain(effectiveCurrentUrl, true);
-        const effectiveCurrentRootDomain = safeGetDomain(effectiveCurrentUrl, false); // Root domain for comparison
-        
-        // FIXED: Compare root domains instead of full hostnames for first-party detection
-        const isFirstParty = checkedRootDomain && effectiveCurrentRootDomain && checkedRootDomain === effectiveCurrentRootDomain;
+        // Check against ALL first-party domains (original + all redirects)
+        // This prevents redirect destinations from being marked as third-party
+        const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
         
         // Block infinite iframe loops
         const frameUrl = request.frame() ? request.frame().url() : '';
@@ -2000,14 +2022,6 @@ function setupFrameHandling(page, forceDebug) {
              }
              break; // Skip this URL - it's third-party but thirdParty is disabled
            }
-
-           // Check ignoreDomains AFTER regex match but BEFORE domain processing
-           if (matchesIgnoreDomain(fullSubdomain, ignoreDomains)) {
-             if (forceDebug) {
-               console.log(formatLogMessage('debug', `Ignoring domain ${fullSubdomain} (matches ignoreDomains pattern)`));
-             }
-            break; // Skip this URL - domain is in ignore list
-          }
  
             // REMOVED: Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
             // This check is no longer needed here since even_blocked handles it above
@@ -2309,6 +2323,19 @@ function setupFrameHandling(page, forceDebug) {
         if (redirected) {
           const originalDomain = safeGetDomain(originalUrl);
           const finalDomain = safeGetDomain(finalUrl);
+
+          // Add redirect destination to first-party domains immediately
+          if (finalDomain) {
+            firstPartyDomains.add(finalDomain);
+          }
+          
+          // Also add any intermediate redirect domains as first-party
+          if (redirectDomains && redirectDomains.length > 0) {
+            redirectDomains.forEach(domain => {
+              const rootDomain = safeGetDomain(`http://${domain}`, false);
+              if (rootDomain) firstPartyDomains.add(rootDomain);
+            });
+          }
           
           if (originalDomain !== finalDomain) {
             if (!silentMode) {
@@ -2317,6 +2344,7 @@ function setupFrameHandling(page, forceDebug) {
             
             if (forceDebug) {
               console.log(formatLogMessage('debug', `Full redirect chain: ${redirectChain.join(' → ')}`));
+              console.log(formatLogMessage('debug', `All first-party domains: ${Array.from(firstPartyDomains).join(', ')}`));
             }
             
             // VALIDATION: Only update currentUrl if finalUrl is a valid HTTP/HTTPS URL
@@ -2326,6 +2354,7 @@ function setupFrameHandling(page, forceDebug) {
 
               // IMPORTANT: Also update effectiveCurrentUrl for first-party detection
               effectiveCurrentUrl = finalUrl;
+              finalUrlAfterRedirect = finalUrl;
               
               // Update the redirect domains to exclude from matching
               if (redirectDomains && redirectDomains.length > 0) {
@@ -2541,7 +2570,13 @@ function setupFrameHandling(page, forceDebug) {
       };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         
-        return { url: currentUrl, rules: formattedRules, success: true };
+        return { 
+          url: currentUrl, 
+          rules: formattedRules, 
+          success: true,
+          finalUrl: finalUrlAfterRedirect || currentUrl,
+          redirectDomains: redirectDomainsToExclude
+        };
       }
       
     } catch (err) {
@@ -2577,7 +2612,14 @@ function setupFrameHandling(page, forceDebug) {
         };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         if (forceDebug) console.log(formatLogMessage('debug', `Saving ${formattedRules.length} rules despite page load failure`));
-        return { url: currentUrl, rules: formattedRules, success: false, hasMatches: true };
+        return { 
+          url: currentUrl, 
+          rules: formattedRules, 
+          success: false, 
+          hasMatches: true,
+          finalUrl: finalUrlAfterRedirect || currentUrl,
+          redirectDomains: redirectDomainsToExclude
+        };
       }
       
       if (siteConfig.screenshot === true && page) {
@@ -2591,7 +2633,13 @@ function setupFrameHandling(page, forceDebug) {
           console.warn(messageColors.warn(`[screenshot failed] ${currentUrl}: ${screenshotErr.message}`));
         }
       }
-      return { url: currentUrl, rules: [], success: false };
+      return { 
+        url: currentUrl, 
+        rules: [], 
+        success: false,
+        finalUrl: finalUrlAfterRedirect || currentUrl,
+        redirectDomains: redirectDomainsToExclude
+      };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
       
@@ -2640,7 +2688,7 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
-  const results = [];
+  let results = [];
   let processedUrlCount = 0;
   let urlsSinceLastCleanup = 0;
   
@@ -2791,6 +2839,20 @@ function setupFrameHandling(page, forceDebug) {
       } catch (emergencyRestartErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
       }
+    }
+  }
+
+  // === POST-SCAN PROCESSING ===
+  // Clean up first-party domains and validate results
+  if (!dryRunMode) {
+    // Always run post-processing for both firstParty cleanup and ignoreDomains safety net
+    const sitesWithFirstPartyDisabled = sites.filter(site => site.firstParty === false);
+    if (sitesWithFirstPartyDisabled.length > 0) {
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `Running post-scan processing for ${sitesWithFirstPartyDisabled.length} sites with firstParty: false`));
+      }
+    // Always run post-processing for ignoreDomains safety net
+    results = processResults(results, sites, { forceDebug, silentMode, ignoreDomains });
     }
   }
 
