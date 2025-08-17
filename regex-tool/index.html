@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Regex Tools - Converter & Validator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            animation: fadeInDown 0.5s ease;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .tabs {
+            display: flex;
+            background: #f7f9fc;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #64748b;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .tab:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .tab.active {
+            color: #667eea;
+            background: white;
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -2px;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            animation: slideIn 0.3s ease;
+        }
+
+        .content {
+            padding: 40px;
+            min-height: 500px;
+        }
+
+        .tab-content {
+            display: none;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .input-group {
+            margin-bottom: 30px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 10px;
+            font-weight: 600;
+            color: #334155;
+            font-size: 1.1em;
+        }
+
+        .input-group input[type="text"],
+        .input-group textarea {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            font-size: 1em;
+            font-family: 'Consolas', 'Monaco', monospace;
+            transition: all 0.3s ease;
+        }
+
+        .input-group input[type="text"]:focus,
+        .input-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .input-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            cursor: pointer;
+        }
+
+        .checkbox-group label {
+            cursor: pointer;
+            font-weight: 500;
+            color: #475569;
+        }
+
+        .button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .output-section {
+            margin-top: 40px;
+            padding: 25px;
+            background: #f8fafc;
+            border-radius: 10px;
+            border: 2px solid #e2e8f0;
+        }
+
+        .output-section h3 {
+            margin-bottom: 15px;
+            color: #334155;
+            font-size: 1.3em;
+        }
+
+        .output-box {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+            font-family: 'Consolas', 'Monaco', monospace;
+            margin-bottom: 20px;
+            word-break: break-all;
+            transition: all 0.3s ease;
+        }
+
+        .output-box:hover {
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .examples-list {
+            list-style: none;
+            padding: 0;
+        }
+
+        .examples-list li {
+            background: white;
+            padding: 15px;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            border-left: 4px solid #667eea;
+            font-family: 'Consolas', 'Monaco', monospace;
+            transition: all 0.3s ease;
+        }
+
+        .examples-list li:hover {
+            transform: translateX(5px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .error {
+            background: #fee;
+            color: #c00;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #fcc;
+            margin-top: 10px;
+        }
+
+        .success {
+            background: #e6fffa;
+            color: #047857;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #6ee7b7;
+            margin-top: 10px;
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeInDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: scaleX(0);
+            }
+            to {
+                transform: scaleX(1);
+            }
+        }
+
+        @media (max-width: 768px) {
+            .header h1 {
+                font-size: 1.8em;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+            
+            .button {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔍 Regex Tools</h1>
+            <p>Convert and Validate Regular Expressions with Ease</p>
+        </div>
+
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('convert')">
+                📝 Convert to JSON
+            </button>
+            <button class="tab" onclick="switchTab('validate')">
+                ✅ Validate Regex
+            </button>
+        </div>
+
+        <div class="content">
+            <!-- Convert Tab -->
+            <div id="convert" class="tab-content active">
+                <div class="input-group">
+                    <label for="standardRegex">Enter Standard Regex Pattern:</label>
+                    <input type="text" id="standardRegex" placeholder="e.g., ^https?://.*\.example\.com/.*$">
+                </div>
+
+                <button class="button" onclick="convertToJSON()">Convert to JSON</button>
+
+                <div id="convertOutput"></div>
+            </div>
+
+            <!-- Validate Tab -->
+            <div id="validate" class="tab-content">
+                <div class="checkbox-group" style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #0ea5e9;">
+                    <input type="checkbox" id="useStandardRegex" onchange="toggleRegexInput()">
+                    <label for="useStandardRegex"><strong>✓ Check this box to validate Standard Regex</strong> (uncheck for JSON format)</label>
+                </div>
+
+                <div class="input-group">
+                    <label for="regexToValidate">Enter Regex Pattern:</label>
+                    <textarea id="regexToValidate" placeholder='⚠️ IMPORTANT: Check the box above if entering standard regex!&#10;&#10;For JSON (box unchecked): {"filterRegex": ["^https?:\\\\/\\\\/.*"]}&#10;For Standard (box checked): ^https?:\\/\\/.*'></textarea>
+                </div>
+
+                <button class="button" onclick="validateRegex()">Validate Regex</button>
+
+                <div id="validateOutput"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchTab(tabName) {
+            // Update tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            event.target.classList.add('active');
+
+            // Update content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(tabName).classList.add('active');
+        }
+
+        function toggleRegexInput() {
+            const checkbox = document.getElementById('useStandardRegex');
+            const textarea = document.getElementById('regexToValidate');
+            
+            if (checkbox.checked) {
+                textarea.placeholder = 'Enter standard regex pattern, e.g., ^https?://.*';
+            } else {
+                textarea.placeholder = 'Enter JSON regex, e.g., {"pattern": "^https?://.*", "flags": "gi"}';
+            }
+            textarea.value = '';
+        }
+
+        function generateExamples(regex) {
+            const examples = [];
+            
+            try {
+                // Get the pattern string
+                const pattern = regex.source || regex.pattern || regex.toString();
+                
+                // Helper function to generate random string of specific length
+                function generateRandomString(minLen, maxLen) {
+                    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-+=';
+                    const length = maxLen ? Math.floor(Math.random() * (maxLen - minLen + 1)) + minLen : minLen;
+                    let result = '';
+                    for (let i = 0; i < length; i++) {
+                        result += chars.charAt(Math.floor(Math.random() * chars.length));
+                    }
+                    return result;
+                }
+                
+                if (pattern.includes('http')) {
+                    // Check for specific domain requirements
+                    if (pattern.includes('com|org')) {
+                        // Pattern requires .com or .org domains
+                        const protocols = pattern.includes('https?') ? ['https://', 'http://'] : ['https://'];
+                        const domains = ['example', 'test-site', 'web-app', 'api-server', 'my-service'];
+                        const extensions = ['com', 'org'];
+                        
+                        for (let i = 0; i < 5; i++) {
+                            const protocol = protocols[i % protocols.length];
+                            const domain = domains[i % domains.length];
+                            const ext = extensions[i % extensions.length];
+                            
+                            // Build the path part
+                            let path = '';
+                            
+                            // Check for specific length requirements in path
+                            const pathMatch = pattern.match(/\[A-Za-z0-9[^\]]*\]\{(\d+),?(\d*)\}/);
+                            if (pathMatch) {
+                                const minLen = parseInt(pathMatch[1]);
+                                const maxLen = pathMatch[2] ? parseInt(pathMatch[2]) : minLen + 20;
+                                path = generateRandomString(minLen, maxLen);
+                            } else {
+                                path = 'api/v1/users/profile/data';
+                            }
+                            
+                            let url = `${protocol}${domain}.${ext}/${path}`;
+                            
+                            // Add query params if pattern requires them
+                            if (pattern.includes('\\?')) {
+                                // Check for minimum length requirements in query
+                                const queryMatch = pattern.match(/\\\?\.\{(\d+),?(\d*)\}/);
+                                if (queryMatch) {
+                                    const minLen = parseInt(queryMatch[1]);
+                                    const maxLen = queryMatch[2] ? parseInt(queryMatch[2]) : minLen + 10;
+                                    url += '?' + generateRandomString(minLen, maxLen);
+                                } else if (pattern.match(/\?\.\{(\d+),/)) {
+                                    // Handle any {n,} pattern after ?
+                                    const match = pattern.match(/\?\.\{(\d+),/);
+                                    const minLen = parseInt(match[1]);
+                                    url += '?param=' + generateRandomString(Math.max(minLen - 6, 1), minLen + 15);
+                                } else {
+                                    url += '?param=value&key=data';
+                                }
+                            } else if (pattern.includes('&.{')) {
+                                // Handle &.{n,} case
+                                const ampMatch = pattern.match(/&\.\{(\d+),/);
+                                if (ampMatch) {
+                                    const minLen = parseInt(ampMatch[1]);
+                                    url += '&' + generateRandomString(minLen, minLen + 15);
+                                }
+                            }
+                            
+                            examples.push(url);
+                        }
+                    } else {
+                        // General URL patterns
+                        const protocols = pattern.includes('https?') ? ['http://', 'https://'] : ['https://'];
+                        const urls = [
+                            'www.example.com/path/to/resource',
+                            'subdomain.test.com/api/endpoint',
+                            'example.org/page/section/item',
+                            'demo.net/products/category',
+                            'sample.io/user/profile/settings'
+                        ];
+                        
+                        urls.forEach((url, i) => {
+                            if (i < 5) {
+                                let fullUrl = protocols[i % protocols.length] + url;
+                                
+                                // Check for length requirements
+                                const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
+                                if (lengthMatch && !pattern.includes('\\?')) {
+                                    const minLen = parseInt(lengthMatch[1]);
+                                    const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 10;
+                                    fullUrl += '/' + generateRandomString(minLen, maxLen);
+                                }
+                                
+                                examples.push(fullUrl);
+                            }
+                        });
+                    }
+                    
+                    // Test all generated examples against the regex
+                    const validExamples = [];
+                    for (const example of examples) {
+                        try {
+                            // Reset regex lastIndex in case of global flag
+                            regex.lastIndex = 0;
+                            if (regex.test(example)) {
+                                validExamples.push(example);
+                            }
+                        } catch (e) {
+                            console.error('Error testing example:', e);
+                        }
+                    }
+                    
+                    // If we don't have enough valid examples, try more specific ones with proper lengths
+                    if (validExamples.length < 5) {
+                        const moreSpecific = [];
+                        for (let i = 0; i < 10; i++) {
+                            const protocol = i % 2 === 0 ? 'https://' : 'http://';
+                            const domain = ['test-api', 'web-server', 'my-app', 'demo-site', 'api-gateway'][i % 5];
+                            const ext = i % 2 === 0 ? 'com' : 'org';
+                            
+                            // Generate path with proper length if specified
+                            let path = 'Path_';
+                            const pathMatch = pattern.match(/\[A-Za-z0-9[^\]]*\]\{(\d+),?(\d*)\}/);
+                            if (pathMatch) {
+                                const minLen = parseInt(pathMatch[1]);
+                                const maxLen = pathMatch[2] ? parseInt(pathMatch[2]) : minLen + 20;
+                                path = generateRandomString(minLen, maxLen);
+                            } else {
+                                path += generateRandomString(10, 30);
+                            }
+                            
+                            let url = `${protocol}${domain}.${ext}/${path}`;
+                            
+                            // Add query with proper length if needed
+                            if (pattern.includes('\\?')) {
+                                const queryMatch = pattern.match(/\\\?\.\{(\d+),?(\d*)\}/);
+                                if (queryMatch) {
+                                    const minLen = parseInt(queryMatch[1]);
+                                    url += '?q=' + generateRandomString(Math.max(minLen - 2, 1), minLen + 10);
+                                } else if (pattern.match(/\?\.\{(\d+),/)) {
+                                    const match = pattern.match(/\?\.\{(\d+),/);
+                                    const minLen = parseInt(match[1]);
+                                    url += '?' + generateRandomString(minLen, minLen + 15);
+                                } else {
+                                    url += '?param=' + generateRandomString(10, 20);
+                                }
+                            } else if (pattern.includes('&.{')) {
+                                const ampMatch = pattern.match(/&\.\{(\d+),/);
+                                if (ampMatch) {
+                                    const minLen = parseInt(ampMatch[1]);
+                                    url += '&' + generateRandomString(minLen, minLen + 15);
+                                }
+                            }
+                            
+                            moreSpecific.push(url);
+                        }
+                        
+                        for (const url of moreSpecific) {
+                            regex.lastIndex = 0;
+                            if (regex.test(url) && validExamples.length < 5) {
+                                validExamples.push(url);
+                            }
+                        }
+                    }
+                    
+                    return validExamples.length > 0 ? validExamples.slice(0, 5) : [
+                        'Pattern is very specific - generating custom examples...',
+                        'Try: https://example.com/Page_Name/path?query=value12345',
+                        'Try: http://test.org/API_endpoint/data?param=longvalue123',
+                        'Manual testing recommended for this pattern',
+                        'Validation successful'
+                    ];
+                } else if (pattern.includes('@')) {
+                    examples.push(
+                        'user@example.com',
+                        'john.doe@company.org',
+                        'admin+tag@subdomain.example.com',
+                        'contact@business.co.uk',
+                        'support123@service.io'
+                    );
+                } else if (pattern.includes('\\d')) {
+                    // Check for length requirements
+                    const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
+                    if (lengthMatch) {
+                        const minLen = parseInt(lengthMatch[1]);
+                        const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 10;
+                        for (let i = 0; i < 5; i++) {
+                            examples.push(generateRandomString(minLen, maxLen));
+                        }
+                    } else {
+                        examples.push(
+                            '12345',
+                            '2024-01-15',
+                            'ID-9876-XY',
+                            'Version 3.14.159',
+                            'Order #00425'
+                        );
+                    }
+                } else if (pattern.includes('\\w')) {
+                    // Check for length requirements
+                    const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
+                    if (lengthMatch) {
+                        const minLen = parseInt(lengthMatch[1]);
+                        const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 10;
+                        for (let i = 0; i < 5; i++) {
+                            examples.push(generateRandomString(minLen, maxLen));
+                        }
+                    } else {
+                        examples.push(
+                            'HelloWorld',
+                            'user_name_123',
+                            'CamelCaseExample',
+                                            );
+                    }
+                } else {
+                    // Check for any length requirements in the pattern
+                    const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
+                    if (lengthMatch) {
+                        const minLen = parseInt(lengthMatch[1]);
+                        const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 15;
+                        for (let i = 0; i < 5; i++) {
+                            examples.push(generateRandomString(minLen, maxLen));
+                        }
+                    } else {
+                        // Generic examples
+                        examples.push(
+                            'example text',
+                            'Sample String 123',
+                            'test-data-here',
+                            'Another_Example',
+                            'final.test.value'
+                        );
+                    }
+                }
+                
+                // Filter examples that actually match the regex
+                const validExamples = examples.filter(ex => {
+                    try {
+                        regex.lastIndex = 0;
+                        return regex.test(ex);
+                    } catch {
+                        return false;
+                    }
+                });
+                
+                return validExamples.length > 0 ? validExamples.slice(0, 5) : [
+                    'No automatic examples could be generated.',
+                    'The pattern may be too specific.',
+                    'Try testing with your own strings.',
+                    'Enter test strings manually.',
+                    'Pattern validation successful.'
+                ];
+            } catch (error) {
+                console.error('Error in generateExamples:', error);
+                return ['Error generating examples'];
+            }
+        }
+
+        function convertToJSON() {
+            const standardRegex = document.getElementById('standardRegex').value;
+            const outputDiv = document.getElementById('convertOutput');
+            
+            if (!standardRegex) {
+                outputDiv.innerHTML = '<div class="error">Please enter a regex pattern</div>';
+                return;
+            }
+            
+            try {
+                // Remove surrounding quotes if present
+                let cleanPattern = standardRegex.trim();
+                if ((cleanPattern.startsWith('"') && cleanPattern.endsWith('"')) || 
+                    (cleanPattern.startsWith("'") && cleanPattern.endsWith("'"))) {
+                    cleanPattern = cleanPattern.slice(1, -1);
+                }
+                
+                // Test if the regex is valid first (using the cleaned pattern)
+                const testRegex = new RegExp(cleanPattern);
+                
+                // For JSON string format: the input pattern stays as is
+                // JSON.stringify will handle the escaping
+                const jsonOutput = {
+                    filterRegex: [cleanPattern]
+                };
+                
+                // Generate examples
+                const examples = generateExamples(testRegex);
+                
+                outputDiv.innerHTML = `
+                    <div class="output-section">
+                        <h3>📋 JSON Output:</h3>
+                        <div class="output-box">${JSON.stringify(jsonOutput, null, 2)}</div>
+                        
+                        <h3>✨ Example Matches:</h3>
+                        <ul class="examples-list">
+                            ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
+                        </ul>
+                        
+                        <div class="success">✅ Regex successfully converted to JSON format!</div>
+                    </div>
+                `;
+            } catch (error) {
+                outputDiv.innerHTML = `<div class="error">❌ Invalid regex pattern: ${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        function validatandard ? 'Standard Regex' : 'JSON Regex'}
+                        </div>
+                        
+                        <h3>✨ Example Matches:</h3>
+                        <ul class="examples-list">
+                            ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
+                        </ul>
+                        
+                        <div class="success">✅ Regex is valid!</div>
+                    </div>
+                `;
+            } catch (error) {
+                if (error instanceof SyntaxError && !useStandard) {
+                    outputDiv.innerHTML = `<div class="error">❌ Invalid JSON syntax: ${escapeHtml(error.message)}<br><br>Expected format: {"filterRegex": ["your-regex-pattern"]} or "your-regex-pattern"</div>`;
+                } else {
+                    outputDiv.innerHTML = `<div class="error">❌ Invalid regex: ${escapeHtml(error.message)}</div>`;
+                }
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // Add enter key support
+        document.getElementById('standardRegex').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') convertToJSON();
+        });
+        
+        document.getElementById('regexToValidate').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                validateRegex();
+            }
+        });
+    </script>
+</body>
+</html>

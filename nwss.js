@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.68 ===
+// === Network scanner script (nwss.js) v1.0.69 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -44,6 +44,37 @@ function fastTimeout(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// --- Configuration Constants ---
+const TIMEOUTS = {
+  DEFAULT_PAGE: 30000,
+  DEFAULT_NAVIGATION: 25000,
+  DEFAULT_NAVIGATION_REDUCED: 20000,  // Reduced timeout for faster failures
+  DEFAULT_PAGE_REDUCED: 15000,        // Reduced page timeout
+  FRAME_LOAD_WAIT: 2000,
+  NETWORK_IDLE: 2000,
+  NETWORK_IDLE_MAX: 10000,
+  FAST_SITE_THRESHOLD: 15000,
+  EMERGENCY_RESTART_DELAY: 2000,
+  BROWSER_STABILIZE_DELAY: 1000,
+  CURL_HANDLER_DELAY: 3000,
+  PROTOCOL_TIMEOUT: 60000,
+  REDIRECT_JS_TIMEOUT: 5000
+};
+
+const CACHE_LIMITS = {
+  DISK_CACHE_SIZE: 52428800, // 50MB
+  MEDIA_CACHE_SIZE: 52428800, // 50MB
+  DEFAULT_CACHE_PATH: '.cache',
+  DEFAULT_MAX_SIZE: 5000
+};
+
+const CONCURRENCY_LIMITS = {
+  MIN: 1,
+  MAX: 50,
+  DEFAULT: 6,
+  HIGH_CONCURRENCY_THRESHOLD: 12  // Auto-enable aggressive caching above this
+};
+
 /**
  * Detects the installed Puppeteer version dynamically
  * @returns {Object} Version info and compatibility settings
@@ -87,7 +118,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.68'; // Script version
+const VERSION = '1.0.69'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -278,7 +309,7 @@ if (clearCache && !dryRunMode) {
   clearPersistentCache({
     silent: silentMode,
     forceDebug,
-    cachePath: '.cache' // Default path, will be updated after config loads if needed
+    cachePath: CACHE_LIMITS.DEFAULT_CACHE_PATH // Default path, will be updated after config loads if needed
   });
 }
 
@@ -568,24 +599,24 @@ const {
 const MAX_CONCURRENT_SITES = (() => {
   // Check command line argument first
   if (maxConcurrentSites !== null) {
-    if (maxConcurrentSites > 0 && maxConcurrentSites <= 50) {
+    if (maxConcurrentSites >= CONCURRENCY_LIMITS.MIN && maxConcurrentSites <= CONCURRENCY_LIMITS.MAX) {
       if (forceDebug) console.log(formatLogMessage('debug', `Using command line max_concurrent_sites: ${maxConcurrentSites}`));
       return maxConcurrentSites;
     } else {
-      console.warn(`⚠ Invalid --max-concurrent value: ${maxConcurrentSites}. Must be 1-50. Using config/default value.`);
+      console.warn(`⚠ Invalid --max-concurrent value: ${maxConcurrentSites}. Must be ${CONCURRENCY_LIMITS.MIN}-${CONCURRENCY_LIMITS.MAX}. Using config/default value.`);
     }
   }
   
   // Check config.json value
-  if (typeof max_concurrent_sites === 'number' && max_concurrent_sites > 0 && max_concurrent_sites <= 50) {
+  if (typeof max_concurrent_sites === 'number' && max_concurrent_sites >= CONCURRENCY_LIMITS.MIN && max_concurrent_sites <= CONCURRENCY_LIMITS.MAX) {
     if (forceDebug) console.log(formatLogMessage('debug', `Using config max_concurrent_sites: ${max_concurrent_sites}`));
     return max_concurrent_sites;
-  } else if (max_concurrent_sites !== 6) {
-    console.warn(`⚠ Invalid config max_concurrent_sites value: ${max_concurrent_sites}. Using default: 6`);
+  } else if (max_concurrent_sites !== CONCURRENCY_LIMITS.DEFAULT) {
+    console.warn(`⚠ Invalid config max_concurrent_sites value: ${max_concurrent_sites}. Using default: ${CONCURRENCY_LIMITS.DEFAULT}`);
   }
   
   // Use default
-  return 6;
+  return CONCURRENCY_LIMITS.DEFAULT;
 })();
 
 const RESOURCE_CLEANUP_INTERVAL = (() => {
@@ -621,7 +652,7 @@ if (clearCache && dryRunMode) {
 }
 
 // Also clear for custom cache paths in normal mode if not already cleared
-if (clearCache && !dryRunMode && config.cache_path && config.cache_path !== '.cache') {
+if (clearCache && !dryRunMode && config.cache_path && config.cache_path !== CACHE_LIMITS.DEFAULT_CACHE_PATH) {
   clearPersistentCache({
     silent: silentMode,
     forceDebug,
@@ -638,11 +669,11 @@ smartCache = createSmartCache({
   ...config,
   forceDebug,
   max_concurrent_sites: MAX_CONCURRENT_SITES,  // Pass concurrency info
-  cache_aggressive_mode: MAX_CONCURRENT_SITES > 12,  // Auto-enable for high concurrency
+  cache_aggressive_mode: MAX_CONCURRENT_SITES > CONCURRENCY_LIMITS.HIGH_CONCURRENCY_THRESHOLD,  // Auto-enable for high concurrency
   cache_persistence: false, // Disable persistence completely
   cache_autosave: false, // Disable auto-save completely
   cache_autosave_minutes: config.cache_autosave_minutes || 1,
-  cache_max_size: config.cache_max_size || 5000
+  cache_max_size: config.cache_max_size || CACHE_LIMITS.DEFAULT_MAX_SIZE
 });
 }
 
@@ -1142,8 +1173,8 @@ function setupFrameHandling(page, forceDebug) {
       args: [
         // Disk space controls - 50MB cache limits
         '--disable-features=VizDisplayCompositor',
-        '--disk-cache-size=52428800', // 50MB disk cache (50 * 1024 * 1024)
-        '--media-cache-size=52428800', // 50MB media cache  
+        `--disk-cache-size=${CACHE_LIMITS.DISK_CACHE_SIZE}`, // 50MB disk cache
+        `--media-cache-size=${CACHE_LIMITS.MEDIA_CACHE_SIZE}`, // 50MB media cache
         '--disable-application-cache',
         '--disable-offline-load-stale-cache',
         '--disable-background-downloads',
@@ -1188,7 +1219,7 @@ function setupFrameHandling(page, forceDebug) {
         '--no-zygote', // Better process isolation
         ],
         // Optimized timeouts for Puppeteer 23.x performance
-        protocolTimeout: 60000,  // Reduced from 60s to 45s for faster failure detection
+        protocolTimeout: TIMEOUTS.PROTOCOL_TIMEOUT,
         slowMo: 0, // No artificial delays
         defaultViewport: null, // Use system default viewport
         ignoreDefaultArgs: ['--enable-automation'] // Avoid automation detection
@@ -1336,7 +1367,7 @@ function setupFrameHandling(page, forceDebug) {
       matchedDomains.set('dryRunNetTools', []);
       matchedDomains.set('dryRunSearchString', new Map()); // Map URL to search results
     }
-    const timeout = siteConfig.timeout || 30000;
+    const timeout = siteConfig.timeout || TIMEOUTS.DEFAULT_PAGE;
 
     if (!silentMode) console.log(`\n${messageColors.scanning('Scanning:')} ${currentUrl}`);
 
@@ -1393,8 +1424,8 @@ function setupFrameHandling(page, forceDebug) {
       
       // Set aggressive timeouts for problematic operations
       // Optimized timeouts for Puppeteer 23.x responsiveness
-      page.setDefaultTimeout(Math.min(timeout, 20000));  // Reduced from 15000 for faster failures
-      page.setDefaultNavigationTimeout(Math.min(timeout, 25000));  // Reduced from 18000
+      page.setDefaultTimeout(Math.min(timeout, TIMEOUTS.DEFAULT_PAGE_REDUCED));
+      page.setDefaultNavigationTimeout(Math.min(timeout, TIMEOUTS.DEFAULT_NAVIGATION));
       // Aggressive timeouts prevent hanging in Puppeteer 23.x while maintaining speed
       
       page.on('console', (msg) => {
@@ -1461,8 +1492,8 @@ function setupFrameHandling(page, forceDebug) {
       // Apply flowProxy timeouts if detection is enabled
       if (flowproxyDetection) {
         const flowproxyTimeouts = getFlowProxyTimeouts(siteConfig);
-        page.setDefaultTimeout(Math.min(flowproxyTimeouts.pageTimeout, 25000));
-        page.setDefaultNavigationTimeout(Math.min(flowproxyTimeouts.navigationTimeout, 30000));
+        page.setDefaultTimeout(Math.min(flowproxyTimeouts.pageTimeout, TIMEOUTS.DEFAULT_NAVIGATION));
+        page.setDefaultNavigationTimeout(Math.min(flowproxyTimeouts.navigationTimeout, TIMEOUTS.DEFAULT_PAGE));
         if (forceDebug) {
           console.log(formatLogMessage('debug', `Applied flowProxy timeouts - page: ${flowproxyTimeouts.pageTimeout}ms, nav: ${flowproxyTimeouts.navigationTimeout}ms`));
         }
@@ -2293,13 +2324,13 @@ function setupFrameHandling(page, forceDebug) {
         // Use explicit Promise-based timeouts instead of page.waitForTimeout()
 
         // Use faster defaults for sites with long timeouts to improve responsiveness
-        const isFastSite = timeout <= 15000;
+        const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
         const defaultWaitUntil = 'domcontentloaded'; // Always use faster option in Puppeteer 23.x
  
         // Enhanced navigation options for Puppeteer 23.x
         const defaultGotoOptions = {
           waitUntil: defaultWaitUntil,
-          timeout: Math.min(timeout, 30000), // Reduced from 20000 for faster failures
+          timeout: Math.min(timeout, TIMEOUTS.DEFAULT_PAGE), // Cap at default page timeout
           // Puppeteer 23.x: Fixed referrer header handling
           ...(siteConfig.referrer_headers && (() => {
             const referrerUrl = Array.isArray(siteConfig.referrer_headers) 
@@ -2418,7 +2449,7 @@ function setupFrameHandling(page, forceDebug) {
         if (forceDebug) {
           try {
             // Use fast timeout helper for compatibility  
-            await fastTimeout(2000); // Give iframes time to load
+            await fastTimeout(TIMEOUTS.FRAME_LOAD_WAIT); // Give iframes time to load
             const frames = page.frames();
             console.log(formatLogMessage('debug', `Total frames found: ${frames.length}`));
             frames.forEach((frame, index) => {
@@ -2462,10 +2493,10 @@ function setupFrameHandling(page, forceDebug) {
       const delayMs = siteConfig.delay || 4000;
       
       // Optimized delays for Puppeteer 23.x performance
-      const isFastSite = timeout <= 15000;
-      const networkIdleTime = 2000;  // Balanced: 2s for reliable network detection
-      const networkIdleTimeout = Math.min(timeout / 2, 10000);  // Balanced: 10s timeout
-      const actualDelay = Math.min(delayMs, 2000);  // Balanced: 2s delay for stability
+      const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
+      const networkIdleTime = TIMEOUTS.NETWORK_IDLE;  // Balanced: 2s for reliable network detection
+      const networkIdleTimeout = Math.min(timeout / 2, TIMEOUTS.NETWORK_IDLE_MAX);  // Balanced: 10s timeout
+      const actualDelay = Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);  // Balanced: 2s delay for stability
       
       await page.waitForNetworkIdle({ 
         idleTime: networkIdleTime, 
@@ -2550,7 +2581,7 @@ function setupFrameHandling(page, forceDebug) {
         
         // Wait a moment for async nettools/searchstring operations to complete
         // Use fast timeout helper for Puppeteer 22.x compatibility
-        await fastTimeout(3000); // Increased for nettools operations
+        await fastTimeout(TIMEOUTS.CURL_HANDLER_DELAY); // Wait for async operations
         
         outputDryRunResults(currentUrl, enhancedMatches, dryRunNetTools, pageTitle);
         
@@ -2767,7 +2798,7 @@ function setupFrameHandling(page, forceDebug) {
       
       // Reset cleanup counter and add delay
       urlsSinceLastCleanup = 0;
-      await fastTimeout(1000);
+      await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
     
     if (forceDebug) {
@@ -2835,7 +2866,7 @@ function setupFrameHandling(page, forceDebug) {
         }
         browser = await createBrowser();
         urlsSinceLastCleanup = 0; // Reset counter
-        await fastTimeout(2000); // Give browser time to stabilize
+        await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY); // Give browser time to stabilize
       } catch (emergencyRestartErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
       }
@@ -3013,7 +3044,7 @@ function setupFrameHandling(page, forceDebug) {
     forceDebug,
     comprehensive: true 
   });
-  await fastTimeout(1000); // Give filesystem time to sync
+  await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY); // Give filesystem time to sync
 
   // Calculate timing, success rates, and provide summary information
   if (forceDebug) console.log(formatLogMessage('debug', `Calculating timing statistics...`));
