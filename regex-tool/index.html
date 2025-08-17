@@ -291,15 +291,15 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔍 Regex Tools</h1>
+            <h1>🔄 Regex Tools</h1>
             <p>Convert and Validate Regular Expressions with Ease</p>
         </div>
 
         <div class="tabs">
-            <button class="tab active" onclick="switchTab('convert')">
-                📝 Convert to JSON
+            <button class="tab active" data-tab="convert">
+                🔄 Convert to JSON
             </button>
-            <button class="tab" onclick="switchTab('validate')">
+            <button class="tab" data-tab="validate">
                 ✅ Validate Regex
             </button>
         </div>
@@ -312,7 +312,7 @@
                     <input type="text" id="standardRegex" placeholder="e.g., ^https?://.*\.example\.com/.*$">
                 </div>
 
-                <button class="button" onclick="convertToJSON()">Convert to JSON</button>
+                <button class="button" id="convertBtn">Convert to JSON</button>
 
                 <div id="convertOutput"></div>
             </div>
@@ -320,8 +320,8 @@
             <!-- Validate Tab -->
             <div id="validate" class="tab-content">
                 <div class="checkbox-group" style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #0ea5e9;">
-                    <input type="checkbox" id="useStandardRegex" onchange="toggleRegexInput()">
-                    <label for="useStandardRegex"><strong>✓ Check this box to validate Standard Regex</strong> (uncheck for JSON format)</label>
+                    <input type="checkbox" id="useStandardRegex">
+                    <label for="useStandardRegex"><strong>📝 Check this box to validate Standard Regex</strong> (uncheck for JSON format)</label>
                 </div>
 
                 <div class="input-group">
@@ -329,7 +329,7 @@
                     <textarea id="regexToValidate" placeholder='⚠️ IMPORTANT: Check the box above if entering standard regex!&#10;&#10;For JSON (box unchecked): {"filterRegex": ["^https?:\\\\/\\\\/.*"]}&#10;For Standard (box checked): ^https?:\\/\\/.*'></textarea>
                 </div>
 
-                <button class="button" onclick="validateRegex()">Validate Regex</button>
+                <button class="button" id="validateBtn">Validate Regex</button>
 
                 <div id="validateOutput"></div>
             </div>
@@ -337,12 +337,41 @@
     </div>
 
     <script>
-        function switchTab(tabName) {
+        // Use DOMContentLoaded to ensure all elements are loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Tab switching with event delegation
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => {
+                tab.addEventListener('click', function() {
+                    const tabName = this.getAttribute('data-tab');
+                    switchTab(tabName, this);
+                });
+            });
+
+            // Button event listeners
+            document.getElementById('convertBtn').addEventListener('click', convertToJSON);
+            document.getElementById('validateBtn').addEventListener('click', validateRegex);
+            document.getElementById('useStandardRegex').addEventListener('change', toggleRegexInput);
+
+            // Enter key support
+            document.getElementById('standardRegex').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') convertToJSON();
+            });
+            
+            document.getElementById('regexToValidate').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    validateRegex();
+                }
+            });
+        });
+
+        function switchTab(tabName, clickedTab) {
             // Update tabs
             document.querySelectorAll('.tab').forEach(tab => {
                 tab.classList.remove('active');
             });
-            event.target.classList.add('active');
+            clickedTab.classList.add('active');
 
             // Update content
             document.querySelectorAll('.tab-content').forEach(content => {
@@ -578,7 +607,9 @@
                             'HelloWorld',
                             'user_name_123',
                             'CamelCaseExample',
-                                            );
+                            'snake_case_text',
+                            'MixedContent2024'
+                        );
                     }
                 } else {
                     // Check for any length requirements in the pattern
@@ -649,32 +680,45 @@
                 const jsonOutput = {
                     filterRegex: [cleanPattern]
                 };
+ rn = jsonRegex.pattern;
+                        } else {
+                            throw new Error('Invalid JSON format. Expected {"filterRegex": ["pattern"]}');
+                        }
+                    } else if (regexInput.startsWith('"') && regexInput.endsWith('"')) {
+                        // Just a quoted string - parse as JSON string
+                        pattern = JSON.parse(regexInput);
+                    } else {
+                        // Raw pattern without quotes or JSON wrapper
+                        outputDiv.innerHTML = `
+                            <div class="error">
+                                ❌ Invalid format for JSON mode.<br><br>
+                                You can use one of these formats:<br>
+                                <div class="output-box" style="margin-top: 10px; background: #fef3c7;">
+                                    1. Full JSON: {"filterRegex": ["${escapeHtml(regexInput)}"]}<br><br>
+                                    2. Quoted string: "${escapeHtml(regexInput)}"
+                                </div>
+                                <br>
+                                💡 <strong>Tip:</strong> Check the "Use Standard Regex" box above to validate regex patterns directly without quotes.
+                            </div>
+                        `;
+                        return;
+                    }
+                    
+                    regex = new RegExp(pattern);
+                }
                 
                 // Generate examples
-                const examples = generateExamples(testRegex);
+                const examples = generateExamples(regex);
                 
                 outputDiv.innerHTML = `
                     <div class="output-section">
-                        <h3>📋 JSON Output:</h3>
-                        <div class="output-box">${JSON.stringify(jsonOutput, null, 2)}</div>
-                        
-                        <h3>✨ Example Matches:</h3>
-                        <ul class="examples-list">
-                            ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
-                        </ul>
-                        
-                        <div class="success">✅ Regex successfully converted to JSON format!</div>
-                    </div>
-                `;
-            } catch (error) {
-                outputDiv.innerHTML = `<div class="error">❌ Invalid regex pattern: ${escapeHtml(error.message)}</div>`;
-            }
-        }
-
-        function validatandard ? 'Standard Regex' : 'JSON Regex'}
+                        <h3>🔍 Validation Result:</h3>
+                        <div class="output-box">
+                            Pattern: ${escapeHtml(pattern)}<br>
+                            Type: ${useStandard ? 'Standard Regex' : 'JSON Regex'}
                         </div>
                         
-                        <h3>✨ Example Matches:</h3>
+                        <h3>✅ Example Matches:</h3>
                         <ul class="examples-list">
                             ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
                         </ul>
@@ -696,18 +740,6 @@
             div.textContent = text;
             return div.innerHTML;
         }
-
-        // Add enter key support
-        document.getElementById('standardRegex').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') convertToJSON();
-        });
-        
-        document.getElementById('regexToValidate').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                validateRegex();
-            }
-        });
     </script>
 </body>
 </html>
