@@ -291,16 +291,16 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🔄 Regex Tools</h1>
+            <h1>?? Regex Tools</h1>
             <p>Convert and Validate Regular Expressions with Ease</p>
         </div>
 
         <div class="tabs">
             <button class="tab active" data-tab="convert">
-                🔄 Convert to JSON
+                ?? Convert to JSON
             </button>
             <button class="tab" data-tab="validate">
-                ✅ Validate Regex
+                ? Validate Regex
             </button>
         </div>
 
@@ -321,12 +321,12 @@
             <div id="validate" class="tab-content">
                 <div class="checkbox-group" style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #0ea5e9;">
                     <input type="checkbox" id="useStandardRegex">
-                    <label for="useStandardRegex"><strong>📝 Check this box to validate Standard Regex</strong> (uncheck for JSON format)</label>
+                    <label for="useStandardRegex"><strong>?? Check this box to validate Standard Regex</strong> (uncheck for JSON format)</label>
                 </div>
 
                 <div class="input-group">
                     <label for="regexToValidate">Enter Regex Pattern:</label>
-                    <textarea id="regexToValidate" placeholder='⚠️ IMPORTANT: Check the box above if entering standard regex!&#10;&#10;For JSON (box unchecked): {"filterRegex": ["^https?:\\\\/\\\\/.*"]}&#10;For Standard (box checked): ^https?:\\/\\/.*'></textarea>
+                    <textarea id="regexToValidate" placeholder='?? IMPORTANT: Check the box above if entering standard regex!&#10;&#10;For JSON (box unchecked): {"filterRegex": ["^https?:\\\\/\\\\/.*"]}&#10;For Standard (box checked): ^https?:\\/\\/.*'></textarea>
                 </div>
 
                 <button class="button" id="validateBtn">Validate Regex</button>
@@ -637,7 +637,7 @@
                     try {
                         regex.lastIndex = 0;
                         return regex.test(ex);
-                    } catch {
+                    } catch (e) {
                         return false;
                     }
                 });
@@ -680,7 +680,56 @@
                 const jsonOutput = {
                     filterRegex: [cleanPattern]
                 };
- rn = jsonRegex.pattern;
+                
+                // Generate examples
+                const examples = generateExamples(testRegex);
+                
+                outputDiv.innerHTML = `
+                    <div class="output-section">
+                        <h3>?? JSON Output:</h3>
+                        <div class="output-box">${JSON.stringify(jsonOutput, null, 2)}</div>
+                        
+                        <h3>? Example Matches:</h3>
+                        <ul class="examples-list">
+                            ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
+                        </ul>
+                        
+                        <div class="success">? Regex successfully converted to JSON format!</div>
+                    </div>
+                `;
+            } catch (error) {
+                outputDiv.innerHTML = `<div class="error">? Invalid regex pattern: ${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        function validateRegex() {
+            const useStandard = document.getElementById('useStandardRegex').checked;
+            const regexInput = document.getElementById('regexToValidate').value.trim();
+            const outputDiv = document.getElementById('validateOutput');
+            
+            if (!regexInput) {
+                outputDiv.innerHTML = '<div class="error">Please enter a regex pattern to validate</div>';
+                return;
+            }
+            
+            try {
+                let regex;
+                let pattern;
+                
+                if (useStandard) {
+                    // Use standard regex directly
+                    pattern = regexInput;
+                    regex = new RegExp(pattern);
+                } else {
+                    // JSON mode - handle multiple formats
+                    if (regexInput.startsWith('{')) {
+                        // Full JSON format
+                        const jsonRegex = JSON.parse(regexInput);
+                        
+                        if (jsonRegex.filterRegex && Array.isArray(jsonRegex.filterRegex)) {
+                            pattern = jsonRegex.filterRegex[0];
+                        } else if (jsonRegex.pattern) {
+                            pattern = jsonRegex.pattern;
                         } else {
                             throw new Error('Invalid JSON format. Expected {"filterRegex": ["pattern"]}');
                         }
@@ -691,14 +740,14 @@
                         // Raw pattern without quotes or JSON wrapper
                         outputDiv.innerHTML = `
                             <div class="error">
-                                ❌ Invalid format for JSON mode.<br><br>
+                                ? Invalid format for JSON mode.<br><br>
                                 You can use one of these formats:<br>
                                 <div class="output-box" style="margin-top: 10px; background: #fef3c7;">
                                     1. Full JSON: {"filterRegex": ["${escapeHtml(regexInput)}"]}<br><br>
                                     2. Quoted string: "${escapeHtml(regexInput)}"
                                 </div>
                                 <br>
-                                💡 <strong>Tip:</strong> Check the "Use Standard Regex" box above to validate regex patterns directly without quotes.
+                                ?? <strong>Tip:</strong> Check the "Use Standard Regex" box above to validate regex patterns directly without quotes.
                             </div>
                         `;
                         return;
@@ -712,25 +761,25 @@
                 
                 outputDiv.innerHTML = `
                     <div class="output-section">
-                        <h3>🔍 Validation Result:</h3>
+                        <h3>?? Validation Result:</h3>
                         <div class="output-box">
                             Pattern: ${escapeHtml(pattern)}<br>
                             Type: ${useStandard ? 'Standard Regex' : 'JSON Regex'}
                         </div>
                         
-                        <h3>✅ Example Matches:</h3>
+                        <h3>? Example Matches:</h3>
                         <ul class="examples-list">
                             ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
                         </ul>
                         
-                        <div class="success">✅ Regex is valid!</div>
+                        <div class="success">? Regex is valid!</div>
                     </div>
                 `;
             } catch (error) {
                 if (error instanceof SyntaxError && !useStandard) {
-                    outputDiv.innerHTML = `<div class="error">❌ Invalid JSON syntax: ${escapeHtml(error.message)}<br><br>Expected format: {"filterRegex": ["your-regex-pattern"]} or "your-regex-pattern"</div>`;
+                    outputDiv.innerHTML = `<div class="error">? Invalid JSON syntax: ${escapeHtml(error.message)}<br><br>Expected format: {"filterRegex": ["your-regex-pattern"]} or "your-regex-pattern"</div>`;
                 } else {
-                    outputDiv.innerHTML = `<div class="error">❌ Invalid regex: ${escapeHtml(error.message)}</div>`;
+                    outputDiv.innerHTML = `<div class="error">? Invalid regex: ${escapeHtml(error.message)}</div>`;
                 }
             }
         }
