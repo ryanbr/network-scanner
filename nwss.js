@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.69 ===
+// === Network scanner script (nwss.js) v1.0.72 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -14,7 +14,12 @@ const { formatRules, handleOutput, getFormatDescription } = require('./lib/outpu
 // Rule validation
 const { validateRulesetFile, validateFullConfig, testDomainValidation, cleanRulesetFile } = require('./lib/validate_rules');
 // CF Bypass
-const { handleCloudflareProtection } = require('./lib/cloudflare');
+const { 
+  handleCloudflareProtection,
+  getCacheStats,
+  clearDetectionCache,
+  parallelChallengeDetection
+} = require('./lib/cloudflare');
 // FP Bypass
 const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
 // ignore_similar rules
@@ -83,7 +88,7 @@ function detectPuppeteerVersion() {
   try {
     const puppeteer = require('puppeteer');
     let versionString = null;
-    
+ 
     // Try multiple methods to get version
     if (puppeteer.version) {
       versionString = puppeteer.version;
@@ -118,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.69'; // Script version
+const VERSION = '1.0.72'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -311,6 +316,10 @@ if (clearCache && !dryRunMode) {
     forceDebug,
     cachePath: CACHE_LIMITS.DEFAULT_CACHE_PATH // Default path, will be updated after config loads if needed
   });
+  
+  // Also clear Cloudflare detection cache
+  clearDetectionCache();
+  if (forceDebug) console.log(formatLogMessage('debug', 'Cleared Cloudflare detection cache'));
 }
 
 // Handle validation-only operations before main help
@@ -517,6 +526,10 @@ Redirect Handling Options:
 Cloudflare Protection Options:
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
   cloudflare_bypass: true/false               Auto-solve Cloudflare "Verify you are human" challenges (default: false)
+  cloudflare_parallel_detection: true/false    Use parallel detection for faster Cloudflare checks (default: true)
+  cloudflare_max_retries: <number>            Maximum retry attempts for Cloudflare operations (default: 3)
+  cloudflare_cache_ttl: <milliseconds>        TTL for Cloudflare detection cache (default: 300000 - 5 minutes)
+  cloudflare_retry_on_error: true/false       Enable retry logic for Cloudflare operations (default: true)
 
 FlowProxy Protection Options:
   flowproxy_detection: true/false              Enable flowProxy protection detection and handling (default: false)
@@ -2409,15 +2422,41 @@ function setupFrameHandling(page, forceDebug) {
         
         siteCounter++;
 
-        // Handle all Cloudflare protections using the dedicated module
+        // Enhanced Cloudflare handling with parallel detection
+        if (siteConfig.cloudflare_parallel_detection !== false) { // Enable by default
+          try {
+            const parallelResult = await parallelChallengeDetection(page, forceDebug);
+            if (parallelResult.hasAnyChallenge && forceDebug) {
+              console.log(formatLogMessage('debug', `[cloudflare] Parallel detection found: ${parallelResult.challenges.join(', ')}`));
+            }
+          } catch (parallelErr) {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `[cloudflare] Parallel detection failed: ${parallelErr.message}`));
+            }
+          }
+        }
+
+        // Handle all Cloudflare protections using the enhanced module
         const cloudflareResult = await handleCloudflareProtection(page, currentUrl, siteConfig, forceDebug);
-        
+        // Check for retry recommendations
+        if (cloudflareResult.errors && cloudflareResult.errors.length > 0) {
+          const hasRetryableErrors = cloudflareResult.errors.some(err => 
+            err.includes('timeout') || err.includes('network')
+          );
+          
+          if (hasRetryableErrors && forceDebug) {
+            console.log(formatLogMessage('debug', '[cloudflare] Errors may be retryable - consider enabling retry logic'));
+          }
+        }        
+
         if (!cloudflareResult.overallSuccess) {
           console.warn(`⚠ [cloudflare] Protection handling failed for ${currentUrl}:`);
           cloudflareResult.errors.forEach(error => {
             console.warn(`   - ${error}`);
           });
           // Continue with scan despite Cloudflare issues
+        } else if (cloudflareResult.verificationChallenge?.success && forceDebug) {
+          console.log(formatLogMessage('debug', `[cloudflare] Challenge solved using: ${cloudflareResult.verificationChallenge.method}`));
         }
 
         // Handle flowProxy protection if enabled
@@ -2959,6 +2998,13 @@ function setupFrameHandling(page, forceDebug) {
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
      console.log(formatLogMessage('debug', `Performance: ${totalDomainsSkipped} domains skipped (already detected), ${detectedDomainsCount} unique domains cached`));
+     // Cloudflare cache statistics
+     const cloudflareStats = getCacheStats();
+     if (cloudflareStats.size > 0) {
+       console.log(formatLogMessage('debug', '=== Cloudflare Cache Statistics ==='));
+       console.log(formatLogMessage('debug', `Cache hit rate: ${cloudflareStats.hitRate}, Total hits: ${cloudflareStats.hits}, Misses: ${cloudflareStats.misses}`));
+       console.log(formatLogMessage('debug', `Cached detections: ${cloudflareStats.size}`));
+     }
      // Log smart cache statistics (if cache is enabled)
     if (smartCache) {
     const cacheStats = smartCache.getStats();  
