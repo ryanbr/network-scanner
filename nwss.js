@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.74 ===
+// === Network scanner script (nwss.js) v1.0.75 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.74'; // Script version
+const VERSION = '1.0.75'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -2114,6 +2114,42 @@ function setupFrameHandling(page, forceDebug) {
             
           // Check if nettools validation is required - if so, NEVER add domains immediately
           if (hasNetTools) {
+            // Call nettools handler BEFORE exiting
+            if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
+              // Create and execute nettools handler
+              const netToolsHandler = createNetToolsHandler({
+                whoisTerms,
+                whoisOrTerms,
+                whoisDelay: siteConfig.whois_delay || whois_delay,
+                whoisServer,
+                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+                debugLogFile,
+                fs,
+                digTerms,
+                digOrTerms,
+                digRecordType,
+                digSubdomain: siteConfig.dig_subdomain === true,
+                dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
+                matchedDomains,
+                addMatchedDomain,
+                isDomainAlreadyDetected,
+                onWhoisResult: smartCache ? (domain, result) => smartCache.cacheNetTools(domain, 'whois', result) : undefined,
+                onDigResult: smartCache ? (domain, result, recordType) => smartCache.cacheNetTools(domain, 'dig', result, recordType) : undefined,
+                cachedWhois: smartCache ? smartCache.getCachedNetTools(reqDomain, 'whois') : null,
+                cachedDig: smartCache ? smartCache.getCachedNetTools(reqDomain, 'dig', digRecordType) : null,
+                currentUrl,
+                getRootDomain,
+                siteConfig,
+                dumpUrls,
+                matchedUrlsLogFile,
+                forceDebug,
+                fs
+              });
+              
+              // Execute nettools check asynchronously
+              const originalDomain = fullSubdomain;
+              setImmediate(() => netToolsHandler(reqDomain, originalDomain));
+            }
             if (forceDebug) {
               console.log(formatLogMessage('debug', `${reqUrl} has nettools validation required - skipping immediate add`));
             }
