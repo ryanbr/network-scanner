@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.72 ===
+// === Network scanner script (nwss.js) v1.0.73 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.72'; // Script version
+const VERSION = '1.0.73'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -474,6 +474,8 @@ Global config.json options:
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
   filterRegex: "regex" or ["regex1", "regex2"]  Patterns to match requests
+  regex_and: true/false                       Use AND logic for multiple filterRegex patterns (default: false)
+                                              When true, ALL regex patterns must match the same URL
   
 Redirect Handling Options:
   follow_redirects: true/false               Follow redirects to new domains (default: true)
@@ -1646,6 +1648,9 @@ function setupFrameHandling(page, forceDebug) {
           ? [new RegExp(siteConfig.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
           : [];
 
+      // NEW: Get regex_and setting (defaults to false for backward compatibility)
+      const useRegexAnd = siteConfig.regex_and === true;
+
    // Parse searchstring patterns using module
    const { searchStrings, searchStringsAnd, hasSearchString, hasSearchStringAnd } = parseSearchStrings(siteConfig.searchstring, siteConfig.searchstring_and);
    const useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring
@@ -1721,6 +1726,11 @@ function setupFrameHandling(page, forceDebug) {
         patterns.forEach((pattern, idx) => {
           console.log(`  [${idx + 1}] ${pattern}`);
         });
+        if (useRegexAnd && patterns.length > 1) {
+          console.log(formatLogMessage('info', `  Logic: AND (all patterns must match same URL)`));
+        } else if (patterns.length > 1) {
+          console.log(formatLogMessage('info', `  Logic: OR (any pattern can match)`));
+        }
       }
 
    if (siteConfig.verbose === 1 && (hasSearchString || hasSearchStringAnd)) {
@@ -1987,7 +1997,7 @@ function setupFrameHandling(page, forceDebug) {
                   if (!allowedResourceTypes || !Array.isArray(allowedResourceTypes) || allowedResourceTypes.includes(resourceType)) {
                     if (dryRunMode) {
                       matchedDomains.get('dryRunMatches').push({
-                        regex: re.source,
+                        regex: matchedRegexPattern,
                         domain: reqDomain,
                         resourceType: resourceType,
                         fullUrl: reqUrl,
@@ -2001,7 +2011,7 @@ function setupFrameHandling(page, forceDebug) {
                     const simplifiedUrl = getRootDomain(currentUrl);
                     if (siteConfig.verbose === 1) {
                       const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-                      console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo} [BLOCKED BUT ADDED]`));
+                      console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
                     }
                     if (dumpUrls) {
                       const timestamp = new Date().toISOString();
@@ -2037,8 +2047,34 @@ function setupFrameHandling(page, forceDebug) {
           return;
         }
 
-        for (const re of regexes) {
-          if (re.test(reqUrl)) {
+        // === ENHANCED REGEX MATCHING WITH AND/OR LOGIC ===
+        let regexMatched = false;
+        let matchedRegexPattern = null;
+
+        if (regexes.length > 0) {
+          if (useRegexAnd) {
+            // AND logic: ALL regex patterns must match the same URL
+            const allMatch = regexes.every(re => re.test(reqUrl));
+            if (allMatch) {
+              regexMatched = true;
+              matchedRegexPattern = regexes.map(re => re.source).join(' AND ');
+              if (forceDebug) {
+                console.log(formatLogMessage('debug', `URL ${reqUrl} matched ALL regex patterns (AND logic)`));
+              }
+            }
+          } else {
+            // OR logic: ANY regex pattern can match (original behavior)
+            for (const re of regexes) {
+              if (re.test(reqUrl)) {
+                regexMatched = true;
+                matchedRegexPattern = re.source;
+                break;
+              }
+            }
+          }
+        }
+
+        if (regexMatched) {
             const resourceType = request.resourceType();
             
            // *** UNIVERSAL RESOURCE TYPE FILTER ***
@@ -2049,7 +2085,9 @@ function setupFrameHandling(page, forceDebug) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`));
                }
-               break; // Skip this URL entirely - doesn't match required resource types
+               // Skip this URL entirely - doesn't match required resource types
+               request.continue();
+               return;
              }
            }
            
@@ -2058,13 +2096,17 @@ function setupFrameHandling(page, forceDebug) {
              if (forceDebug) {
                console.log(formatLogMessage('debug', `Skipping first-party match: ${reqUrl} (firstParty disabled)`));
              }
-             break; // Skip this URL - it's first-party but firstParty is disabled
+             // Skip this URL - it's first-party but firstParty is disabled
+             request.continue();
+             return;
            }
            if (!isFirstParty && siteConfig.thirdParty === false) {
              if (forceDebug) {
                console.log(formatLogMessage('debug', `Skipping third-party match: ${reqUrl} (thirdParty disabled)`));
              }
-             break; // Skip this URL - it's third-party but thirdParty is disabled
+             // Skip this URL - it's third-party but thirdParty is disabled
+             request.continue();
+             return;
            }
  
             // REMOVED: Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
@@ -2075,7 +2117,7 @@ function setupFrameHandling(page, forceDebug) {
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
              if (dryRunMode) {
                matchedDomains.get('dryRunMatches').push({
-                 regex: re.source,
+                 regex: matchedRegexPattern,
                  domain: reqDomain,
                  resourceType: resourceType,
                  fullUrl: reqUrl,
@@ -2087,7 +2129,7 @@ function setupFrameHandling(page, forceDebug) {
              const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-              console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${re} and resourceType: ${resourceType}${resourceInfo}`));
+              console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
              }
              if (dumpUrls) {
                const timestamp = new Date().toISOString();
@@ -2101,17 +2143,19 @@ function setupFrameHandling(page, forceDebug) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `Skipping nettools check for already detected subdomain: ${fullSubdomain}`));
                }
-               break; // Skip to next URL
+               // Skip to next URL
+               request.continue();
+               return;
              }
              
              if (forceDebug) {
-               console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for nettools check`));
+               console.log(formatLogMessage('debug', `${reqUrl} matched regex ${matchedRegexPattern} and resourceType ${resourceType}, queued for nettools check`));
              }
 
              if (dryRunMode) {
                // For dry run, we'll collect the domain for nettools checking
                matchedDomains.get('dryRunMatches').push({
-                 regex: re.source,
+                 regex: matchedRegexPattern,
                  domain: reqDomain,
                  resourceType: resourceType,
                  fullUrl: reqUrl,
@@ -2175,15 +2219,17 @@ function setupFrameHandling(page, forceDebug) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `Skipping searchstring check for already detected subdomain: ${fullSubdomain}`));
                }
-               break; // Skip to next URL
+               // Skip to next URL
+               request.continue();
+               return;
              }
              if (forceDebug) {
                const searchType = hasSearchStringAnd ? 'searchstring_and' : 'searchstring';
-               console.log(formatLogMessage('debug', `${reqUrl} matched regex ${re} and resourceType ${resourceType}, queued for ${searchType} content search`));
+               console.log(formatLogMessage('debug', `${reqUrl} matched regex ${matchedRegexPattern} and resourceType ${resourceType}, queued for ${searchType} content search`));
              }
              if (dryRunMode) {
                matchedDomains.get('dryRunMatches').push({
-                 regex: re.source,
+                 regex: matchedRegexPattern,
                  domain: reqDomain,
                  resourceType: resourceType,
                  fullUrl: reqUrl,
@@ -2270,8 +2316,7 @@ function setupFrameHandling(page, forceDebug) {
              }
            }
 
-          break;
-          }
+          // No break needed since we've already determined if regex matched
         }
         request.continue();
       });
