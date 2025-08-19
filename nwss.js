@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.73 ===
+// === Network scanner script (nwss.js) v1.0.74 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.73'; // Script version
+const VERSION = '1.0.74'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -2111,7 +2111,15 @@ function setupFrameHandling(page, forceDebug) {
  
             // REMOVED: Check if this URL matches any blocked patterns - if so, skip detection but still continue browser blocking
             // This check is no longer needed here since even_blocked handles it above
-
+            
+          // Check if nettools validation is required - if so, NEVER add domains immediately
+          if (hasNetTools) {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `${reqUrl} has nettools validation required - skipping immediate add`));
+            }
+            request.continue();
+            return;
+          }
            
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
@@ -2150,6 +2158,12 @@ function setupFrameHandling(page, forceDebug) {
              
              if (forceDebug) {
                console.log(formatLogMessage('debug', `${reqUrl} matched regex ${matchedRegexPattern} and resourceType ${resourceType}, queued for nettools check`));
+             }
+
+             // IMPORTANT: Do NOT add domain immediately when nettools validation is required
+             // The nettools handler will add the domain only if validation passes
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `Domain ${reqDomain} queued for mandatory nettools validation (dig: ${JSON.stringify(siteConfig.dig)})`));
              }
 
              if (dryRunMode) {
@@ -2212,6 +2226,12 @@ function setupFrameHandling(page, forceDebug) {
              // Execute nettools check asynchronously
             const originalDomain = fullSubdomain; // Use full subdomain for nettools
             setImmediate(() => netToolsHandler(reqDomain, originalDomain));
+
+             // Do NOT continue processing this request for immediate domain addition
+             // The nettools handler is responsible for adding the domain if validation passes
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `Request processing halted for ${reqUrl} - awaiting nettools validation`));
+             }
            } else {
              // If searchstring or searchstring_and IS defined (with or without nettools), queue for content checking
              // Skip searchstring check if full subdomain was already detected
@@ -2236,6 +2256,12 @@ function setupFrameHandling(page, forceDebug) {
                  isFirstParty: isFirstParty,
                  needsSearchStringCheck: true
                });
+             }
+             // If we have BOTH searchstring AND nettools, ensure nettools validation still happens
+             if (hasNetTools) {
+               if (forceDebug) {
+                 console.log(formatLogMessage('debug', `${reqUrl} requires both content and nettools validation`));
+               }
              }
            }
            
