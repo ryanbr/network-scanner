@@ -714,24 +714,6 @@ function safeMarkDomainProcessed(domain, context, metadata) {
   }
 }
 
-// Add safe domain processing helper after smartCache initialization
-function safeMarkDomainProcessed(domain, context, metadata) {
-  if (smartCache) {
-    try {
-      if (typeof smartCache.markDomainProcessed === 'function') {
-        smartCache.markDomainProcessed(domain, context, metadata);
-      } else {
-        // Fallback: trigger cache via shouldSkipDomain
-        smartCache.shouldSkipDomain(domain, context);
-      }
-    } catch (cacheErr) {
-      if (forceDebug) {
-        console.log(formatLogMessage('debug', `[SmartCache] Error marking domain: ${cacheErr.message}`));
-      }
-    }
-  }
-}
-
 // Handle --clean-rules after config is loaded (so we have access to sites)
 if (cleanRules || cleanRulesFile) {
   const filesToClean = cleanRulesFile ? [cleanRulesFile] : [outputFile, compareFile].filter(Boolean);
