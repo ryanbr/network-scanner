@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.75 ===
+// === Network scanner script (nwss.js) v1.0.76 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.75'; // Script version
+const VERSION = '1.0.76'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -187,6 +187,7 @@ const testValidation = args.includes('--test-validation');
 let cleanRules = args.includes('--clean-rules');
 const clearCache = args.includes('--clear-cache');
 const ignoreCache = args.includes('--ignore-cache');
+const cacheRequests = args.includes('--cache-requests');
 
 let validateRulesFile = null;
 const validateRulesIndex = args.findIndex(arg => arg === '--validate-rules');
@@ -454,6 +455,7 @@ General Options:
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
 
 Validation Options:
+  --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
   --validate-config              Validate config.json file and exit
   --validate-rules [file]        Validate rule file format (uses --output/--compare files if no file specified)
   --clean-rules [file]           Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified)
@@ -522,6 +524,7 @@ Redirect Handling Options:
   adblock_rules: true/false                    Generate adblock filter rules with resource types for this site
   even_blocked: true/false                     Add matching rules even if requests are blocked (default: false)
   
+  bypass_cache: true/false                     Skip all caching for this site's URLs (default: false)
   referrer_headers: "url" or ["url1", "url2"] Set referrer header for realistic traffic sources
   custom_headers: {"Header": "value"}         Add custom HTTP headers to requests
 
@@ -682,6 +685,7 @@ if (ignoreCache) {
 } else {
 smartCache = createSmartCache({
   ...config,
+  cache_requests: cacheRequests, // NEW: Pass request caching flag
   forceDebug,
   max_concurrent_sites: MAX_CONCURRENT_SITES,  // Pass concurrency info
   cache_aggressive_mode: MAX_CONCURRENT_SITES > CONCURRENCY_LIMITS.HIGH_CONCURRENCY_THRESHOLD,  // Auto-enable for high concurrency
@@ -690,6 +694,42 @@ smartCache = createSmartCache({
   cache_autosave_minutes: config.cache_autosave_minutes || 1,
   cache_max_size: config.cache_max_size || CACHE_LIMITS.DEFAULT_MAX_SIZE
 });
+}
+
+// Add safe domain processing helper after smartCache initialization
+function safeMarkDomainProcessed(domain, context, metadata) {
+  if (smartCache) {
+    try {
+      if (typeof smartCache.markDomainProcessed === 'function') {
+        smartCache.markDomainProcessed(domain, context, metadata);
+      } else {
+        // Fallback: trigger cache via shouldSkipDomain
+        smartCache.shouldSkipDomain(domain, context);
+      }
+    } catch (cacheErr) {
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `[SmartCache] Error marking domain: ${cacheErr.message}`));
+      }
+    }
+  }
+}
+
+// Add safe domain processing helper after smartCache initialization
+function safeMarkDomainProcessed(domain, context, metadata) {
+  if (smartCache) {
+    try {
+      if (typeof smartCache.markDomainProcessed === 'function') {
+        smartCache.markDomainProcessed(domain, context, metadata);
+      } else {
+        // Fallback: trigger cache via shouldSkipDomain
+        smartCache.shouldSkipDomain(domain, context);
+      }
+    } catch (cacheErr) {
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `[SmartCache] Error marking domain: ${cacheErr.message}`));
+      }
+    }
+  }
 }
 
 // Handle --clean-rules after config is loaded (so we have access to sites)
@@ -998,6 +1038,16 @@ function shouldProcessUrl(url, forceDebug) {
     if (forceDebug) console.log(formatLogMessage('debug', `Invalid URL for processing: ${url}`));
     return false;
   }
+}
+
+/**
+ * Check if URL should bypass all caching for this site
+ * @param {string} url - URL to check
+ * @param {Object} siteConfig - Site configuration
+ * @returns {boolean} True if should bypass cache
+ */
+function shouldBypassCacheForUrl(url, siteConfig) {
+  return siteConfig.bypass_cache === true;
 }
 
 // ability to use widcards in ignoreDomains
@@ -1364,6 +1414,11 @@ function setupFrameHandling(page, forceDebug) {
         console.log(formatLogMessage('debug', `  Site comment ${idx + 1}: ${comment}`))
       );
     }
+
+   // Log bypass_cache setting if enabled
+   if (forceDebug && siteConfig.bypass_cache === true) {
+     console.log(formatLogMessage('debug', `Cache bypass enabled for all URLs in site: ${currentUrl}`));
+   }
 
     if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
       console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
@@ -1891,7 +1946,18 @@ function setupFrameHandling(page, forceDebug) {
       
       // Also mark in smart cache with context (if cache is enabled)
       if (smartCache) {
-        smartCache.markDomainProcessed(domain, context, { resourceType, fullSubdomain });
+  try {
+    if (smartCache.markDomainProcessed) {
+      safeMarkDomainProcessed(domain, context, { resourceType, fullSubdomain });
+    } else {
+      // Fallback: use shouldSkipDomain to indirectly cache
+      smartCache.shouldSkipDomain(domain, context);
+    }
+  } catch (cacheErr) {
+    if (forceDebug) {
+      console.log(formatLogMessage('debug', `[SmartCache] Error marking domain: ${cacheErr.message}`));
+    }
+  }
       }
 
         if (matchedDomains instanceof Map) {
@@ -2303,8 +2369,16 @@ function setupFrameHandling(page, forceDebug) {
            
            // If curl is enabled, download and analyze content immediately
            if (useCurl) {
-             // Check response cache first if smart cache is available and caching is enabled
-             const cachedContent = smartCache ? smartCache.getCachedResponse(reqUrl) : null;
+             // Check bypass_cache before attempting cache lookup
+             let cachedContent = null;
+             if (!shouldBypassCacheForUrl(reqUrl, siteConfig)) {
+               // Check request cache first if smart cache is available and caching is enabled
+               cachedContent = smartCache ? smartCache.getCachedRequest(reqUrl, {
+                 method: 'GET',
+                 headers: { 'user-agent': curlUserAgent },
+                 siteConfig: siteConfig
+               }) : null;
+             }
              
              if (cachedContent && forceDebug) {
                console.log(formatLogMessage('debug', `[SmartCache] Using cached response content for ${reqUrl.substring(0, 50)}...`));
@@ -2321,7 +2395,10 @@ function setupFrameHandling(page, forceDebug) {
                    addMatchedDomain, // Pass the helper function
                    isDomainAlreadyDetected,
                    onContentFetched: smartCache && !ignoreCache ? (url, content) => {
-                     smartCache.cacheResponse(url, content);
+                     // Only cache if not bypassing cache
+                     if (!shouldBypassCacheForUrl(url, siteConfig)) {
+                       smartCache.cacheRequest(url, { method: 'GET', siteConfig }, { body: content, status: 200 });
+                     }
                    } : undefined,
                    currentUrl,
                    perSiteSubDomains,
@@ -2354,6 +2431,12 @@ function setupFrameHandling(page, forceDebug) {
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
                    isDomainAlreadyDetected,
+                 onContentFetched: smartCache && !ignoreCache ? (url, content) => {
+                   // Only cache if not bypassing cache
+                   if (!shouldBypassCacheForUrl(url, siteConfig)) {
+                     smartCache.cacheRequest(url, { method: 'GET', siteConfig }, { body: content, status: 200 });
+                   }
+                 } : undefined,
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -2392,7 +2475,14 @@ function setupFrameHandling(page, forceDebug) {
          regexes,
          matchedDomains,
          addMatchedDomain, // Pass the helper function
+         bypassCache: (url) => shouldBypassCacheForUrl(url, siteConfig),
          isDomainAlreadyDetected,
+         onContentFetched: smartCache && !ignoreCache ? (url, content) => {
+           // Only cache if not bypassing cache
+           if (!shouldBypassCacheForUrl(url, siteConfig)) {
+             smartCache.cacheRequest(url, { method: 'GET', siteConfig }, { body: content, status: 200 });
+           }
+         } : undefined,
          currentUrl,
          perSiteSubDomains,
          ignoreDomains,
@@ -2910,6 +3000,17 @@ function setupFrameHandling(page, forceDebug) {
         console.log(`\n${messageColors.fileOp('🔄 Browser restart triggered:')} ${restartReason}`);
       }
       
+      // NEW: Clear request cache during browser restart to ensure fresh session
+      if (smartCache && cacheRequests) {
+        const requestCacheStats = smartCache.getRequestCacheStats();
+        if (requestCacheStats.enabled && requestCacheStats.size > 0) {
+          const clearedCount = smartCache.clearRequestCache();
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `[SmartCache] Cleared ${clearedCount} request cache entries during browser restart`));
+          }
+        }
+      }
+
       try {
         await handleBrowserExit(browser, {
           forceDebug,
@@ -2986,6 +3087,17 @@ function setupFrameHandling(page, forceDebug) {
         console.log(`\n${messageColors.fileOp('🔄 Emergency browser restart:')} Critical browser errors detected`);
       }
       
+      // NEW: Clear request cache during emergency restart
+      if (smartCache && cacheRequests) {
+        const requestCacheStats = smartCache.getRequestCacheStats();
+        if (requestCacheStats.enabled && requestCacheStats.size > 0) {
+          const clearedCount = smartCache.clearRequestCache();
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `[SmartCache] Cleared ${clearedCount} request cache entries during emergency restart`));
+          }
+        }
+      }
+
       // Force browser restart immediately
       try {
         // Enhanced emergency restart for Puppeteer 23.x
@@ -3047,6 +3159,22 @@ function setupFrameHandling(page, forceDebug) {
   }
 
   let outputResult;
+  
+  // NEW: Clear request cache after processing all sites in the JSON config
+  if (smartCache && cacheRequests) {
+    const requestCacheStats = smartCache.getRequestCacheStats();
+    if (requestCacheStats.enabled && requestCacheStats.size > 0) {
+      const clearedCount = smartCache.clearRequestCache();
+      if (!silentMode && clearedCount > 0) {
+        console.log(`\n🗑️  Cleared request cache: ${clearedCount} entries after JSON processing`);
+      }
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', 
+          `[SmartCache] Request cache cleared after JSON scan completion (hit rate: ${requestCacheStats.hitRate})`
+        ));
+      }
+    }
+  }
   
   if (!dryRunMode) {
     // Handle all output using the output module
