@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.79 ===
+// === Network scanner script (nwss.js) v1.0.80 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.79'; // Script version
+const VERSION = '1.0.80'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -471,7 +471,7 @@ Global config.json options:
   ignore_similar_threshold: 80                    Similarity threshold percentage for ignore_similar (default: 80)
   ignore_similar_ignored_domains: true/false      Ignore domains similar to ignoreDomains list (default: true)
   max_concurrent_sites: 8                        Maximum concurrent site processing (1-50, default: 8)
-  resource_cleanup_interval: 180                  Browser restart interval in URLs processed (1-1000, default: 180)
+  resource_cleanup_interval: 80                  Browser restart interval in URLs processed (1-1000, default: 80)
 
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
@@ -607,7 +607,7 @@ const {
   ignore_similar_threshold = 80, 
   ignore_similar_ignored_domains = true, 
   max_concurrent_sites = 6,
-  resource_cleanup_interval = 180,
+  resource_cleanup_interval = 80,
   comments: globalComments, 
   ...otherGlobalConfig 
 } = config;
@@ -652,12 +652,12 @@ const RESOURCE_CLEANUP_INTERVAL = (() => {
   if (typeof resource_cleanup_interval === 'number' && resource_cleanup_interval > 0 && resource_cleanup_interval <= 1000) {
     if (forceDebug) console.log(formatLogMessage('debug', `Using config resource_cleanup_interval: ${resource_cleanup_interval}`));
     return resource_cleanup_interval;
-  } else if (resource_cleanup_interval !== 180) {
-    console.warn(`⚠ Invalid config resource_cleanup_interval value: ${resource_cleanup_interval}. Using default: 180`);
+  } else if (resource_cleanup_interval !== 80) {
+    console.warn(`⚠ Invalid config resource_cleanup_interval value: ${resource_cleanup_interval}. Using default: 80`);
   }
   
   // Use default
-  return 180;
+  return 80;
 })();
 
 // Perform cache clear after config is loaded for custom cache paths
