@@ -351,20 +351,28 @@ node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
 
 ## INSTALL 
 
-# (Ubuntu as example). NOTE: Use Chrome and not Chromium for best compatibility.
+#### (Ubuntu as example). NOTE: Use Chrome and not Chromium for best compatibility.
 
-# Add Google's signing key
+#### Add Google's signing key
+```
 wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg
+```
 
-# Add Google Chrome repository
+#### Add Google Chrome repository
+```
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+```
 
-# Update and install
+#### Update and install
+```
 sudo apt update
 sudo apt install google-chrome-stable
+```
 
-# dig & whois (needed for network checks)
+#### dig & whois (needed for network checks)
+```
 sudo apt install bind9-dnsutils whois
+```
 
 ## Notes
 
