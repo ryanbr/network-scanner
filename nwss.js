@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.80 ===
+// === Network scanner script (nwss.js) v1.0.81 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.80'; // Script version
+const VERSION = '1.0.81'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1348,10 +1348,7 @@ function setupFrameHandling(page, forceDebug) {
   }
  
   let siteCounter = 0;
-  const totalUrls = sites.reduce((sum, site) => {
-    const urls = Array.isArray(site.url) ? site.url.length : 1;
-    return sum + urls;
-  }, 0);
+  // totalUrls now calculated from allTasks.length after URL flattening
 
   // --- Global CDP (Chrome DevTools Protocol) Session --- [COMMENT RE-ADDED PREVIOUSLY, relevant to old logic]
   // NOTE: This CDP session is attached to the initial browser page (e.g., about:blank).
@@ -1383,6 +1380,14 @@ function setupFrameHandling(page, forceDebug) {
     const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
     const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
     const cloudflareBypass = siteConfig.cloudflare_bypass === true;
+    // Add redirect and same-page loop protection
+    const MAX_REDIRECT_DEPTH = siteConfig.max_redirects || 10;
+    const redirectHistory = new Set();
+    let redirectCount = 0;
+    const pageLoadHistory = new Map(); // Track same-page reloads
+    const MAX_SAME_PAGE_LOADS = 3;
+    let currentPageUrl = currentUrl;
+
     const sitePrivoxy = siteConfig.privoxy === true;
     const sitePihole = siteConfig.pihole === true;
     const flowproxyDetection = siteConfig.flowproxy_detection === true;
@@ -1564,6 +1569,31 @@ function setupFrameHandling(page, forceDebug) {
           }
           try {
               await page.evaluateOnNewDocument(() => {
+                  // Prevent infinite reload loops
+                  let reloadCount = 0;
+                  const MAX_RELOADS = 2;
+                  const originalReload = window.location.reload;
+                  const originalReplace = window.location.replace;
+                  const originalAssign = window.location.assign;
+                  
+                  window.location.reload = function() {
+                      if (++reloadCount > MAX_RELOADS) {
+                          console.log('[loop-protection] Blocked excessive reload attempt');
+                          return;
+                      }
+                      return originalReload.apply(this, arguments);
+                  };
+                  
+                  // Also protect against location.replace/assign to same URL
+                  const currentHref = window.location.href;
+                  window.location.replace = function(url) {
+                      if (url === currentHref && ++reloadCount > MAX_RELOADS) {
+                          console.log('[loop-protection] Blocked same-page replace attempt');
+                          return;
+                      }
+                      return originalReplace.apply(this, arguments);
+                  };
+
                   // This script intercepts and logs Fetch and XHR requests
                   // from within the page context at the earliest possible moment.
                   const originalFetch = window.fetch;
@@ -2542,10 +2572,43 @@ function setupFrameHandling(page, forceDebug) {
         
         const { finalUrl, redirected, redirectChain, originalUrl, redirectDomains } = navigationResult;
         
+        // Check for same-page reload loops BEFORE redirect processing
+        const loadCount = pageLoadHistory.get(currentUrl) || 0;
+        pageLoadHistory.set(currentUrl, loadCount + 1);
+        
+        if (loadCount >= MAX_SAME_PAGE_LOADS) {
+          const samePageError = `Same page loaded ${loadCount + 1} times: ${currentUrl}`;
+          console.warn(`⚠ ${samePageError} - possible infinite reload loop`);
+          throw new Error(`Same-page loop detected: ${samePageError}`);
+        }
+        
+        currentPageUrl = finalUrl || currentUrl;
+        
         // Handle redirect to new domain
         if (redirected) {
           const originalDomain = safeGetDomain(originalUrl);
           const finalDomain = safeGetDomain(finalUrl);
+
+          // Increment redirect counter
+          redirectCount++;
+          
+          // Check for redirect loops
+          if (redirectHistory.has(finalUrl)) {
+            const loopError = `Redirect loop detected: ${finalUrl} already visited in chain`;
+            console.warn(`⚠ ${loopError} for ${currentUrl}`);
+            throw new Error(loopError);
+          }
+          
+          // Check redirect depth
+          if (redirectCount > MAX_REDIRECT_DEPTH) {
+            const depthError = `Maximum redirect depth (${MAX_REDIRECT_DEPTH}) exceeded`;
+            console.warn(`⚠ ${depthError} for ${currentUrl}`);
+            throw new Error(`${depthError}: ${redirectCount} redirects`);
+          }
+          
+          // Add URLs to history
+          redirectHistory.add(currentUrl);
+          redirectHistory.add(finalUrl);
 
           // Add redirect destination to first-party domains immediately
           if (finalDomain) {
@@ -2917,57 +2980,72 @@ function setupFrameHandling(page, forceDebug) {
 // Temporarily store the pLimit function  
   const originalLimit = limit;
 
-  // Group URLs by site to respect site boundaries during cleanup
-  const siteGroups = [];
-  let currentUrlCount = 0;
-
+  // Create a flat list of all URL tasks with their site configs for true concurrency
+  const allTasks = [];
   for (const site of sites) {
-
     const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
-    siteGroups.push({
-      config: site,
-      urls: urlsToProcess
+    urlsToProcess.forEach(url => {
+      allTasks.push({
+        url,
+        config: site,
+        taskId: allTasks.length // For tracking
+      });
     });
-    currentUrlCount += urlsToProcess.length;
   }
-  if (!silentMode && currentUrlCount > 0) {
-    console.log(`\n${messageColors.processing('Processing')} ${currentUrlCount} URLs across ${siteGroups.length} sites with concurrency ${MAX_CONCURRENT_SITES}...`);
-    if (currentUrlCount > RESOURCE_CLEANUP_INTERVAL) {
-      console.log(messageColors.processing('Browser will restart every') + ` ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
-    }
-  }
+  
+  const totalUrls = allTasks.length;
 
   let results = [];
   let processedUrlCount = 0;
   let urlsSinceLastCleanup = 0;
   
-  // Process sites one by one, but restart browser when hitting URL limits
-  for (let siteIndex = 0; siteIndex < siteGroups.length; siteIndex++) {
-    const siteGroup = siteGroups[siteIndex];
+  if (!silentMode && totalUrls > 0) {
+    console.log(`\n${messageColors.processing('Processing')} ${totalUrls} URLs with TRUE concurrency ${MAX_CONCURRENT_SITES}...`);
+    if (totalUrls > RESOURCE_CLEANUP_INTERVAL) {
+      console.log(messageColors.processing('Browser will restart every') + ` ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
+    }
+  }
+
+  // Hang detection for debugging concurrency issues
+  let currentBatchInfo = { batchStart: 0, batchSize: 0 };
+  const hangDetectionInterval = setInterval(() => {
+    const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
+    const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
+    console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
+    console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
+  }, 30000); // Check every 30 seconds
+
+  // Process URLs in batches to maintain concurrency while allowing browser restarts
+  for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
+    const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
+    const currentBatch = allTasks.slice(batchStart, batchEnd);
     
     // Check browser health before processing each site
     const healthCheck = await monitorBrowserHealth(browser, {}, {
-      siteIndex,
-      totalSites: siteGroups.length,
+      siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
+      totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
       urlsSinceCleanup: urlsSinceLastCleanup,
       cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
       forceDebug,
       silentMode
     });
 
-    // Also check if browser was unhealthy during recent processing
+    // Check if browser was unhealthy during recent processing
     const recentResults = results.slice(-3);
     const hasRecentFailures = recentResults.filter(r => !r.success).length >= 2;
-    const shouldRestartFromFailures = hasRecentFailures && urlsSinceLastCleanup > 3; // More aggressive restart
+    const shouldRestartFromFailures = hasRecentFailures && urlsSinceLastCleanup > 3;
 
-    const siteUrlCount = siteGroup.urls.length;
+    const batchSize = currentBatch.length;
     
+    // Update hang detection info
+    currentBatchInfo = { batchStart, batchSize };
+
     // Check if processing this entire site would exceed cleanup interval OR health check suggests restart
-    const wouldExceedLimit = urlsSinceLastCleanup + siteUrlCount >= Math.min(RESOURCE_CLEANUP_INTERVAL, 100); // More frequent restarts
-    const isNotLastSite = siteIndex < siteGroups.length - 1;
+    const wouldExceedLimit = urlsSinceLastCleanup + batchSize >= Math.min(RESOURCE_CLEANUP_INTERVAL, 100);
+    const isNotLastBatch = batchEnd < totalUrls;
     
     // Restart browser if we've processed enough URLs, health check suggests it, and this isn't the last site
-    if ((wouldExceedLimit || healthCheck.shouldRestart || shouldRestartFromFailures) && urlsSinceLastCleanup > 0 && isNotLastSite) {
+    if ((wouldExceedLimit || healthCheck.shouldRestart || shouldRestartFromFailures) && urlsSinceLastCleanup > 0 && isNotLastBatch) {
       
       let restartReason = 'Unknown';
       if (healthCheck.shouldRestart) {
@@ -3023,7 +3101,7 @@ function setupFrameHandling(page, forceDebug) {
       
       // Create new browser for next batch
       browser = await createBrowser();
-      if (forceDebug) console.log(formatLogMessage('debug', `New browser instance created for site ${siteIndex + 1}`));
+      if (forceDebug) console.log(formatLogMessage('debug', `New browser instance created for batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1}`));
       
       // Reset cleanup counter and add delay
       urlsSinceLastCleanup = 0;
@@ -3031,19 +3109,29 @@ function setupFrameHandling(page, forceDebug) {
     }
     
     if (forceDebug) {
-      console.log(formatLogMessage('debug', `Processing site ${siteIndex + 1}/${siteGroups.length}: ${siteUrlCount} URL(s) (total processed: ${processedUrlCount})`));
+      console.log(formatLogMessage('debug', `Processing batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1}: ${batchSize} URL(s) (total processed: ${processedUrlCount})`));
     }
     
-    // Create tasks with current browser instance and process them
-    const siteTasks = siteGroup.urls.map(url => originalLimit(() => processUrl(url, siteGroup.config, browser)));
-    const siteResults = await Promise.all(siteTasks);
+    // Log start of concurrent processing for hang detection
+    if (forceDebug) {
+      console.log(formatLogMessage('debug', `[CONCURRENCY] Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
+    }
+    
+    // Create tasks with current browser instance and process them with TRUE concurrency
+    const batchTasks = currentBatch.map(task => originalLimit(() => processUrl(task.url, task.config, browser)));
+    const batchResults = await Promise.all(batchTasks);
 
     // Check if any results indicate immediate restart is needed
-    const needsImmediateRestart = siteResults.some(r => r.needsImmediateRestart);
+    const needsImmediateRestart = batchResults.some(r => r.needsImmediateRestart);
+    
+    // Log completion of concurrent processing
+    if (forceDebug) {
+      console.log(formatLogMessage('debug', `[CONCURRENCY] Completed ${batchSize} concurrent tasks, ${batchResults.filter(r => r.success).length} successful`));
+    }
 
     // Enhanced error reporting for Puppeteer 23.x
     if (forceDebug) {
-      const errorSummary = siteResults.reduce((acc, result) => {
+      const errorSummary = batchResults.reduce((acc, result) => {
         if (!result.success && result.errorType) {
           acc[result.errorType] = (acc[result.errorType] || 0) + 1;
         }
@@ -3051,20 +3139,20 @@ function setupFrameHandling(page, forceDebug) {
       }, {});
       
       if (Object.keys(errorSummary).length > 0) {
-        console.log(formatLogMessage('debug', `Site ${siteIndex + 1} error summary:`));
+        console.log(formatLogMessage('debug', `Batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1} error summary:`));
         Object.entries(errorSummary).forEach(([errorType, count]) => {
           console.log(formatLogMessage('debug', `  ${errorType}: ${count} error(s)`));
         });
       }
     }
 
-    results.push(...siteResults);
+    results.push(...batchResults);
     
-    processedUrlCount += siteUrlCount;
-    urlsSinceLastCleanup += siteUrlCount;
+    processedUrlCount += batchSize;
+    urlsSinceLastCleanup += batchSize;
 
     // Force browser restart if any URL had critical errors
-    if (needsImmediateRestart && siteIndex < siteGroups.length - 1) {
+    if (needsImmediateRestart && isNotLastBatch) {
       if (!silentMode) {
         console.log(`\n${messageColors.fileOp('🔄 Emergency browser restart:')} Critical browser errors detected`);
       }
@@ -3084,7 +3172,7 @@ function setupFrameHandling(page, forceDebug) {
       try {
         // Enhanced emergency restart for Puppeteer 23.x
         if (forceDebug) {
-          console.log(formatLogMessage('debug', `Emergency restart triggered by errors: ${siteResults.filter(r => r.needsImmediateRestart).map(r => r.error).join(', ')}`));
+          console.log(formatLogMessage('debug', `Emergency restart triggered by errors: ${batchResults.filter(r => r.needsImmediateRestart).map(r => r.error).join(', ')}`));
         }
         
         // Try to gracefully close all pages first
@@ -3112,6 +3200,9 @@ function setupFrameHandling(page, forceDebug) {
       }
     }
   }
+
+  // Clear hang detection interval
+  clearInterval(hangDetectionInterval);
 
   // === POST-SCAN PROCESSING ===
   // Clean up first-party domains and validate results
