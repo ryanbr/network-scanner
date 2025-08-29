@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.81 ===
+// === Network scanner script (nwss.js) v1.0.82 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.81'; // Script version
+const VERSION = '1.0.82'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -534,6 +534,8 @@ Cloudflare Protection Options:
   cloudflare_parallel_detection: true/false    Use parallel detection for faster Cloudflare checks (default: true)
   cloudflare_max_retries: <number>            Maximum retry attempts for Cloudflare operations (default: 3)
   cloudflare_cache_ttl: <milliseconds>        TTL for Cloudflare detection cache (default: 300000 - 5 minutes)
+  cloudflare_retry_on_error: true/false       Enable retry logic for Cloudflare operations (default: true)
+                                               Note: Automatically detects and exits on redirect loops to prevent endless loading
   cloudflare_retry_on_error: true/false       Enable retry logic for Cloudflare operations (default: true)
 
 FlowProxy Protection Options:
@@ -2680,6 +2682,16 @@ function setupFrameHandling(page, forceDebug) {
 
         // Handle all Cloudflare protections using the enhanced module
         const cloudflareResult = await handleCloudflareProtection(page, currentUrl, siteConfig, forceDebug);
+
+        // Check if Cloudflare handling exceeded max retries and should terminate processing
+        if (!cloudflareResult.overallSuccess && 
+            (cloudflareResult.phishingWarning?.maxRetriesExceeded || 
+             cloudflareResult.verificationChallenge?.maxRetriesExceeded ||
+             cloudflareResult.phishingWarning?.loopDetected ||
+             cloudflareResult.verificationChallenge?.loopDetected)) {
+          throw new Error(`Cloudflare protection handling failed: ${cloudflareResult.errors.join('; ')}`);
+        }
+
         // Check for retry recommendations
         if (cloudflareResult.errors && cloudflareResult.errors.length > 0) {
           const hasRetryableErrors = cloudflareResult.errors.some(err => 
@@ -2690,6 +2702,11 @@ function setupFrameHandling(page, forceDebug) {
             console.log(formatLogMessage('debug', '[cloudflare] Errors may be retryable - consider enabling retry logic'));
           }
         }        
+
+        // Log retry information if debug mode is enabled
+        if (forceDebug && (cloudflareResult.phishingWarning?.attempts > 1 || cloudflareResult.verificationChallenge?.attempts > 1)) {
+          console.log(formatLogMessage('debug', `[cloudflare] Total attempts - Phishing: ${cloudflareResult.phishingWarning?.attempts || 0}, Challenge: ${cloudflareResult.verificationChallenge?.attempts || 0}`));
+        }
 
         if (!cloudflareResult.overallSuccess) {
           console.warn(`⚠ [cloudflare] Protection handling failed for ${currentUrl}:`);
