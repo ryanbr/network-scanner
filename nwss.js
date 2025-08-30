@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.82 ===
+// === Network scanner script (nwss.js) v1.0.83 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -123,7 +123,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.82'; // Script version
+const VERSION = '1.0.83'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1375,8 +1375,8 @@ function setupFrameHandling(page, forceDebug) {
    * @returns {Promise<object>} A promise that resolves to an object containing scan results.
    */
   async function processUrl(currentUrl, siteConfig, browserInstance) {
-    const allowFirstParty = siteConfig.firstParty === 1;
-    const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === 1;
+    const allowFirstParty = siteConfig.firstParty === true || siteConfig.firstParty === 1;
+    const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === true || siteConfig.thirdParty === 1;
     const perSiteSubDomains = siteConfig.subDomains === 1 ? true : subDomainsMode;
     const siteLocalhost = siteConfig.localhost === true;
     const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
@@ -2172,7 +2172,7 @@ function setupFrameHandling(page, forceDebug) {
            }
            
            // Check party filtering AFTER regex match but BEFORE domain processing
-           if (isFirstParty && siteConfig.firstParty === false) {
+           if (isFirstParty && (siteConfig.firstParty === false || siteConfig.firstParty === 0)) {
              if (forceDebug) {
                console.log(formatLogMessage('debug', `Skipping first-party match: ${reqUrl} (firstParty disabled)`));
              }
@@ -2180,7 +2180,7 @@ function setupFrameHandling(page, forceDebug) {
              request.continue();
              return;
            }
-           if (!isFirstParty && siteConfig.thirdParty === false) {
+           if (!isFirstParty && (siteConfig.thirdParty === false || siteConfig.thirdParty === 0)) {
              if (forceDebug) {
                console.log(formatLogMessage('debug', `Skipping third-party match: ${reqUrl} (thirdParty disabled)`));
              }
@@ -2812,43 +2812,54 @@ function setupFrameHandling(page, forceDebug) {
 
       // Use fast timeout helper for consistent Puppeteer 23.x compatibility
 
-      for (let i = 1; i < (siteConfig.reload || 1); i++) {
-       if (siteConfig.clear_sitedata === true) {
-         try {
-           let reloadClearSession = null;
-           try {
-             reloadClearSession = await page.target().createCDPSession();
-             await reloadClearSession.send('Network.clearBrowserCookies');
-             await reloadClearSession.send('Network.clearBrowserCache');
-           } finally {
-             if (reloadClearSession) {
-               try { await reloadClearSession.detach(); } catch (detachErr) { /* ignore */ }
-             }
-           }
-           await page.evaluate(() => {
-             localStorage.clear();
-             sessionStorage.clear();
-             indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
-           });
-           if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data before reload #${i + 1} for ${currentUrl}`));
-         } catch (reloadClearErr) {
-           console.warn(messageColors.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${reloadClearErr.message}`));
-         }
-       }
-        await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) });
-        await fastTimeout(delayMs);
+      // Handle reloads - use force reload mechanism if forcereload is enabled
+      const totalReloads = (siteConfig.reload || 1) - 1; // Subtract 1 because initial load counts as first
+      const useForceReload = siteConfig.forcereload === true;
+      
+      if (useForceReload && forceDebug) {
+        console.log(formatLogMessage('debug', `Using force reload mechanism for all ${totalReloads + 1} reload(s) on ${currentUrl}`));
       }
-
-      if (siteConfig.forcereload === true) {
-        if (forceDebug) console.log(formatLogMessage('debug', `Forcing extra reload (cache disabled) for ${currentUrl}`));
-        try {
-          await page.setCacheEnabled(false);
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
-          await fastTimeout(delayMs);
-          await page.setCacheEnabled(true);
-        } catch (forceReloadErr) {
-          console.warn(messageColors.warn(`[forcereload failed] ${currentUrl}: ${forceReloadErr.message}`));
+      
+      for (let i = 1; i <= totalReloads; i++) {
+        if (siteConfig.clear_sitedata === true) {
+          try {
+            let reloadClearSession = null;
+            try {
+              reloadClearSession = await page.target().createCDPSession();
+              await reloadClearSession.send('Network.clearBrowserCookies');
+              await reloadClearSession.send('Network.clearBrowserCache');
+            } finally {
+              if (reloadClearSession) {
+                try { await reloadClearSession.detach(); } catch (detachErr) { /* ignore */ }
+              }
+            }
+            await page.evaluate(() => {
+              localStorage.clear();
+              sessionStorage.clear();
+              indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
+            });
+            if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data before reload #${i} for ${currentUrl}`));
+          } catch (reloadClearErr) {
+            console.warn(messageColors.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${reloadClearErr.message}`));
+          }
         }
+        
+        if (useForceReload) {
+          // Force reload: disable cache, reload, re-enable cache
+          try {
+            await page.setCacheEnabled(false);
+            await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
+            await page.setCacheEnabled(true);
+            if (forceDebug) console.log(formatLogMessage('debug', `Force reload #${i} completed for ${currentUrl}`));
+          } catch (forceReloadErr) {
+            console.warn(messageColors.warn(`[force reload #${i} failed] ${currentUrl}: ${forceReloadErr.message}`));
+          }
+        } else {
+          // Regular reload
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) });
+        }
+        
+        await fastTimeout(delayMs);
       }
 
       if (dryRunMode) {
