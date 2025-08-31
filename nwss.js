@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.85 ===
+// === Network scanner script (nwss.js) v1.0.86 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -120,10 +120,10 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.85'; // Script version
+const VERSION = '1.0.86'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1483,6 +1483,22 @@ function setupFrameHandling(page, forceDebug) {
       if (!page || page.isClosed()) {
         throw new Error('Failed to create valid page instance');
       }
+
+      // Additional health check after page creation but before critical setup
+      const stillHealthy = await isQuicklyResponsive(browserInstance, 3000);
+      
+      if (!stillHealthy) {
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Browser unresponsive during page setup for ${currentUrl} - triggering restart`));
+        }
+        return { 
+          url: currentUrl, 
+          rules: [], 
+          success: false, 
+          needsImmediateRestart: true,
+          error: 'Browser became unresponsive during page setup - restart required'
+        };
+      }
       
       // Set aggressive timeouts for problematic operations
       // Optimized timeouts for Puppeteer 23.x responsiveness
@@ -1572,6 +1588,22 @@ function setupFrameHandling(page, forceDebug) {
                   console.log(formatLogMessage('debug', `[evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`));
               }
           }
+          // Quick browser health check before script injection
+          let browserResponsive = false;
+          try {
+              await Promise.race([
+                  browserInstance.version(), // Quick responsiveness test
+                  new Promise((_, reject) => 
+                      setTimeout(() => reject(new Error('Browser health check timeout')), 5000)
+                  )
+              ]);
+              browserResponsive = true;
+          } catch (healthErr) {
+              console.warn(formatLogMessage('warn', `[evalOnDoc] Browser unresponsive for ${currentUrl}: ${healthErr.message} - skipping script injection`));
+              browserResponsive = false;
+          }
+          
+          if (browserResponsive) {
           try {
               await page.evaluateOnNewDocument(() => {
                   // Prevent infinite reload loops
@@ -1636,7 +1668,16 @@ function setupFrameHandling(page, forceDebug) {
                   };
               });
           } catch (evalErr) {
-              console.warn(formatLogMessage('warn', `[evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`));
+                  if (evalErr.message.includes('timed out') || evalErr.message.includes('ProtocolError')) {
+                      console.warn(formatLogMessage('warn', `[evalOnDoc] Script injection protocol timeout for ${currentUrl} - continuing without XHR/Fetch interception`));
+                  } else {
+                      console.warn(formatLogMessage('warn', `[evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`));
+                  }
+          }
+          } else {
+              if (forceDebug) {
+                  console.log(formatLogMessage('debug', `[evalOnDoc] Continuing ${currentUrl} without XHR/Fetch interception due to browser health`));
+              }
           }
       }
       // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
@@ -1683,7 +1724,34 @@ function setupFrameHandling(page, forceDebug) {
       }
       // --- End of Per-Page CDP Setup ---
 
-      await page.setRequestInterception(true);
+      // Protected request interception setup with timeout
+      try {
+        // Test if network operations are responsive before enabling request interception
+        await Promise.race([
+          page.setRequestInterception(true),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Network.enable timeout')), 10000)
+          )
+        ]);
+        
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `Request interception enabled successfully for ${currentUrl}`));
+        }
+      } catch (networkErr) {
+        if (networkErr.message.includes('timed out') || 
+            networkErr.message.includes('Network.enable') || 
+            networkErr.message.includes('timeout')) {
+          console.warn(formatLogMessage('warn', `Network setup failed for ${currentUrl}: ${networkErr.message} - triggering browser restart`));
+          return { 
+            url: currentUrl, 
+            rules: [], 
+            success: false, 
+            needsImmediateRestart: true,
+            error: 'Network.enable timeout - browser restart required'
+          };
+        }
+        throw networkErr; // Re-throw other errors
+      }
 	  
 	  // Set up frame handling to suppress invalid URL errors
       setupFrameHandling(page, forceDebug);
