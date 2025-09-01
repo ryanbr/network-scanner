@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.87 ===
+// === Network scanner script (nwss.js) v1.0.88 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -11,6 +11,8 @@ const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
+// Curl functionality (replace searchstring curl handler)
+const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
 // Rule validation
 const { validateRulesetFile, validateFullConfig, testDomainValidation, cleanRulesetFile } = require('./lib/validate_rules');
 // CF Bypass
@@ -123,7 +125,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.87'; // Script version
+const VERSION = '1.0.88'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1825,6 +1827,18 @@ function setupFrameHandling(page, forceDebug) {
        console.log(formatLogMessage('debug', `Using grep: ${grepCheck.version}`));
      }
    }
+   
+   // Validate curl availability if needed
+   if (useCurl) {
+     const curlCheck = validateCurlAvailability();
+     if (!curlCheck.isAvailable) {
+       console.warn(formatLogMessage('warn', `Curl not available for ${currentUrl}: ${curlCheck.error}. Skipping curl-based analysis.`));
+       useCurl = false;
+       useGrep = false; // Grep requires curl
+     } else if (forceDebug) {
+       console.log(formatLogMessage('debug', `Using curl: ${curlCheck.version}`));
+     }
+   }
 
    // Parse whois and dig terms
    const whoisTerms = siteConfig.whois && Array.isArray(siteConfig.whois) ? siteConfig.whois : null;
@@ -2473,9 +2487,9 @@ function setupFrameHandling(page, forceDebug) {
                // Use grep handler if both grep and searchstring/searchstring_and are enabled
                if (useGrep && (hasSearchString || hasSearchStringAnd)) {
                  const grepHandler = createGrepHandler({
-                   searchStrings,
-				   searchStringsAnd,
                    regexes,
+                   searchStrings,
+                   searchStringsAnd,
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
                    isDomainAlreadyDetected,
@@ -2496,8 +2510,7 @@ function setupFrameHandling(page, forceDebug) {
                    forceDebug,
                    userAgent: curlUserAgent,
                    resourceType,
-                   hasSearchString,
-				   hasSearchStringAnd,
+                   hasSearchString: hasSearchString || hasSearchStringAnd,
                    grepOptions: {
                      ignoreCase: true,
                      wholeWord: false,
@@ -2508,20 +2521,20 @@ function setupFrameHandling(page, forceDebug) {
                  setImmediate(() => grepHandler(reqUrl));
                } else {
                  // Use regular curl handler
-                 const curlHandler = createCurlHandler({
+                 const curlHandlerFromCurlModule = createCurlModuleHandler({
                    searchStrings,
                    searchStringsAnd,
                    hasSearchStringAnd,
                    regexes,
                    matchedDomains,
-                   addMatchedDomain, // Pass the helper function
+                   addMatchedDomain,
                    isDomainAlreadyDetected,
-                 onContentFetched: smartCache && !ignoreCache ? (url, content) => {
-                   // Only cache if not bypassing cache
-                   if (!shouldBypassCacheForUrl(url, siteConfig)) {
-                     smartCache.cacheRequest(url, { method: 'GET', siteConfig }, { body: content, status: 200 });
-                   }
-                 } : undefined,
+                   onContentFetched: smartCache && !ignoreCache ? (url, content) => {
+                     // Only cache if not bypassing cache
+                     if (!shouldBypassCacheForUrl(url, siteConfig)) {
+                       smartCache.cacheRequest(url, { method: 'GET', siteConfig }, { body: content, status: 200 });
+                     }
+                   } : undefined,
                    currentUrl,
                    perSiteSubDomains,
                    ignoreDomains,
@@ -2533,10 +2546,10 @@ function setupFrameHandling(page, forceDebug) {
                    forceDebug,
                    userAgent: curlUserAgent,
                    resourceType,
-                   hasSearchString
+                   hasSearchString: hasSearchString || hasSearchStringAnd
                  });
                  
-                 setImmediate(() => curlHandler(reqUrl));
+                 setImmediate(() => curlHandlerFromCurlModule(reqUrl));
                }
              } catch (curlErr) {
                if (forceDebug) {
