@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.88 ===
+// === Network scanner script (nwss.js) v1.0.89 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -125,7 +125,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.88'; // Script version
+const VERSION = '1.0.89'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1460,21 +1460,7 @@ function setupFrameHandling(page, forceDebug) {
     ];
 
     try {
-      // Health check before creating new page
-      const isHealthy = await isBrowserHealthy(browserInstance);
-      if (!isHealthy) {
-        if (forceDebug) {
-          console.log(formatLogMessage('debug', `Browser health degraded before processing ${currentUrl} - forcing immediate restart`));
-        }
-        // Return special code to trigger immediate browser restart
-        return { 
-          url: currentUrl, 
-          rules: [], 
-          success: false, 
-          needsImmediateRestart: true,
-          error: 'Browser health degraded - restart required'
-        };
-      }
+
       // Check for Protocol timeout errors that indicate browser is broken
       if (browserInstance.process() && browserInstance.process().killed) {
         throw new Error('Browser process was killed - restart required');
@@ -1486,22 +1472,7 @@ function setupFrameHandling(page, forceDebug) {
         throw new Error('Failed to create valid page instance');
       }
 
-      // Additional health check after page creation but before critical setup
-      const stillHealthy = await isQuicklyResponsive(browserInstance, 3000);
-      
-      if (!stillHealthy) {
-        if (forceDebug) {
-          console.log(formatLogMessage('debug', `Browser unresponsive during page setup for ${currentUrl} - triggering restart`));
-        }
-        return { 
-          url: currentUrl, 
-          rules: [], 
-          success: false, 
-          needsImmediateRestart: true,
-          error: 'Browser became unresponsive during page setup - restart required'
-        };
-      }
-      
+     
       // Set aggressive timeouts for problematic operations
       // Optimized timeouts for Puppeteer 23.x responsiveness
       page.setDefaultTimeout(Math.min(timeout, TIMEOUTS.DEFAULT_PAGE_REDUCED));
@@ -1582,6 +1553,8 @@ function setupFrameHandling(page, forceDebug) {
       // --- START: evaluateOnNewDocument for Fetch/XHR Interception (Moved and Fixed) ---
       // This script is injected if --eval-on-doc is used or siteConfig.evaluateOnNewDocument is true.
       const shouldInjectEvalForPage = siteConfig.evaluateOnNewDocument === true || globalEvalOnDoc;
+      let evalOnDocSuccess = false; // Track injection success for fallback logic
+      
       if (shouldInjectEvalForPage) {
           if (forceDebug) {
               if (globalEvalOnDoc) {
@@ -1590,24 +1563,29 @@ function setupFrameHandling(page, forceDebug) {
                   console.log(formatLogMessage('debug', `[evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`));
               }
           }
-          // Quick browser health check before script injection
+          
+          // Strategy 1: Try full injection with health check
           let browserResponsive = false;
           try {
               await Promise.race([
                   browserInstance.version(), // Quick responsiveness test
                   new Promise((_, reject) => 
-                      setTimeout(() => reject(new Error('Browser health check timeout')), 5000)
+                      setTimeout(() => reject(new Error('Browser health check timeout')), 3000)
                   )
               ]);
               browserResponsive = true;
           } catch (healthErr) {
-              console.warn(formatLogMessage('warn', `[evalOnDoc] Browser unresponsive for ${currentUrl}: ${healthErr.message} - skipping script injection`));
+              if (forceDebug) {
+                  console.log(formatLogMessage('debug', `[evalOnDoc] Browser health check failed: ${healthErr.message}`));
+              }
               browserResponsive = false;
           }
           
+          // Strategy 2: Try injection with reduced complexity if browser is responsive
           if (browserResponsive) {
-          try {
-              await page.evaluateOnNewDocument(() => {
+              try {
+                  await Promise.race([
+                      page.evaluateOnNewDocument(() => {
                   // Prevent infinite reload loops
                   let reloadCount = 0;
                   const MAX_RELOADS = 2;
@@ -1668,18 +1646,62 @@ function setupFrameHandling(page, forceDebug) {
                           return originalXHROpen.apply(this, arguments);
                       }
                   };
-              });
-          } catch (evalErr) {
-                  if (evalErr.message.includes('timed out') || evalErr.message.includes('ProtocolError')) {
-                      console.warn(formatLogMessage('warn', `[evalOnDoc] Script injection protocol timeout for ${currentUrl} - continuing without XHR/Fetch interception`));
-                  } else {
-                      console.warn(formatLogMessage('warn', `[evalOnDoc] Failed to set up Fetch/XHR interception for ${currentUrl}: ${evalErr.message}`));
+              }),
+                      new Promise((_, reject) => 
+                          setTimeout(() => reject(new Error('Injection timeout')), 8000)
+                      )
+                  ]);
+                  evalOnDocSuccess = true;
+                  if (forceDebug) {
+                      console.log(formatLogMessage('debug', `[evalOnDoc] Full injection successful for ${currentUrl}`));
                   }
-          }
+              } catch (fullInjectionErr) {
+                  if (forceDebug) {
+                      console.log(formatLogMessage('debug', `[evalOnDoc] Full injection failed: ${fullInjectionErr.message}, trying simplified fallback`));
+                  }
+                  
+                  // Strategy 3: Fallback - Try minimal injection (just fetch monitoring)
+                  try {
+                      await Promise.race([
+                          page.evaluateOnNewDocument(() => {
+                              // Minimal injection - just fetch monitoring
+                              if (window.fetch) {
+                                  const originalFetch = window.fetch;
+                                  window.fetch = (...args) => {
+                                      try {
+                                          console.log('[evalOnDoc][fetch-minimal]', args[0]);
+                                          return originalFetch.apply(this, args);
+                                      } catch (err) {
+                                          return originalFetch.apply(this, args);
+                                      }
+                                  };
+                              }
+                          }),
+                          new Promise((_, reject) => 
+                              setTimeout(() => reject(new Error('Minimal injection timeout')), 3000)
+                          )
+                      ]);
+                      evalOnDocSuccess = true;
+                      if (forceDebug) {
+                          console.log(formatLogMessage('debug', `[evalOnDoc] Minimal injection successful for ${currentUrl}`));
+                      }
+                  } catch (minimalInjectionErr) {
+                      if (forceDebug) {
+                          console.log(formatLogMessage('debug', `[evalOnDoc] Minimal injection also failed: ${minimalInjectionErr.message}`));
+                      }
+                      evalOnDocSuccess = false;
+                  }
+              }
           } else {
               if (forceDebug) {
-                  console.log(formatLogMessage('debug', `[evalOnDoc] Continuing ${currentUrl} without XHR/Fetch interception due to browser health`));
+                  console.log(formatLogMessage('debug', `[evalOnDoc] Browser unresponsive, skipping injection for ${currentUrl}`));
               }
+              evalOnDocSuccess = false;
+          }
+          
+          // Final status logging
+          if (!evalOnDocSuccess) {
+              console.warn(formatLogMessage('warn', `[evalOnDoc] All injection strategies failed for ${currentUrl} - continuing with standard request monitoring only`));
           }
       }
       // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
@@ -3132,20 +3154,31 @@ function setupFrameHandling(page, forceDebug) {
     const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
     const currentBatch = allTasks.slice(batchStart, batchEnd);
     
-    // Check browser health before processing each site
-    const healthCheck = await monitorBrowserHealth(browser, {}, {
-      siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
-      totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
-      urlsSinceCleanup: urlsSinceLastCleanup,
-      cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
-      forceDebug,
-      silentMode
-    });
-
-    // Check if browser was unhealthy during recent processing
-    const recentResults = results.slice(-3);
-    const hasRecentFailures = recentResults.filter(r => !r.success).length >= 2;
-    const shouldRestartFromFailures = hasRecentFailures && urlsSinceLastCleanup > 3;
+    // IMPROVED: Only check health if we have indicators of problems
+    let healthCheck = { shouldRestart: false, reason: null };
+    const recentResults = results.slice(-8); // Check more results for better pattern detection
+    const recentFailureRate = recentResults.length > 0 ? 
+      recentResults.filter(r => !r.success).length / recentResults.length : 0;
+    const hasHighFailureRate = recentFailureRate > 0.75; // 75% failure threshold (more conservative)
+    const hasCriticalErrors = recentResults.filter(r => r.needsImmediateRestart).length > 2;
+    
+    // Only run health checks when we have STRONG indicators of problems
+    if (urlsSinceLastCleanup > 15 && (
+        (hasHighFailureRate && recentResults.length >= 5) ||  // Need sufficient sample size
+        hasCriticalErrors ||
+        urlsSinceLastCleanup > RESOURCE_CLEANUP_INTERVAL * 0.9  // Very close to cleanup limit
+    )) {
+      healthCheck = await monitorBrowserHealth(browser, {}, {
+        siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
+        totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
+        urlsSinceCleanup: urlsSinceLastCleanup,
+        cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
+        forceDebug,
+        silentMode
+      });
+    } else if (forceDebug && urlsSinceLastCleanup > 10) {
+      console.log(formatLogMessage('debug', `Skipping health check: failure rate ${Math.round(recentFailureRate * 100)}%, critical errors: ${hasCriticalErrors ? 'yes' : 'no'}`));
+    }
 
     const batchSize = currentBatch.length;
     
@@ -3155,17 +3188,21 @@ function setupFrameHandling(page, forceDebug) {
     // Check if processing this entire site would exceed cleanup interval OR health check suggests restart
     const wouldExceedLimit = urlsSinceLastCleanup + batchSize >= Math.min(RESOURCE_CLEANUP_INTERVAL, 100);
     const isNotLastBatch = batchEnd < totalUrls;
+    // IMPROVED: More restrictive health-based restart conditions
+    const shouldRestartFromHealth = healthCheck.shouldRestart && 
+      !healthCheck.reason?.includes('Scheduled cleanup') && 
+      (healthCheck.reason?.includes('Critical') || healthCheck.reason?.includes('disconnected'));
     
     // Restart browser if we've processed enough URLs, health check suggests it, and this isn't the last site
-    if ((wouldExceedLimit || healthCheck.shouldRestart || shouldRestartFromFailures) && urlsSinceLastCleanup > 0 && isNotLastBatch) {
+    if ((wouldExceedLimit || shouldRestartFromHealth || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8 && isNotLastBatch) {
       
       let restartReason = 'Unknown';
-      if (healthCheck.shouldRestart) {
+      if (shouldRestartFromHealth) {
         restartReason = healthCheck.reason;
-      } else if (shouldRestartFromFailures) {
-        restartReason = 'Multiple recent failures detected';
+      } else if (hasHighFailureRate) {
+        restartReason = `High failure rate: ${Math.round(recentFailureRate * 100)}% in recent batch`;
       } else if (wouldExceedLimit) {
-        restartReason = `Processed ${urlsSinceLastCleanup} URLs`;
+        restartReason = `Processed ${urlsSinceLastCleanup} URLs (scheduled maintenance)`;
       }
 
       if (!silentMode) {
@@ -3233,8 +3270,18 @@ function setupFrameHandling(page, forceDebug) {
     const batchTasks = currentBatch.map(task => originalLimit(() => processUrl(task.url, task.config, browser)));
     const batchResults = await Promise.all(batchTasks);
 
-    // Check if any results indicate immediate restart is needed
-    const needsImmediateRestart = batchResults.some(r => r.needsImmediateRestart);
+    // IMPROVED: Much more conservative emergency restart logic
+    const criticalRestartCount = batchResults.filter(r => r.needsImmediateRestart).length;
+    // Require either:
+    // - More than 50% of batch has critical errors, OR
+    // - At least 3 critical errors in any size batch
+    const restartThreshold = Math.max(3, Math.floor(batchSize * 0.5)); // 50% of batch or min 3
+    const needsImmediateRestart = criticalRestartCount >= restartThreshold && criticalRestartCount >= 2;
+    
+    // Log restart decision for debugging
+    if (forceDebug && criticalRestartCount > 0) {
+      console.log(formatLogMessage('debug', `Emergency restart decision: ${criticalRestartCount}/${batchSize} critical errors (threshold: ${restartThreshold}, restart: ${needsImmediateRestart ? 'YES' : 'NO'})`));
+    }
     
     // Log completion of concurrent processing
     if (forceDebug) {
