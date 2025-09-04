@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.91 ===
+// === Network scanner script (nwss.js) v1.0.94 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -125,7 +125,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.91'; // Script version
+const VERSION = '1.0.94'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -2950,15 +2950,44 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
         
-        if (useForceReload) {
-          // Force reload: disable cache, reload, re-enable cache
+      let reloadSuccess = false;
+      
+      if (useForceReload && !reloadSuccess) {
+        // Attempt force reload: disable cache, reload, re-enable cache
           try {
-            await page.setCacheEnabled(false);
-            await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
-            await page.setCacheEnabled(true);
+          // Add timeout protection for setCacheEnabled operations
+          await Promise.race([
+            page.setCacheEnabled(false),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('setCacheEnabled(false) timeout')), 5000)
+            )
+          ]);
+          
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
+          
+          await Promise.race([
+            page.setCacheEnabled(true),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('setCacheEnabled(true) timeout')), 5000)
+            )
+          ]);
+          
+          reloadSuccess = true;
             if (forceDebug) console.log(formatLogMessage('debug', `Force reload #${i} completed for ${currentUrl}`));
+
           } catch (forceReloadErr) {
-            console.warn(messageColors.warn(`[force reload #${i} failed] ${currentUrl}: ${forceReloadErr.message}`));
+          console.warn(messageColors.warn(`[force reload #${i} failed] ${currentUrl}: ${forceReloadErr.message} - falling back to standard reload`));
+          reloadSuccess = false; // Ensure we try standard reload
+        }
+      }
+      
+      // Fallback to standard reload if force reload failed or wasn't attempted
+      if (!reloadSuccess) {
+        try {
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) });
+          if (forceDebug) console.log(formatLogMessage('debug', `Standard reload #${i} completed for ${currentUrl}`));
+        } catch (standardReloadErr) {
+          console.warn(messageColors.warn(`[standard reload #${i} failed] ${currentUrl}: ${standardReloadErr.message}`));
           }
         } else {
           // Regular reload
