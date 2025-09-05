@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.94 ===
+// === Network scanner script (nwss.js) v1.0.95 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -125,7 +125,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.94'; // Script version
+const VERSION = '1.0.95'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1584,8 +1584,16 @@ function setupFrameHandling(page, forceDebug) {
           // Strategy 2: Try injection with reduced complexity if browser is responsive
           if (browserResponsive) {
               try {
+                  // Add comprehensive timeout protection for evaluateOnNewDocument
                   await Promise.race([
+                      // Main injection with all safety checks
                       page.evaluateOnNewDocument(() => {
+                          // Wrap everything in try-catch to prevent page crashes
+                          try {
+                              // Add timeout check within the injection
+                              const injectionTimeout = setTimeout(() => {
+                                  console.log('[evalOnDoc] Injection taking too long, aborting');
+                              }, 3000);
                   // Prevent infinite reload loops
                   let reloadCount = 0;
                   const MAX_RELOADS = 2;
@@ -1646,19 +1654,39 @@ function setupFrameHandling(page, forceDebug) {
                           return originalXHROpen.apply(this, arguments);
                       }
                   };
+                              clearTimeout(injectionTimeout);
+                          } catch (injectionError) {
+                              console.log('[evalOnDoc][error]', 'Injection failed:', injectionError.message);
+                          }
               }),
-                      new Promise((_, reject) => 
-                          setTimeout(() => reject(new Error('Injection timeout')), 8000)
-                      )
+                      // Reduced timeout for faster failure
+                      new Promise((_, reject) => {
+                          setTimeout(() => {
+                              reject(new Error('evaluateOnNewDocument timeout - browser may be unresponsive'));
+                          }, 5000); // Reduced from 8000ms
+                      })
                   ]);
                   evalOnDocSuccess = true;
                   if (forceDebug) {
                       console.log(formatLogMessage('debug', `[evalOnDoc] Full injection successful for ${currentUrl}`));
                   }
               } catch (fullInjectionErr) {
+                  // Enhanced error detection for CDP issues
+                  const isCDPError = fullInjectionErr.constructor.name === 'ProtocolError' ||
+                                    fullInjectionErr.name === 'ProtocolError' ||
+                                    fullInjectionErr.message.includes('addScriptToEvaluateOnNewDocument timed out') ||
+                                    fullInjectionErr.message.includes('Protocol error');
+                  
                   if (forceDebug) {
-                      console.log(formatLogMessage('debug', `[evalOnDoc] Full injection failed: ${fullInjectionErr.message}, trying simplified fallback`));
+                      const errorType = isCDPError ? 'CDP/Protocol error' : 'timeout/other';
+                      console.log(formatLogMessage('debug', `[evalOnDoc] Full injection failed (${errorType}): ${fullInjectionErr.message}`));
                   }
+
+                  // Skip fallback for CDP errors - they indicate browser communication issues
+                  if (isCDPError) {
+                      console.warn(formatLogMessage('warn', `[evalOnDoc] CDP communication failure - skipping injection for ${currentUrl}`));
+                      evalOnDocSuccess = false;
+                  } else {
                   
                   // Strategy 3: Fallback - Try minimal injection (just fetch monitoring)
                   try {
@@ -1692,6 +1720,7 @@ function setupFrameHandling(page, forceDebug) {
                       evalOnDocSuccess = false;
                   }
               }
+           } 
           } else {
               if (forceDebug) {
                   console.log(formatLogMessage('debug', `[evalOnDoc] Browser unresponsive, skipping injection for ${currentUrl}`));
@@ -2984,18 +3013,45 @@ function setupFrameHandling(page, forceDebug) {
       // Fallback to standard reload if force reload failed or wasn't attempted
       if (!reloadSuccess) {
         try {
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) });
+          // Reduced timeout for faster failure detection
+          const standardReloadTimeout = Math.min(timeout, 8000); // Reduced from 15000ms
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: standardReloadTimeout });
           if (forceDebug) console.log(formatLogMessage('debug', `Standard reload #${i} completed for ${currentUrl}`));
         } catch (standardReloadErr) {
           console.warn(messageColors.warn(`[standard reload #${i} failed] ${currentUrl}: ${standardReloadErr.message}`));
+          
+          // Check if this is a persistent failure that should skip remaining reloads
+          const isPersistentFailure = standardReloadErr.message.includes('Navigation timeout') || 
+                                     standardReloadErr.message.includes('net::ERR_') ||
+                                     standardReloadErr.message.includes('Protocol error') ||
+                                     standardReloadErr.message.includes('Page crashed') ||
+                                     // CDP and injection failures
+                                     standardReloadErr.constructor.name === 'ProtocolError' ||
+                                     standardReloadErr.name === 'ProtocolError' ||
+                                     standardReloadErr.message.includes('addScriptToEvaluateOnNewDocument timed out') ||
+                                     standardReloadErr.message.includes('Runtime.callFunctionOn timed out') ||
+                                     standardReloadErr.message.includes('CDP injection timeout');
+          
+          if (isPersistentFailure) {
+            const remainingReloads = totalReloads - i;
+            if (remainingReloads > 0 && forceDebug) {
+              console.log(formatLogMessage('debug', `Persistent failure detected - skipping ${remainingReloads} remaining reload(s) for ${currentUrl}`));
+            }
+            // Break out of reload loop to move to next URL faster
+            break;
+          }
           }
         } else {
           // Regular reload
           await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) });
         }
-        
+
+      // Only add delay if we're continuing with more reloads
+      if (i < totalReloads) {
+
         await fastTimeout(delayMs);
       }
+    }
 
       if (dryRunMode) {
         // Get page title for dry run output

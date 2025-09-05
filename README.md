@@ -73,10 +73,13 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 
 | Argument                  | Description |
 |:---------------------------|:------------|
+| `--cache-requests`          | Cache HTTP requests to avoid re-requesting same URLs within scan |
 | `--validate-config`         | Validate config.json file and exit |
 | `--validate-rules [file]`   | Validate rule file format (uses --output/--compare files if no file specified) |
 | `--clean-rules [file]`      | Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified) |
 | `--test-validation`         | Run domain validation tests and exit |
+| `--clear-cache`             | Clear persistent cache before scanning (improves fresh start performance) |
+| `--ignore-cache`            | Bypass all smart caching functionality during scanning |
 
 ---
 
@@ -133,6 +136,7 @@ Example:
 | `url`                | String or Array |   -     | Website URL(s) to scan |
 | `userAgent`          | `chrome`, `firefox`, `safari` | - | User agent for page (latest versions: Chrome 131, Firefox 133, Safari 18.2) |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
+| `regex_and`          | Boolean | `false` | Use AND logic for multiple filterRegex patterns - ALL patterns must match the same URL |
 | `comments`           | String or Array | - | String of comments or references |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |
@@ -146,6 +150,8 @@ Example:
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
 | `even_blocked`       | Boolean | `false` | Add matching rules even if requests are blocked |
+| `bypass_cache`       | Boolean | `false` | Skip all caching for this site's URLs |
+
 
 ### Redirect Handling Options
 
@@ -190,6 +196,10 @@ When a page redirects to a new domain, first-party/third-party detection is base
 |:---------------------|:-------|:-------:|:------------|
 | `cloudflare_phish`   | Boolean | `false` | Auto-click through Cloudflare phishing warnings |
 | `cloudflare_bypass`  | Boolean | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
+| `cloudflare_parallel_detection` | Boolean | `true` | Use parallel detection for faster Cloudflare checks |
+| `cloudflare_max_retries` | Integer | `3` | Maximum retry attempts for Cloudflare operations |
+| `cloudflare_cache_ttl` | Milliseconds | `300000` | TTL for Cloudflare detection cache (5 minutes) |
+| `cloudflare_retry_on_error` | Boolean | `true` | Enable retry logic for Cloudflare operations |
 | `flowproxy_detection` | Boolean | `false` | Enable flowProxy protection detection and handling |
 | `flowproxy_page_timeout` | Milliseconds | `45000` | Page timeout for flowProxy sites |
 | `flowproxy_nav_timeout` | Milliseconds | `45000` | Navigation timeout for flowProxy sites |
@@ -240,6 +250,11 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `screenshot`         | Boolean | `false` | Capture screenshot on load failure |
 | `headful`            | Boolean | `false` | Launch browser with GUI for this site |
 | `adblock_rules`      | Boolean | `false` | Generate adblock filter rules with resource types for this site |
+| `interact_duration`  | Milliseconds | `2000` | Duration of interaction simulation |
+| `interact_scrolling` | Boolean | `true` | Enable scrolling simulation |
+| `interact_clicks`    | Boolean | `false` | Enable element clicking simulation |
+| `interact_typing`    | Boolean | `false` | Enable typing simulation |
+| `interact_intensity` | String | `"medium"` | Interaction simulation intensity: "low", "medium", "high" |
 
 ### Global Configuration Options
 
@@ -254,7 +269,11 @@ These options go at the root level of your config.json:
 | `ignore_similar_threshold` | Integer | `80` | Similarity threshold percentage for ignore_similar |
 | `ignore_similar_ignored_domains` | Boolean | `true` | Ignore domains similar to ignoreDomains list |
 | `max_concurrent_sites` | Integer | `6` | Maximum concurrent site processing (1-50) |
-| `resource_cleanup_interval` | Integer | `180` | Browser restart interval in URLs processed (1-1000) |
+| `resource_cleanup_interval` | Integer | `80` | Browser restart interval in URLs processed (1-1000) |
+| `cache_path`         | String | `".cache"` | Directory path for persistent cache storage |
+| `cache_max_size`     | Integer | `5000` | Maximum number of entries in cache |
+| `cache_autosave_minutes` | Integer | `1` | Interval for automatic cache saves (minutes) |
+| `cache_requests`     | Boolean | `false` | Enable HTTP request response caching |
 
 ---
 
