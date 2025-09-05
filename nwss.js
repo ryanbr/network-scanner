@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.95 ===
+// === Network scanner script (nwss.js) v1.0.96 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -33,7 +33,7 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 // File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // CDP functionality
-const { createCDPSession } = require('./lib/cdp');
+const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
 const { processResults } = require('./lib/post-processing');
 // Colorize various text when used
@@ -125,7 +125,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.95'; // Script version
+const VERSION = '1.0.96'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1465,7 +1465,7 @@ function setupFrameHandling(page, forceDebug) {
       if (browserInstance.process() && browserInstance.process().killed) {
         throw new Error('Browser process was killed - restart required');
       }
-      page = await browserInstance.newPage();
+      page = await createPageWithTimeout(browserInstance, 30000);
 
       // Enhanced page validation for Puppeteer 23.x
       if (!page || page.isClosed()) {
@@ -1779,13 +1779,8 @@ function setupFrameHandling(page, forceDebug) {
 
       // Protected request interception setup with timeout
       try {
-        // Test if network operations are responsive before enabling request interception
-        await Promise.race([
-          page.setRequestInterception(true),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Network.enable timeout')), 10000)
-          )
-        ]);
+        // Use timeout-protected request interception setup
+        await setRequestInterceptionWithTimeout(page, 15000);
         
         if (forceDebug) {
           console.log(formatLogMessage('debug', `Request interception enabled successfully for ${currentUrl}`));
@@ -1794,13 +1789,13 @@ function setupFrameHandling(page, forceDebug) {
         if (networkErr.message.includes('timed out') || 
             networkErr.message.includes('Network.enable') || 
             networkErr.message.includes('timeout')) {
-          console.warn(formatLogMessage('warn', `Network setup failed for ${currentUrl}: ${networkErr.message} - triggering browser restart`));
+          console.warn(formatLogMessage('warn', `Request interception setup failed for ${currentUrl}: ${networkErr.message} - triggering browser restart`));
           return { 
             url: currentUrl, 
             rules: [], 
             success: false, 
             needsImmediateRestart: true,
-            error: 'Network.enable timeout - browser restart required'
+            error: 'Request interception timeout - browser restart required'
           };
         }
         throw networkErr; // Re-throw other errors
