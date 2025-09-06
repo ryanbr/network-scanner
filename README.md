@@ -151,7 +151,7 @@ Example:
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
 | `even_blocked`       | Boolean | `false` | Add matching rules even if requests are blocked |
 | `bypass_cache`       | Boolean | `false` | Skip all caching for this site's URLs |
-
+| `window_cleanup`     | Boolean | `false` | Close extra browser windows/tabs after entire URL group completes with 16s delay |
 
 ### Redirect Handling Options
 

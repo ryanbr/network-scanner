@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.96 ===
+// === Network scanner script (nwss.js) v1.0.97 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -64,7 +64,7 @@ const TIMEOUTS = {
   EMERGENCY_RESTART_DELAY: 2000,
   BROWSER_STABILIZE_DELAY: 1000,
   CURL_HANDLER_DELAY: 3000,
-  PROTOCOL_TIMEOUT: 60000,
+  PROTOCOL_TIMEOUT: 120000,
   REDIRECT_JS_TIMEOUT: 5000
 };
 
@@ -122,10 +122,10 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.96'; // Script version
+const VERSION = '1.0.97'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -570,6 +570,8 @@ Advanced Options:
   goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
+
+  window_cleanup: true/false                   Close extra browser windows/tabs after entire URL group completes with 5s delay (default: false)
 
 Referrer Header Options:
   referrer_headers: "https://google.com"       Single referrer URL
@@ -3230,9 +3232,21 @@ function setupFrameHandling(page, forceDebug) {
   }, 30000); // Check every 30 seconds
 
   // Process URLs in batches to maintain concurrency while allowing browser restarts
+  let siteGroupIndex = 0;
   for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
     const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
     const currentBatch = allTasks.slice(batchStart, batchEnd);
+
+    
+    // Group tasks by their source site configuration for window cleanup
+    const tasksBySite = new Map();
+    currentBatch.forEach(task => {
+      const siteKey = `site_${sites.indexOf(task.config)}`;
+      if (!tasksBySite.has(siteKey)) {
+        tasksBySite.set(siteKey, []);
+      }
+      tasksBySite.get(siteKey).push(task);
+    });
     
     // IMPROVED: Only check health if we have indicators of problems
     let healthCheck = { shouldRestart: false, reason: null };
@@ -3386,6 +3400,25 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     results.push(...batchResults);
+
+    // Perform group window cleanup for completed sites
+    for (const [siteKey, siteTasks] of tasksBySite) {
+      const siteConfig = siteTasks[0].config; // All tasks in group have same config
+      
+      if (siteConfig.window_cleanup === true) {
+        const urlCount = siteTasks.length;
+        const groupDescription = `${urlCount} URLs from site group ${++siteGroupIndex}`;
+        
+        try {
+          const groupCleanupResult = await performGroupWindowCleanup(browser, groupDescription, forceDebug);
+          if (!silentMode && groupCleanupResult.success && groupCleanupResult.closedCount > 0) {
+            console.log(`🗑️ Group cleanup: ${groupCleanupResult.closedCount} windows closed after completing ${groupDescription}`);
+          }
+        } catch (groupCleanupErr) {
+          if (forceDebug) console.log(formatLogMessage('debug', `Group window cleanup failed: ${groupCleanupErr.message}`));
+        }
+      }
+    }
     
     processedUrlCount += batchSize;
     urlsSinceLastCleanup += batchSize;
