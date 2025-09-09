@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.97 ===
+// === Network scanner script (nwss.js) v1.0.98 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -82,6 +82,8 @@ const CONCURRENCY_LIMITS = {
   HIGH_CONCURRENCY_THRESHOLD: 12  // Auto-enable aggressive caching above this
 };
 
+const REALTIME_CLEANUP_THRESHOLD = 8; // Default pages to keep for realtime cleanup
+
 /**
  * Detects the installed Puppeteer version dynamically
  * @returns {Object} Version info and compatibility settings
@@ -122,10 +124,10 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.97'; // Script version
+const VERSION = '1.0.98'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -571,7 +573,11 @@ Advanced Options:
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
 
-  window_cleanup: true/false                   Close extra browser windows/tabs after entire URL group completes with 5s delay (default: false)
+  window_cleanup: true/false/"realtime"/"all"  Window cleanup mode:
+                                               true/false - Close extra windows after URL group completes (default: false)
+                                               "realtime" - Continuously cleanup oldest pages when threshold exceeded
+                                               "all" - Aggressive cleanup of all content pages after group
+  window_cleanup_threshold: <number>           For realtime mode: max pages to keep open (default: 8)
 
 Referrer Header Options:
   referrer_headers: "https://google.com"       Single referrer URL
@@ -1474,7 +1480,27 @@ function setupFrameHandling(page, forceDebug) {
         throw new Error('Failed to create valid page instance');
       }
 
-     
+      // Track page for realtime cleanup
+      trackPageForRealtime(page);
+
+      // Mark page as actively processing
+      updatePageUsage(page, true);
+
+      // Perform realtime cleanup if enabled
+      if (siteConfig.window_cleanup === "realtime") {
+        const threshold = typeof siteConfig.window_cleanup_threshold === 'number' 
+          ? siteConfig.window_cleanup_threshold 
+          : REALTIME_CLEANUP_THRESHOLD;
+        
+        // Get the site's delay value for cleanup timing
+        const siteDelay = siteConfig.delay || 4000;
+        
+        const realtimeResult = await performRealtimeWindowCleanup(browserInstance, threshold, forceDebug, siteDelay);
+        if (realtimeResult.success && realtimeResult.closedCount > 0 && forceDebug) {
+          console.log(formatLogMessage('debug', `[realtime_cleanup] Cleaned ${realtimeResult.closedCount} old pages, ${realtimeResult.remainingPages} remaining`));
+        }
+      } 
+    
       // Set aggressive timeouts for problematic operations
       // Optimized timeouts for Puppeteer 23.x responsiveness
       page.setDefaultTimeout(Math.min(timeout, TIMEOUTS.DEFAULT_PAGE_REDUCED));
@@ -2612,6 +2638,9 @@ function setupFrameHandling(page, forceDebug) {
         request.continue();
       });
 
+      // Mark page as actively processing network requests
+      updatePageUsage(page, true);
+
      // Add response handler ONLY if searchstring/searchstring_and is defined AND neither curl nor grep is enabled
      if ((hasSearchString || hasSearchStringAnd) && !useCurl && !useGrep) {
        const responseHandler = createResponseHandler({
@@ -2648,6 +2677,9 @@ function setupFrameHandling(page, forceDebug) {
       
       // Create optimized interaction configuration for this site
       const interactionConfig = createInteractionConfig(currentUrl, siteConfig);
+      
+      // Mark page as actively processing interactions
+      updatePageUsage(page, true);
       
       // --- Runtime CSS Element Blocking (Fallback) ---
       // Apply CSS blocking after page load as a fallback in case evaluateOnNewDocument didn't work
@@ -2875,6 +2907,9 @@ function setupFrameHandling(page, forceDebug) {
         console.log(formatLogMessage('info', `${messageColors.loaded('Loaded:')} (${siteCounter}/${totalUrls}) ${currentUrl}`));
         await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
         
+        // Mark page as processing frames
+        updatePageUsage(page, true);
+        
         // Wait for iframes to load and log them
         if (forceDebug) {
           try {
@@ -2899,6 +2934,9 @@ function setupFrameHandling(page, forceDebug) {
             console.log(formatLogMessage('debug', `Frame debugging failed: ${frameDebugErr.message}`));
           }
         }
+
+      // Page finished initial loading - mark as idle
+      updatePageUsage(page, false);
       } catch (err) {
         // Enhanced error handling for redirect timeouts using redirect module
         const timeoutResult = await handleRedirectTimeout(page, currentUrl, err, safeGetDomain, forceDebug, formatLogMessage);
@@ -2916,6 +2954,9 @@ function setupFrameHandling(page, forceDebug) {
 
       if (interactEnabled && !disableInteract) {
         if (forceDebug) console.log(formatLogMessage('debug', `interaction simulation enabled for ${currentUrl}`));
+        
+        // Mark page as processing during interactions
+        updatePageUsage(page, true);
         // Use enhanced interaction module
         await performPageInteraction(page, currentUrl, interactionConfig, forceDebug);
       }
@@ -2945,6 +2986,9 @@ function setupFrameHandling(page, forceDebug) {
       // Use fast timeout helper for consistent Puppeteer 23.x compatibility
 
       // Handle reloads - use force reload mechanism if forcereload is enabled
+      // Mark page as processing during reloads
+      updatePageUsage(page, true);
+
       const totalReloads = (siteConfig.reload || 1) - 1; // Subtract 1 because initial load counts as first
       const useForceReload = siteConfig.forcereload === true;
       
@@ -3049,6 +3093,9 @@ function setupFrameHandling(page, forceDebug) {
         await fastTimeout(delayMs);
       }
     }
+    
+    // Mark page as idle after all processing complete
+    updatePageUsage(page, false);
 
       if (dryRunMode) {
         // Get page title for dry run output
@@ -3172,6 +3219,10 @@ function setupFrameHandling(page, forceDebug) {
       // Guaranteed resource cleanup - this runs regardless of success or failure
       
       if (cdpSessionManager) {
+        // Mark page as idle when cleanup starts
+        if (page && !page.isClosed()) {
+          updatePageUsage(page, false);
+        }
         await cdpSessionManager.cleanup();
       }
       
@@ -3405,14 +3456,19 @@ function setupFrameHandling(page, forceDebug) {
     for (const [siteKey, siteTasks] of tasksBySite) {
       const siteConfig = siteTasks[0].config; // All tasks in group have same config
       
-      if (siteConfig.window_cleanup === true) {
+      if (siteConfig.window_cleanup === true || siteConfig.window_cleanup === "all" || siteConfig.window_cleanup === "realtime") {
         const urlCount = siteTasks.length;
         const groupDescription = `${urlCount} URLs from site group ${++siteGroupIndex}`;
+        const cleanupMode = siteConfig.window_cleanup === "realtime" ? true : siteConfig.window_cleanup; // Pass through the exact value, but don't pass "realtime" to group cleanup
         
         try {
-          const groupCleanupResult = await performGroupWindowCleanup(browser, groupDescription, forceDebug);
+          const groupCleanupResult = await performGroupWindowCleanup(browser, groupDescription, forceDebug, cleanupMode);
           if (!silentMode && groupCleanupResult.success && groupCleanupResult.closedCount > 0) {
-            console.log(`🗑️ Group cleanup: ${groupCleanupResult.closedCount} windows closed after completing ${groupDescription}`);
+            const modeText = cleanupMode === "all" ? "(aggressive)" : "(conservative)";
+            console.log(`🗑️ Group cleanup: ${groupCleanupResult.closedCount} old windows closed ${modeText} after completing ${groupDescription}`);
+            if (groupCleanupResult.mainPagePreserved) {
+              console.log(`✅ Main Puppeteer window preserved during cleanup`);
+            }
           }
         } catch (groupCleanupErr) {
           if (forceDebug) console.log(formatLogMessage('debug', `Group window cleanup failed: ${groupCleanupErr.message}`));

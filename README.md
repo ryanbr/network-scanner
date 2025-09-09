@@ -151,7 +151,10 @@ Example:
 | `blocked`            | Array | - | Domains or regexes to block during scanning |
 | `even_blocked`       | Boolean | `false` | Add matching rules even if requests are blocked |
 | `bypass_cache`       | Boolean | `false` | Skip all caching for this site's URLs |
-| `window_cleanup`     | Boolean | `false` | Close extra browser windows/tabs after entire URL group completes with 16s delay |
+| `window_cleanup`     | Boolean or String | `false` | Close old/unused browser windows/tabs after entire URL group completes |
+
+**Window cleanup modes:** `false` (disabled), `true` (conservative - closes obvious leftovers), `"all"` (aggressive - closes all content pages). Both active modes preserve the main Puppeteer window and wait 16 seconds before cleanup to avoid interfering with active operations.
+
 
 ### Redirect Handling Options
 
@@ -320,6 +323,39 @@ node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
 
 ### Stealth Configuration Examples
 
+#### Memory Management with Window Cleanup
+```json
+{
+  "url": [
+    "https://popup-heavy-site1.com",
+    "https://popup-heavy-site2.com", 
+    "https://popup-heavy-site3.com"
+  ],
+  "filterRegex": "\\.(space|website|tech)\\b",
+  "window_cleanup": "all",
+  "interact": true,
+  "reload": 2,
+  "resourceTypes": ["script", "fetch"],
+  "comments": "Aggressive cleanup for sites that open many popups"
+}
+```
+
+#### Conservative Memory Management
+```json
+{
+  "url": "https://complex-site.com",
+  "filterRegex": "analytics|tracking",
+  "window_cleanup": true,
+  "interact": true,
+  "delay": 8000,
+  "reload": 3,
+  "comments": [
+    "Conservative cleanup preserves potentially active content",
+    "Good for sites with complex iframe structures"
+  ]
+}
+```
+
 #### E-commerce Site Scanning
 ```json
 {
@@ -365,6 +401,22 @@ node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
   }
 }
 ```
+
+---
+
+## Memory Management
+
+The scanner includes intelligent window management to prevent memory accumulation during long scans:
+
+- **Conservative cleanup** (`window_cleanup: true`): Selectively closes pages that appear to be leftovers from previous scans
+- **Aggressive cleanup** (`window_cleanup: "all"`): Closes all content pages from previous operations for maximum memory recovery  
+- **Main window preservation**: Both modes always preserve the main Puppeteer browser window to maintain stability
+- **Popup window handling**: Automatically detects and closes popup windows created by previous site scans
+- **Timing protection**: 16-second delay ensures no active operations are interrupted during cleanup
+- **Active page protection**: Never affects pages currently being processed by concurrent scanning operations
+- **Memory reporting**: Reports estimated memory freed from closed windows for performance monitoring
+
+Use aggressive cleanup for sites that open many popups or when processing large numbers of URLs. Use conservative cleanup when you want to preserve potentially active content but still free obvious leftovers.
 
 ---
 

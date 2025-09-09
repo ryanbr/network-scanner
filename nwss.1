@@ -1,4 +1,4 @@
-.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.32" "User Commands"
+.TH NWSS-SCRIPT 1 "2025" "scanner-script v1.0.98" "User Commands"
 .SH NAME
 NWSS scanner-script \- Network scanner for malware detection and domain analysis with advanced similarity filtering
 
@@ -26,6 +26,10 @@ Remove rules that already exist in \fIFILE\fR before output (requires \fB\-o\fR)
 .TP
 .B \--append
 Append new rules to output file instead of overwriting (requires \fB\-o\fR).
+
+.TP
+.BR \--color ", " \--colour
+Enable colored console output for status messages.
 
 .SS Output Format Options
 .TP
@@ -126,6 +130,14 @@ Console output only: show matching regex, titles, whois/dig/searchstring results
 Remove Chrome/Puppeteer temporary files before exit.
 
 .TP
+.BR \--max-concurrent " \fINUMBER\fR"
+Maximum concurrent site processing (1-50, overrides config/default).
+
+.TP
+.BR \--cleanup-interval " \fINUMBER\fR"
+Browser restart interval in URLs processed (1-1000, overrides config/default).
+
+.TP
 .BR \-h ", " \--help
 Show help message and exit.
 
@@ -134,6 +146,10 @@ Show help message and exit.
 Show version information and exit.
 
 .SS Validation Options
+.TP
+.B \--cache-requests
+Cache HTTP requests to avoid re-requesting same URLs within scan.
+
 .TP
 .B \--validate-config
 Validate config.json file and exit.
@@ -149,6 +165,14 @@ Clean rule files by removing invalid lines and optionally duplicates (uses \fB\-
 .TP
 .B \--test-validation
 Run domain validation tests and exit.
+
+.TP
+.B \--clear-cache
+Clear persistent cache before scanning (improves fresh start performance).
+
+.TP
+.B \--ignore-cache
+Bypass all smart caching functionality during scanning.
 
 .SH CONFIGURATION
 
@@ -184,6 +208,30 @@ Number. Similarity threshold percentage for ignore_similar (default: 80).
 .B ignore_similar_ignored_domains
 Boolean. Ignore domains similar to ignoreDomains list (default: true).
 
+.TP
+.B max_concurrent_sites
+Number. Maximum concurrent site processing (1-50, default: 6).
+
+.TP
+.B resource_cleanup_interval
+Number. Browser restart interval in URLs processed (1-1000, default: 80).
+
+.TP
+.B cache_path
+String. Directory path for persistent cache storage (default: ".cache").
+
+.TP
+.B cache_max_size
+Number. Maximum number of entries in cache (default: 5000).
+
+.TP
+.B cache_autosave_minutes
+Number. Interval for automatic cache saves in minutes (default: 1).
+
+.TP
+.B cache_requests
+Boolean. Enable HTTP request response caching (default: false).
+
 .SS Per-Site Configuration Options
 
 .TP
@@ -193,6 +241,10 @@ Single URL string or array of URLs to scan.
 .TP
 .B filterRegex
 Regex pattern(s) to match suspicious requests.
+
+.TP
+.B regex_and
+Boolean. Use AND logic for multiple filterRegex patterns - ALL patterns must match the same URL (default: false).
 
 .TP
 .B comments
@@ -235,12 +287,20 @@ Spoof User-Agent: \fB"chrome"\fR, \fB"firefox"\fR, or \fB"safari"\fR.
 Boolean. Simulate mouse movements and clicks.
 
 .TP
+.B interact_intensity
+String. Interaction simulation intensity: \fB"low"\fR, \fB"medium"\fR, \fB"high"\fR (default: "medium").
+
+.TP
 .B delay
 Milliseconds to wait after page load (default: 4000).
 
 .TP
 .B reload
 Number of times to reload the page (default: 1).
+
+.TP
+.B forcereload
+Boolean. Force an additional reload after reloads.
 
 .TP
 .B timeout
@@ -259,6 +319,14 @@ Boolean. Allow third-party request matching (default: true).
 Boolean or \fB"random"\fR. Enable browser fingerprint spoofing.
 
 .TP
+.B referrer_headers
+String, Array, or Object. Set referrer header for realistic traffic sources.
+
+.TP
+.B custom_headers
+Object. Add custom HTTP headers to requests.
+
+.TP
 .B ignore_similar
 Boolean. Override global ignore_similar setting for this site.
 
@@ -273,6 +341,10 @@ Boolean. Override global ignore_similar_ignored_domains for this site.
 .TP
 .B even_blocked
 Boolean. Add matching rules even if requests are blocked (default: false).
+
+.TP
+.B bypass_cache
+Boolean. Skip all caching for this site's URLs (default: false).
 
 .TP
 .B whois
@@ -354,10 +426,6 @@ Object. Custom page.goto() options for Puppeteer navigation. Available options:
 Example: \fB{"waitUntil": "networkidle2", "timeout": 60000}\fR
 
 .TP
-.B forcereload
-Boolean. Force an additional reload with cache disabled after normal reloads.
-
-.TP
 .B clear_sitedata
 Boolean. Clear all cookies, cache, and storage before each page load (default: false).
 
@@ -390,12 +458,69 @@ Boolean. Launch browser with GUI for this specific site.
 Boolean. Generate adblock filter rules with resource types for this site.
 
 .TP
+.B window_cleanup
+Boolean or String. Close old/unused browser windows and tabs after entire URL group completes (default: false).
+.RS
+.IP \(bu 4
+\fBfalse\fR - No cleanup performed
+.IP \(bu 4
+\fBtrue\fR - Conservative cleanup: closes pages that appear to be from previous scans while preserving main Puppeteer window
+.IP \(bu 4
+\fB"all"\fR - Aggressive cleanup: closes all content pages from previous operations while preserving main Puppeteer window
+.RE
+Both modes wait 16 seconds before cleanup to allow final operations to complete, and always preserve the main browser window to maintain browser instance stability. Cleanup targets popup windows, extra tabs, and pages from previously completed site groups, but never affects actively processing pages.
+
+.TP
+
+.SS Redirect Handling Options
+
+.TP
+.B follow_redirects
+Boolean. Follow redirects to new domains (default: true).
+
+.TP
+.B max_redirects
+Number. Maximum number of redirects to follow (default: 10).
+
+.TP
+.B js_redirect_timeout
+Milliseconds. Time to wait for JavaScript redirects (default: 5000).
+
+.TP
+.B detect_js_patterns
+Boolean. Analyze page source for redirect patterns (default: true).
+
+.TP
+.B redirect_timeout_multiplier
+Number. Increase timeout for redirected URLs (default: 1.5).
+
+.SS Cloudflare Protection Options
+
+.TP
 .B cloudflare_phish
 Boolean. Auto-click through Cloudflare phishing warnings (default: false).
 
 .TP
 .B cloudflare_bypass
 Boolean. Auto-solve Cloudflare "Verify you are human" challenges (default: false).
+
+.TP
+.B cloudflare_parallel_detection
+Boolean. Use parallel detection for faster Cloudflare checks (default: true).
+
+.TP
+.B cloudflare_max_retries
+Number. Maximum retry attempts for Cloudflare operations (default: 3).
+
+.TP
+.B cloudflare_cache_ttl
+Milliseconds. TTL for Cloudflare detection cache (default: 300000 - 5 minutes).
+
+.TP
+.B cloudflare_retry_on_error
+Boolean. Enable retry logic for Cloudflare operations (default: true).
+
+.SS FlowProxy Protection Options
 
 .TP
 .B flowproxy_detection
@@ -420,6 +545,24 @@ Milliseconds. Delay for rate limiting (default: 30000).
 .TP
 .B flowproxy_additional_delay
 Milliseconds. Additional processing delay (default: 5000).
+
+.SS Advanced Options
+
+.TP
+.B interact_duration
+Milliseconds. Duration of interaction simulation (default: 2000).
+
+.TP
+.B interact_scrolling
+Boolean. Enable scrolling simulation (default: true).
+
+.TP
+.B interact_clicks
+Boolean. Enable element clicking simulation (default: false).
+
+.TP
+.B interact_typing
+Boolean. Enable typing simulation (default: false).
 
 .TP
 .B verbose
@@ -460,6 +603,28 @@ Boolean. Force Pi-hole regex output format for this site.
 .TP
 .B plain
 Boolean. Force plain domain output for this site.
+
+.SS Referrer Header Options
+
+.B Simple formats:
+.RS
+.IP \(bu 4
+\fB"referrer_headers": "https://google.com/search?q=example"\fR
+.IP \(bu 4
+\fB"referrer_headers": ["url1", "url2"]\fR
+.RE
+
+.B Smart modes:
+.RS
+.IP \(bu 4
+\fB"referrer_headers": {"mode": "random_search", "search_terms": ["reviews"]}\fR
+.IP \(bu 4
+\fB"referrer_headers": {"mode": "social_media"}\fR
+.IP \(bu 4
+\fB"referrer_headers": {"mode": "direct_navigation"}\fR
+.IP \(bu 4
+\fB"referrer_headers": {"mode": "custom", "custom": ["https://news.ycombinator.com/"]}\fR
+.RE
 
 .SH SIMILARITY FILTERING
 
@@ -527,6 +692,16 @@ With default settings (\fBignore_similar_threshold: 80\fR):
   "url": "https://suspicious-site.com",
   "filterRegex": "\\\\.(space|website|tech|buzz)\\\\b",
   "resourceTypes": ["script", "xhr", "fetch"]
+}
+.EE
+
+.SS Configuration with regex AND logic:
+.EX
+{
+  "url": "https://ad-network.com",
+  "filterRegex": ["tracking", "analytics"],
+  "regex_and": true,
+  "resourceTypes": ["script", "fetch"]
 }
 .EE
 
@@ -661,6 +836,36 @@ node nwss.js -o dnsmasq.conf --dnsmasq --titles
 node nwss.js -o pihole_regex.txt --pihole --debug
 .EE
 
+.SS Performance tuning with concurrency:
+.EX
+node nwss.js --max-concurrent 12 --cleanup-interval 100 -o rules.txt
+.EE
+
+.SS Cache management:
+.EX
+node nwss.js --clear-cache --cache-requests -o rules.txt
+node nwss.js --ignore-cache --debug -o rules.txt
+.EE
+
+.SS Stealth configuration with referrer headers:
+.EX
+{
+  "url": "https://e-commerce-site.com",
+  "userAgent": "chrome",
+  "fingerprint_protection": "random",
+  "referrer_headers": {
+    "mode": "random_search",
+    "search_terms": ["product reviews", "best deals"]
+  },
+  "custom_headers": {
+    "Accept-Language": "en-US,en;q=0.9"
+  },
+  "interact": true,
+  "interact_intensity": "high",
+  "filterRegex": "analytics|tracking|ads"
+}
+.EE
+
 .SS Cloudflare bypass and fingerprint spoofing:
 .EX
 {
@@ -685,6 +890,35 @@ node nwss.js -o pihole_regex.txt --pihole --debug
   "flowproxy_js_timeout": 15000,
   "flowproxy_delay": 30000,
   "flowproxy_additional_delay": 5000
+}
+.EE
+
+.SS Window cleanup for memory management:
+.EX
+{
+  "url": [
+    "https://site1.com",
+    "https://site2.com",
+    "https://site3.com"
+  ],
+  "filterRegex": "\\\\.(space|website)\\\\b",
+  "window_cleanup": "all",
+  "resourceTypes": ["script", "fetch"]
+}
+.EE
+
+.SS Conservative window cleanup:
+.EX
+{
+  "url": "https://popup-heavy-site.com",
+  "filterRegex": "\\\\.(top|buzz)\\\\b",
+  "window_cleanup": true,
+  "interact": true,
+  "reload": 2,
+  "comments": [
+    "Site opens many popup windows",
+    "Conservative cleanup preserves potentially active content"
+  ]
 }
 .EE
 
@@ -741,13 +975,17 @@ Default configuration file containing scan targets and rules.
 Directory created for debug and matched URL logs when \fB\--debug\fR or \fB\--dumpurls\fR is used.
 
 .TP
+.B .cache/
+Default cache directory for smart caching functionality.
+
+.TP
 .B user.action
 Common Privoxy action file when using \fB\--privoxy\fR output.
 
 .SH DETECTION METHODS
 
 .SS URL Pattern Matching
-Uses regex patterns to identify suspicious domains and request URLs.
+Uses regex patterns to identify suspicious domains and request URLs with support for AND/OR logic.
 
 .SS Content Analysis
 Downloads page content with curl and searches for malicious strings using JavaScript or grep.
@@ -783,6 +1021,28 @@ Detects and handles FlowProxy protection systems.
 
 .SS Intelligent Domain Filtering
 Advanced similarity algorithms prevent duplicate detection across international domains and variations.
+
+.SS Smart Caching
+Persistent caching system for improved performance across multiple scans.
+
+.SS Window Management
+Intelligent browser window and tab cleanup to prevent memory accumulation:
+.RS
+.IP \(bu 4
+\fBConservative mode\fR (\fBwindow_cleanup: true\fR): Selectively closes pages that appear to be leftovers from previous scans based on URL patterns and page state analysis
+.IP \(bu 4
+\fBAggressive mode\fR (\fBwindow_cleanup: "all"\fR): Closes all content pages from previous operations for maximum memory recovery
+.IP \(bu 4
+\fBMain window preservation\fR: Both modes always preserve the main Puppeteer browser window (typically about:blank) to maintain browser instance stability
+.IP \(bu 4
+\fBPopup window handling\fR: Automatically detects and closes popup windows created by previous site scans
+.IP \(bu 4
+\fBTiming protection\fR: 16-second delay ensures no active operations are interrupted during cleanup
+.IP \(bu 4
+\fBMemory estimation\fR: Reports estimated memory freed from closed windows for performance monitoring
+.IP \(bu 4
+\fBActive page protection\fR: Never affects pages currently being processed by concurrent scanning operations
+.RE
 
 .SH EXIT STATUS
 .TP
