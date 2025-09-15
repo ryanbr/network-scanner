@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v1.0.99 ===
+// === Network scanner script (nwss.js) v2.0.0 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -127,7 +127,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '1.0.99'; // Script version
+const VERSION = '2.0.0'; // Script version
 
 // get startTime
 const startTime = Date.now();

@@ -13,7 +13,7 @@
     "lru-cache": "^10.4.3",
     "p-limit": "^4.0.0",
     "psl": "^1.15.0",
-    "puppeteer": ">=20.0.0 <23.0.0"
+    "puppeteer": ">=20.0.0"
   },
   "overrides": {
     "tar-fs": "3.1.0",
