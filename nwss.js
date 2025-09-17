@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.2 ===
+// === Network scanner script (nwss.js) v2.0.3 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -127,7 +127,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.2'; // Script version
+const VERSION = '2.0.3'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1059,17 +1059,48 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 }
 
 function setupFrameHandling(page, forceDebug) {
+  // Track active frames and clear on navigation to prevent detached frame access
+  let activeFrames = new Set();
+  
+  // Clear frame tracking on navigation to prevent stale references
+  page.on('framenavigated', (frame) => {
+    if (frame === page.mainFrame()) {
+      // Main frame navigated - clear all tracked frames
+      activeFrames.clear();
+    }
+  });
+
   // Handle frame creation with error suppression
   page.on('frameattached', async (frame) => {
-    // Enhanced frame handling for Puppeteer 23.x
+    // Enhanced frame handling with detached frame protection
     try {
-      // Check if frame is valid before processing
-      if (frame.isDetached()) {
+      // Multiple checks for frame validity to prevent detached frame errors
+      if (!frame) {
         if (forceDebug) {
-          console.log(formatLogMessage('debug', `Skipping detached frame`));
+          console.log(formatLogMessage('debug', `Skipping null frame`));
         }
         return;
       }
+      
+      // Enhanced frame validation with multiple safety checks
+      let frameUrl;
+      try {
+        // Test frame accessibility first
+        frameUrl = frame.url();
+        
+        // Check if frame is detached (if method exists)
+        if (frame.isDetached && frame.isDetached()) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Skipping detached frame`));
+          }
+          return;
+        }
+      } catch (frameAccessError) {
+        // Frame is not accessible (likely detached)
+        return;
+      }
+      
+      activeFrames.add(frame);
     } catch (detachError) {
       // Frame state checking can throw in 23.x, handle gracefully
       if (forceDebug) {
@@ -1079,9 +1110,7 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     if (frame.parentFrame()) { // Only handle child frames, not main frame
-      try {
-        const frameUrl = frame.url();
-        
+      try {       
         if (forceDebug) {
           console.log(formatLogMessage('debug', `New frame attached: ${frameUrl || 'about:blank'}`));
         }
@@ -1139,7 +1168,17 @@ function setupFrameHandling(page, forceDebug) {
   });
   // Handle frame navigations (keep this for monitoring)
   page.on('framenavigated', (frame) => {
-    const frameUrl = frame.url();
+    let frameUrl;
+
+    // Skip if frame is not in our active set
+    if (!activeFrames.has(frame)) return;
+
+    try {
+      frameUrl = frame.url();
+    } catch (urlErr) {
+      // Frame likely detached during navigation
+      return;
+    }
     if (forceDebug &&
         frameUrl &&
         frameUrl !== 'about:blank' &&
@@ -1154,8 +1193,18 @@ function setupFrameHandling(page, forceDebug) {
 
   // Optional: Handle frame detachment for cleanup
   page.on('framedetached', (frame) => {
+    // Remove from active tracking
+    activeFrames.delete(frame);
+    
+    // Skip logging if we can't access frame URL
+    let frameUrl;
     if (forceDebug) {
-      const frameUrl = frame.url();
+      try {
+        frameUrl = frame.url();
+      } catch (urlErr) {
+        // Frame already detached, can't get URL
+        return;
+      }
       if (frameUrl &&
           frameUrl !== 'about:blank' &&
           frameUrl !== 'about:srcdoc' &&
@@ -1583,6 +1632,11 @@ function setupFrameHandling(page, forceDebug) {
       const shouldInjectEvalForPage = siteConfig.evaluateOnNewDocument === true || globalEvalOnDoc;
       let evalOnDocSuccess = false; // Track injection success for fallback logic
       
+      // PREVENT realtime cleanup during injection to avoid "Session closed" errors
+      if (shouldInjectEvalForPage && siteConfig.window_cleanup === "realtime") {
+          updatePageUsage(page, true); // Mark page as actively processing BEFORE injection
+      }
+
       if (shouldInjectEvalForPage) {
           if (forceDebug) {
               if (globalEvalOnDoc) {
@@ -1595,8 +1649,13 @@ function setupFrameHandling(page, forceDebug) {
           // Strategy 1: Try full injection with health check
           let browserResponsive = false;
           try {
+              // Check if browser is still connected before attempting health check
+              if (!browserInstance.isConnected()) {
+                  throw new Error('Browser not connected');
+              }
+
               await Promise.race([
-                  browserInstance.version(), // Quick responsiveness test
+                  browserInstance.pages(), // Simple existence check that doesn't require active session
                   new Promise((_, reject) => 
                       setTimeout(() => reject(new Error('Browser health check timeout')), 3000)
                   )
@@ -1616,6 +1675,13 @@ function setupFrameHandling(page, forceDebug) {
                   await Promise.race([
                       // Main injection with all safety checks
                       page.evaluateOnNewDocument(() => {
+                          // Prevent duplicate injections
+                          if (window.__nwss_injection_applied) {
+                              console.log('[evalOnDoc] Already injected, skipping');
+                              return;
+                          }
+                          window.__nwss_injection_applied = true;
+
                           // Wrap everything in try-catch to prevent page crashes
                           try {
                               // Add timeout check within the injection
@@ -1719,7 +1785,18 @@ function setupFrameHandling(page, forceDebug) {
                   // Strategy 3: Fallback - Try minimal injection (just fetch monitoring)
                   try {
                       await Promise.race([
-                          page.evaluateOnNewDocument(() => {
+                          (async () => {
+                              // Validate page state before minimal injection
+                              if (!page || page.isClosed()) {
+                                  throw new Error('Page is closed');
+                              }
+                              
+                              const pageUrl = await page.url().catch(() => 'about:blank');
+                              if (pageUrl === 'about:blank') {
+                                  throw new Error('Cannot inject on about:blank');
+                              }
+                              
+                              return page.evaluateOnNewDocument(() => {
                               // Minimal injection - just fetch monitoring
                               if (window.fetch) {
                                   const originalFetch = window.fetch;
@@ -1732,7 +1809,8 @@ function setupFrameHandling(page, forceDebug) {
                                       }
                                   };
                               }
-                          }),
+                              });
+                          })(),
                           new Promise((_, reject) => 
                               setTimeout(() => reject(new Error('Minimal injection timeout')), 3000)
                           )
@@ -1760,6 +1838,10 @@ function setupFrameHandling(page, forceDebug) {
           if (!evalOnDocSuccess) {
               console.warn(formatLogMessage('warn', `[evalOnDoc] All injection strategies failed for ${currentUrl} - continuing with standard request monitoring only`));
           }
+      // Allow realtime cleanup to proceed after injection completes
+      if (shouldInjectEvalForPage && siteConfig.window_cleanup === "realtime") {
+          updatePageUsage(page, false); // Mark page as idle after injection
+      }
       }
       // --- END: evaluateOnNewDocument for Fetch/XHR Interception ---
 
@@ -2161,8 +2243,15 @@ function setupFrameHandling(page, forceDebug) {
         // This prevents redirect destinations from being marked as third-party
         const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
         
-        // Block infinite iframe loops
-        const frameUrl = request.frame() ? request.frame().url() : '';
+        // Block infinite iframe loops - safely access frame URL
+        const frameUrl = (() => {
+          try {
+            const frame = request.frame();
+            return frame ? frame.url() : '';
+          } catch (err) {
+            return '';
+          }
+        })();
         if (frameUrl && frameUrl.includes('creative.dmzjmp.com') && 
             request.url().includes('go.dmzjmp.com/api/models')) {
           if (forceDebug) {
@@ -2174,8 +2263,18 @@ function setupFrameHandling(page, forceDebug) {
 
         // Enhanced debug logging to show which frame the request came from
         if (forceDebug) {
-          const frameUrl = request.frame() ? request.frame().url() : 'unknown-frame';
-          const isMainFrame = request.frame() === page.mainFrame();
+          let frameUrl = 'unknown-frame';
+          let isMainFrame = false;
+          
+          try {
+            const frame = request.frame();
+            if (frame) {
+              frameUrl = frame.url();
+              isMainFrame = frame === page.mainFrame();
+            }
+          } catch (frameErr) {
+            frameUrl = 'detached-frame';
+          }
           console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: ${isMainFrame ? 'main' : 'iframe'}] ${frameUrl} → ${request.url()}`));
         }
 
@@ -2997,6 +3096,14 @@ function setupFrameHandling(page, forceDebug) {
       }
       
       for (let i = 1; i <= totalReloads; i++) {
+        // Clear any stale frame references before reload
+        try {
+          await page.evaluate(() => {
+            // Force cleanup of any pending frame operations
+            if (window.requestIdleCallback) window.requestIdleCallback(() => {});
+          });
+        } catch (cleanupErr) { /* ignore */ }
+
         if (siteConfig.clear_sitedata === true) {
           try {
             let reloadClearSession = null;
