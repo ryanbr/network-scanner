@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.4 ===
+// === Network scanner script (nwss.js) v2.0.5 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -127,7 +127,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.4'; // Script version
+const VERSION = '2.0.5'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1541,10 +1541,17 @@ function setupFrameHandling(page, forceDebug) {
           ? siteConfig.window_cleanup_threshold 
           : REALTIME_CLEANUP_THRESHOLD;
         
-        // Get the site's delay value for cleanup timing
+        // Calculate appropriate delay based on site configuration
         const siteDelay = siteConfig.delay || 4000;
+        const hasCloudflareConfig = siteConfig.cloudflare_bypass || siteConfig.cloudflare_phish;
+        const bufferTime = hasCloudflareConfig ? 23000 : REALTIME_CLEANUP_BUFFER_MS; // 23s for Cloudflare, 15s for normal
+        const totalDelay = siteDelay + bufferTime;
         
-        const realtimeResult = await performRealtimeWindowCleanup(browserInstance, threshold, forceDebug, siteDelay);
+        if (forceDebug && hasCloudflareConfig) {
+          console.log(formatLogMessage('debug', `[realtime_cleanup] Using extended delay for Cloudflare site: ${totalDelay}ms (${siteDelay}ms + ${bufferTime}ms CF buffer)`));
+        }
+        
+        const realtimeResult = await performRealtimeWindowCleanup(browserInstance, threshold, forceDebug, totalDelay);
         if (realtimeResult.success && realtimeResult.closedCount > 0 && forceDebug) {
           console.log(formatLogMessage('debug', `[realtime_cleanup] Cleaned ${realtimeResult.closedCount} old pages, ${realtimeResult.remainingPages} remaining`));
         }
