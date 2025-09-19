@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.5 ===
+// === Network scanner script (nwss.js) v2.0.6 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -127,7 +127,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.5'; // Script version
+const VERSION = '2.0.6'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1903,7 +1903,10 @@ function setupFrameHandling(page, forceDebug) {
           console.log(formatLogMessage('debug', `Request interception enabled successfully for ${currentUrl}`));
         }
       } catch (networkErr) {
-        if (networkErr.message.includes('timed out') || 
+        if (networkErr.message.includes('CRITICAL_NETWORK_ERROR') || 
+            networkErr.message.includes('CRITICAL_BROWSER_ERROR') ||
+            networkErr.message.includes('ProtocolError') ||
+            networkErr.message.includes('timed out') || 
             networkErr.message.includes('Network.enable') || 
             networkErr.message.includes('timeout')) {
           console.warn(formatLogMessage('warn', `Request interception setup failed for ${currentUrl}: ${networkErr.message} - triggering browser restart`));
