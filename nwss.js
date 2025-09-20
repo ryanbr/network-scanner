@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.6 ===
+// === Network scanner script (nwss.js) v2.0.7 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -44,6 +44,8 @@ const { performPageInteraction, createInteractionConfig } = require('./lib/inter
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
+// Enhanced site data clearing functionality
+const { clearSiteData } = require('./lib/clear_sitedata');
 
 // Fast setTimeout helper for Puppeteer 22.x compatibility
 // Uses standard Promise constructor for better performance than node:timers/promises
@@ -127,7 +129,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.6'; // Script version
+const VERSION = '2.0.7'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1926,24 +1928,10 @@ function setupFrameHandling(page, forceDebug) {
 	  
       if (siteConfig.clear_sitedata === true) {
         try {
-          let clearDataSession = null;
-          try {
-            clearDataSession = await page.target().createCDPSession();
-            await clearDataSession.send('Network.clearBrowserCookies');
-            await clearDataSession.send('Network.clearBrowserCache');
-          } finally {
-            if (clearDataSession) {
-              try { await clearDataSession.detach(); } catch (detachErr) { /* ignore */ }
-            }
-          }
-          await page.evaluate(() => {
-            localStorage.clear();
-            sessionStorage.clear();
-            indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
-          });
+          const clearResult = await clearSiteData(page, currentUrl, forceDebug);
           if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data for ${currentUrl}`));
         } catch (clearErr) {
-          console.warn(messageColors.warn(`[clear_sitedata failed] ${currentUrl}: ${clearErr.message}`));
+          if (forceDebug) console.log(formatLogMessage('debug', `[clear_sitedata] Failed for ${currentUrl}: ${clearErr.message}`));
         }
       }
 
@@ -3116,24 +3104,10 @@ function setupFrameHandling(page, forceDebug) {
 
         if (siteConfig.clear_sitedata === true) {
           try {
-            let reloadClearSession = null;
-            try {
-              reloadClearSession = await page.target().createCDPSession();
-              await reloadClearSession.send('Network.clearBrowserCookies');
-              await reloadClearSession.send('Network.clearBrowserCache');
-            } finally {
-              if (reloadClearSession) {
-                try { await reloadClearSession.detach(); } catch (detachErr) { /* ignore */ }
-              }
-            }
-            await page.evaluate(() => {
-              localStorage.clear();
-              sessionStorage.clear();
-              indexedDB.databases().then(dbs => dbs.forEach(db => indexedDB.deleteDatabase(db.name)));
-            });
+            const clearResult = await clearSiteData(page, currentUrl, forceDebug, true); // Quick mode for reloads
             if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data before reload #${i} for ${currentUrl}`));
           } catch (reloadClearErr) {
-            console.warn(messageColors.warn(`[clear_sitedata before reload failed] ${currentUrl}: ${reloadClearErr.message}`));
+            if (forceDebug) console.log(formatLogMessage('debug', `[clear_sitedata] Before reload failed for ${currentUrl}`));
           }
         }
         
@@ -3393,10 +3367,13 @@ function setupFrameHandling(page, forceDebug) {
   // Hang detection for debugging concurrency issues
   let currentBatchInfo = { batchStart: 0, batchSize: 0 };
   const hangDetectionInterval = setInterval(() => {
+  // Only show hang detection messages in debug mode
+  if (forceDebug) {
     const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
     const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
     console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
     console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
+    }
   }, 30000); // Check every 30 seconds
 
   // Process URLs in batches to maintain concurrency while allowing browser restarts
