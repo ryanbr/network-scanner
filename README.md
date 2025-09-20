@@ -134,7 +134,7 @@ Example:
 | Field                | Values | Default | Description |
 |:---------------------|:-------|:-------:|:------------|
 | `url`                | String or Array |   -     | Website URL(s) to scan |
-| `userAgent`          | `chrome`, `firefox`, `safari` | - | User agent for page (latest versions: Chrome 131, Firefox 133, Safari 18.2) |
+| `userAgent`          | `chrome`, `chrome_mac`, `chrome_linux`, `firefox`, `firefox_mac`, `firefox_linux`, `safari` | - | User agent for page |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
 | `regex_and`          | Boolean | `false` | Use AND logic for multiple filterRegex patterns - ALL patterns must match the same URL |
 | `comments`           | String or Array | - | String of comments or references |

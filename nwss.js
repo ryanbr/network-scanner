@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.7 ===
+// === Network scanner script (nwss.js) v2.0.8 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -129,7 +129,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.7'; // Script version
+const VERSION = '2.0.8'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -507,7 +507,7 @@ Redirect Handling Options:
   resourceTypes: ["script", "stylesheet"]     Only process requests of these resource types (default: all types)
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
-  userAgent: "chrome"|"firefox"|"safari"        Custom desktop User-Agent
+  userAgent: "chrome"|"chrome_mac"|"chrome_linux"|"firefox"|"firefox_mac"|"firefox_linux"|"safari"  Custom desktop User-Agent
   interact_intensity: "low"|"medium"|"high"     Interaction simulation intensity (default: medium)
   delay: <milliseconds>                        Delay after load (default: 4000)
   reload: <number>                             Reload page n times after load (default: 1)
@@ -1957,7 +1957,11 @@ function setupFrameHandling(page, forceDebug) {
    if (useCurl && siteConfig.userAgent) {
      const userAgents = {
        chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+       chrome_mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+       chrome_linux: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
        firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0",
+       firefox_mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/142.0",
+       firefox_linux: "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/142.0",
        safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
      };
      curlUserAgent = userAgents[siteConfig.userAgent.toLowerCase()] || '';
