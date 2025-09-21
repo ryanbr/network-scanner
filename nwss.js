@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.8 ===
+// === Network scanner script (nwss.js) v2.0.9 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -129,7 +129,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.8'; // Script version
+const VERSION = '2.0.9'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -555,6 +555,7 @@ FlowProxy Protection Options:
 Advanced Options:
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
+  cdp_specific: ["domain1.com", "domain2.com"] Enable CDP logging only for specific domains in the URL list
   interact_duration: <milliseconds>           Duration of interaction simulation (default: 2000)
   interact_scrolling: true/false              Enable scrolling simulation (default: true)
   interact_clicks: true/false                 Enable element clicking simulation (default: false)
@@ -920,6 +921,30 @@ function safeGetDomain(url, getFullHostname = false) {
       console.log(formatLogMessage('debug', `Malformed URL skipped: ${url} (${urlError.message})`));
     }
     return '';
+  }
+}
+
+/**
+ * Checks if a URL matches any domain in the cdp_specific list
+ * @param {string} url - The URL to check
+ * @param {Array} cdpSpecificList - Array of domains that should have CDP enabled
+ * @returns {boolean} True if URL matches a domain in the list
+ */
+function shouldEnableCDPForUrl(url, cdpSpecificList) {
+  if (!cdpSpecificList || !Array.isArray(cdpSpecificList) || cdpSpecificList.length === 0) {
+    return false;
+  }
+  
+  try {
+    const urlHostname = new URL(url).hostname;
+    return cdpSpecificList.some(domain => {
+      // Remove protocol if present and clean domain
+      const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      // Match exact hostname or subdomain
+      return urlHostname === cleanDomain || urlHostname.endsWith('.' + cleanDomain);
+    });
+  } catch (urlErr) {
+    return false;
   }
 }
 
@@ -1475,6 +1500,24 @@ function setupFrameHandling(page, forceDebug) {
       return { url: currentUrl, rules: [], success: false, skipped: true };
     }
 
+    // Determine CDP enablement based on cdp_specific or traditional cdp setting
+    let shouldEnableCDPForThisUrl = false;
+    if (siteConfig.cdp === true) {
+      // If cdp: true is set, enable CDP for all URLs and ignore cdp_specific
+      shouldEnableCDPForThisUrl = true;
+      if (forceDebug && siteConfig.cdp_specific) {
+        console.log(formatLogMessage('debug', `CDP enabled for all URLs via cdp: true - ignoring cdp_specific for ${currentUrl}`));
+      }
+    } else if (siteConfig.cdp_specific && Array.isArray(siteConfig.cdp_specific)) {
+      // Only use cdp_specific if cdp is not explicitly set to true
+      shouldEnableCDPForThisUrl = shouldEnableCDPForUrl(currentUrl, siteConfig.cdp_specific);
+      if (forceDebug && shouldEnableCDPForThisUrl) {
+        console.log(formatLogMessage('debug', `CDP enabled for ${currentUrl} via cdp_specific domain match`));
+      }
+    } else {
+      shouldEnableCDPForThisUrl = false;
+    }
+
     let page = null;
     let cdpSession = null;
     let cdpSessionManager = null;
@@ -1884,7 +1927,7 @@ function setupFrameHandling(page, forceDebug) {
       try {
         cdpSessionManager = await createCDPSession(page, currentUrl, {
           enableCDP,
-          siteSpecificCDP: siteConfig.cdp,
+          siteSpecificCDP: shouldEnableCDPForThisUrl,
           forceDebug
         });
       } catch (cdpErr) {
@@ -3120,12 +3163,18 @@ function setupFrameHandling(page, forceDebug) {
       if (useForceReload && !reloadSuccess) {
         // Attempt force reload: disable cache, reload, re-enable cache
           try {
-          // Add timeout protection for setCacheEnabled operations
+          // Timeout-protected cache disable
           await Promise.race([
             page.setCacheEnabled(false),
-            new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('setCacheEnabled(false) timeout')), 5000)
-            )
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache disable timeout')), 8000))
+          ]);
+          
+          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
+          
+          // Timeout-protected cache enable
+          await Promise.race([
+            page.setCacheEnabled(true),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache enable timeout')), 8000))
           ]);
           
           await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
@@ -3349,7 +3398,7 @@ function setupFrameHandling(page, forceDebug) {
     urlsToProcess.forEach(url => {
       allTasks.push({
         url,
-        config: site,
+        config: { ...site, _originalUrl: url }, // Preserve original URL for CDP domain checking
         taskId: allTasks.length // For tracking
       });
     });

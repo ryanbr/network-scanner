@@ -282,7 +282,6 @@ Array of CSS selectors to hide elements on the page.
 .B userAgent
 Spoof User-Agent: \fB"chrome"\fR, \fB"chrome_mac"\fR, \fB"chrome_linux"\fR, \fB"firefox"\fR, \fB"firefox_mac"\fR, \fB"firefox_linux"\fR, or \fB"safari"\fR.
 
-
 .TP
 .B interact
 Boolean. Simulate mouse movements and clicks.
@@ -441,6 +440,10 @@ Boolean. Inject Fetch/XHR interceptor scripts into page context.
 .TP
 .B cdp
 Boolean. Enable Chrome DevTools Protocol logging for this specific site.
+
+.TP
+.B cdp_specific
+Array of domain names. Enable Chrome DevTools Protocol logging only for URLs matching these specific domains within a multi-URL site configuration. Takes precedence over \fBcdp: false\fR but is ignored if \fBcdp: true\fR is set. Supports exact hostname matching and subdomain matching (e.g., "example.com" matches both "example.com" and "subdomain.example.com"). Useful for selective debugging of network requests on specific domains while avoiding CDP overhead on others.
 
 .TP
 .B source
@@ -879,6 +882,26 @@ node nwss.js --ignore-cache --debug -o rules.txt
   "userAgent": "chrome"
 }
 .EE
+
+.SS Selective CDP logging for specific domains:
+.EX
+{
+  "url": [
+    "https://site1.com/page1",
+    "https://debug-target.com/page2", 
+    "https://site2.com/page3"
+  ],
+  "filterRegex": "\\\\.(space|website)\\\\b",
+  "cdp_specific": ["debug-target.com"],
+  "resourceTypes": ["script", "fetch"],
+  "comments": [
+    "CDP enabled only for debug-target.com",
+    "Other URLs run without CDP overhead"
+  ]
+}
+.EE
+
+Note: If \fBcdp: true\fR is also set, \fBcdp_specific\fR is ignored and CDP is enabled for all URLs.
 
 .SS FlowProxy protection handling:
 .EX

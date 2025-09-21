@@ -248,6 +248,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `isBrave`            | Boolean | `false` | Spoof Brave browser detection |
 | `evaluateOnNewDocument` | Boolean | `false` | Inject fetch/XHR interceptor in page |
 | `cdp`                | Boolean | `false` | Enable CDP logging for this site |
+| `cdp_specific`       | Array | - | Enable CDP logging only for specific domains in the URL list |
 | `css_blocked`        | Array | - | CSS selectors to hide elements |
 | `source`             | Boolean | `false` | Save page source HTML after load |
 | `screenshot`         | Boolean | `false` | Capture screenshot on load failure |
