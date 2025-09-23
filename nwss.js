@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.9 ===
+// === Network scanner script (nwss.js) v2.0.10 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -66,7 +66,7 @@ const TIMEOUTS = {
   EMERGENCY_RESTART_DELAY: 2000,
   BROWSER_STABILIZE_DELAY: 1000,
   CURL_HANDLER_DELAY: 3000,
-  PROTOCOL_TIMEOUT: 120000,
+  PROTOCOL_TIMEOUT: 160000,
   REDIRECT_JS_TIMEOUT: 5000
 };
 
@@ -126,10 +126,10 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.9'; // Script version
+const VERSION = '2.0.10'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1087,7 +1087,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
 function setupFrameHandling(page, forceDebug) {
   // Track active frames and clear on navigation to prevent detached frame access
-  let activeFrames = new Set();
+  let activeFrames = new Map(); // Use Map to track frame state
   
   // Clear frame tracking on navigation to prevent stale references
   page.on('framenavigated', (frame) => {
@@ -1101,6 +1101,15 @@ function setupFrameHandling(page, forceDebug) {
   page.on('frameattached', async (frame) => {
     // Enhanced frame handling with detached frame protection
     try {
+      // Test frame accessibility first with safe method
+      let isFrameValid = false;
+      try {
+        frame.url(); // This will throw if frame is detached
+        isFrameValid = true;
+      } catch (e) {
+        return; // Frame is already detached, skip
+      }
+
       // Multiple checks for frame validity to prevent detached frame errors
       if (!frame) {
         if (forceDebug) {
@@ -1136,7 +1145,10 @@ function setupFrameHandling(page, forceDebug) {
       return;
     }
 
-    if (frame.parentFrame()) { // Only handle child frames, not main frame
+    // Store frame with timestamp for tracking
+    activeFrames.set(frame, Date.now());
+    
+    if (frame !== page.mainFrame() && frame.parentFrame()) { // Only handle child frames
       try {       
         if (forceDebug) {
           console.log(formatLogMessage('debug', `New frame attached: ${frameUrl || 'about:blank'}`));
@@ -1979,7 +1991,17 @@ function setupFrameHandling(page, forceDebug) {
       }
 
       // --- Apply all fingerprint spoofing (user agent, Brave, fingerprint protection) ---
-      await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
+      try {
+        await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
+      } catch (fingerprintErr) {
+        if (fingerprintErr.message.includes('Session closed') || 
+            fingerprintErr.message.includes('Protocol error') ||
+            fingerprintErr.message.includes('addScriptToEvaluateOnNewDocument')) {
+          console.warn(`[fingerprint protection failed] ${currentUrl}: ${fingerprintErr.message}`);
+        } else {
+          throw fingerprintErr;
+        }
+      }
 
       const regexes = Array.isArray(siteConfig.filterRegex)
         ? siteConfig.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
@@ -3082,6 +3104,18 @@ function setupFrameHandling(page, forceDebug) {
       // Page finished initial loading - mark as idle
       updatePageUsage(page, false);
       } catch (err) {
+        // Handle detached frame errors during navigation
+        if (err.message.includes('Navigating frame was detached') || 
+            err.message.includes('Attempted to use detached')) {
+          // Silent handling - this is expected for iframe-heavy sites
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Frame detachment during navigation (expected): ${currentUrl}`));
+          }
+          // Continue with partial success - don't fail completely
+          currentPageUrl = currentUrl;
+          siteCounter++;
+          // Skip to post-navigation processing
+        } else {
         // Enhanced error handling for redirect timeouts using redirect module
         const timeoutResult = await handleRedirectTimeout(page, currentUrl, err, safeGetDomain, forceDebug, formatLogMessage);
         
@@ -3094,6 +3128,7 @@ function setupFrameHandling(page, forceDebug) {
           console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
           throw err;
         }
+      }
       }
 
       if (interactEnabled && !disableInteract) {
@@ -3141,13 +3176,41 @@ function setupFrameHandling(page, forceDebug) {
       }
       
       for (let i = 1; i <= totalReloads; i++) {
-        // Clear any stale frame references before reload
+  // Check browser health before attempting reload
+  try {
+    const browserHealthy = await isQuicklyResponsive(browser, 2000);
+    if (!browserHealthy) {
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', `Browser unresponsive before reload #${i}, skipping remaining reloads`));
+      }
+      console.warn(`Browser unresponsive before reload #${i}, skipping remaining reloads`);
+      break;
+    }
+  } catch (healthErr) {
+    console.warn(`Browser health check failed before reload #${i}: ${healthErr.message}`);
+    break;
+  }
+        // Check if page is still valid before attempting reload
+        let pageStillValid = false;
         try {
-          await page.evaluate(() => {
-            // Force cleanup of any pending frame operations
-            if (window.requestIdleCallback) window.requestIdleCallback(() => {});
-          });
-        } catch (cleanupErr) { /* ignore */ }
+    // Add timeout to page validity check
+    await Promise.race([
+      page.evaluate(() => true),
+      new Promise((_, reject) => 
+        setTimeout(() => reject(new Error('Page validity check timeout')), 3000)
+      )
+    ]);
+          pageStillValid = true;
+        } catch (validityCheck) {
+          console.warn(`Page invalid before reload #${i}, skipping remaining reloads`);
+          break;
+        }
+        
+        // Use comprehensive cleanup from browserhealth module
+        await cleanupPageBeforeReload(page, forceDebug);
+        
+        // Add stabilization delay after cleanup
+        await fastTimeout(1000);
 
         if (siteConfig.clear_sitedata === true) {
           try {
@@ -3159,8 +3222,11 @@ function setupFrameHandling(page, forceDebug) {
         }
         
       let reloadSuccess = false;
+
+  // Skip force reload if browser seems unhealthy
+  const skipForceReload = i > 2; // After 2 attempts, skip force reload
       
-      if (useForceReload && !reloadSuccess) {
+      if (useForceReload && !reloadSuccess && !skipForceReload) {
         // Attempt force reload: disable cache, reload, re-enable cache
           try {
           // Timeout-protected cache disable
@@ -3169,28 +3235,23 @@ function setupFrameHandling(page, forceDebug) {
             new Promise((_, reject) => setTimeout(() => reject(new Error('Cache disable timeout')), 8000))
           ]);
           
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
+            // Use networkidle2 for force reload to better detect when page is actually loaded
+            await page.reload({ waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) });
           
           // Timeout-protected cache enable
           await Promise.race([
             page.setCacheEnabled(true),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Cache enable timeout')), 8000))
           ]);
-          
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 12000) });
-          
-          await Promise.race([
-            page.setCacheEnabled(true),
-            new Promise((_, reject) => 
-              setTimeout(() => reject(new Error('setCacheEnabled(true) timeout')), 5000)
-            )
-          ]);
-          
+         
           reloadSuccess = true;
             if (forceDebug) console.log(formatLogMessage('debug', `Force reload #${i} completed for ${currentUrl}`));
 
           } catch (forceReloadErr) {
-          console.warn(messageColors.warn(`[force reload #${i} failed] ${currentUrl}: ${forceReloadErr.message} - falling back to standard reload`));
+            // Don't warn for timeouts on problematic sites, just fall back silently
+            if (forceDebug || !forceReloadErr.message.includes('timeout')) {
+              console.warn(messageColors.warn(`[force reload #${i} failed] ${currentUrl}: ${forceReloadErr.message} - falling back to standard reload`));
+            }
           reloadSuccess = false; // Ensure we try standard reload
         }
       }
@@ -3198,24 +3259,39 @@ function setupFrameHandling(page, forceDebug) {
       // Fallback to standard reload if force reload failed or wasn't attempted
       if (!reloadSuccess) {
         try {
-          // Reduced timeout for faster failure detection
-          const standardReloadTimeout = Math.min(timeout, 8000); // Reduced from 15000ms
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: standardReloadTimeout });
+            const canReload = await page.evaluate(() => {
+              return !!(document && document.body);
+            }).catch(() => false);
+            
+            if (!canReload) {
+              throw new Error('Page document invalid for reload');
+            }
+
+            // Use networkidle2 with reasonable timeout
+      // Use simpler reload for problematic pages
+      const reloadOptions = i > 1 
+        ? { waitUntil: 'domcontentloaded', timeout: 10000 }  // Simpler after failures
+        : { waitUntil: 'networkidle2', timeout: 15000 };     // Full wait first time
+      
+      await page.reload(reloadOptions);
+            
           if (forceDebug) console.log(formatLogMessage('debug', `Standard reload #${i} completed for ${currentUrl}`));
         } catch (standardReloadErr) {
-          console.warn(messageColors.warn(`[standard reload #${i} failed] ${currentUrl}: ${standardReloadErr.message}`));
+            // Only warn for non-timeout errors
+            if (!standardReloadErr.message.includes('timeout')) {
+              console.warn(messageColors.warn(`[standard reload #${i} failed] ${currentUrl}: ${standardReloadErr.message}`));
+            } else if (forceDebug) {
+              console.log(formatLogMessage('debug', `Reload #${i} timed out for ${currentUrl}, continuing anyway`));
+            }
           
           // Check if this is a persistent failure that should skip remaining reloads
-          const isPersistentFailure = standardReloadErr.message.includes('Navigation timeout') || 
+            const isPersistentFailure = standardReloadErr.message.includes('detached Frame') ||
+                                     standardReloadErr.message.includes('Attempted to use detached') ||
+                                     standardReloadErr.message.includes('Navigating frame was detached') ||
+                                     standardReloadErr.message.includes('document invalid') ||
                                      standardReloadErr.message.includes('net::ERR_') ||
                                      standardReloadErr.message.includes('Protocol error') ||
-                                     standardReloadErr.message.includes('Page crashed') ||
-                                     // CDP and injection failures
-                                     standardReloadErr.constructor.name === 'ProtocolError' ||
-                                     standardReloadErr.name === 'ProtocolError' ||
-                                     standardReloadErr.message.includes('addScriptToEvaluateOnNewDocument timed out') ||
-                                     standardReloadErr.message.includes('Runtime.callFunctionOn timed out') ||
-                                     standardReloadErr.message.includes('CDP injection timeout');
+                                       standardReloadErr.message.includes('Page crashed');
           
           if (isPersistentFailure) {
             const remainingReloads = totalReloads - i;
@@ -3225,16 +3301,16 @@ function setupFrameHandling(page, forceDebug) {
             // Break out of reload loop to move to next URL faster
             break;
           }
+            // For navigation timeouts, we can continue - the page might still be partially loaded
+            // Don't break the loop for simple timeouts
           }
-        } else {
-          // Regular reload
-          await page.reload({ waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) });
         }
 
       // Only add delay if we're continuing with more reloads
       if (i < totalReloads) {
-
-        await fastTimeout(delayMs);
+    // Reduce delay for problematic sites
+    const adjustedDelay = i > 1 ? Math.min(delayMs, 2000) : delayMs;
+    await fastTimeout(adjustedDelay);
       }
     }
     
