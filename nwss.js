@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.10 ===
+// === Network scanner script (nwss.js) v2.0.11 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -55,19 +55,20 @@ function fastTimeout(ms) {
 
 // --- Configuration Constants ---
 const TIMEOUTS = {
-  DEFAULT_PAGE: 30000,
-  DEFAULT_NAVIGATION: 25000,
+  DEFAULT_PAGE: 35000,                // Standard page load timeout (35s)
+  DEFAULT_NAVIGATION: 25000,          // Navigation operation timeout
   DEFAULT_NAVIGATION_REDUCED: 20000,  // Reduced timeout for faster failures
-  DEFAULT_PAGE_REDUCED: 15000,        // Reduced page timeout
-  FRAME_LOAD_WAIT: 2000,
-  NETWORK_IDLE: 2000,
-  NETWORK_IDLE_MAX: 10000,
-  FAST_SITE_THRESHOLD: 15000,
-  EMERGENCY_RESTART_DELAY: 2000,
-  BROWSER_STABILIZE_DELAY: 1000,
-  CURL_HANDLER_DELAY: 3000,
-  PROTOCOL_TIMEOUT: 160000,
-  REDIRECT_JS_TIMEOUT: 5000
+  DEFAULT_PAGE_REDUCED: 15000,        // Faster page timeout for quick failures
+  FRAME_LOAD_WAIT: 2000,              // Wait time for iframes to load 
+  DEFAULT_DELAY: 6000,                // Default delay: after page load
+  NETWORK_IDLE: 2000,                 // Network idle detection time
+  NETWORK_IDLE_MAX: 10000,            // Maximum network idle wait time
+  FAST_SITE_THRESHOLD: 15000,         // Threshold for "fast site" optimizations
+  EMERGENCY_RESTART_DELAY: 2000,      // Delay after emergency browser restart
+  BROWSER_STABILIZE_DELAY: 1000,      // Browser stabilization after restart
+  CURL_HANDLER_DELAY: 3000,           // Wait for async curl operations
+  PROTOCOL_TIMEOUT: 180000,           // Chrome DevTools Protocol timeout
+  REDIRECT_JS_TIMEOUT: 5000           // JavaScript redirect detection timeout
 };
 
 const CACHE_LIMITS = {
@@ -129,7 +130,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.10'; // Script version
+const VERSION = '2.0.11'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -3140,7 +3141,7 @@ function setupFrameHandling(page, forceDebug) {
         await performPageInteraction(page, currentUrl, interactionConfig, forceDebug);
       }
 
-      const delayMs = siteConfig.delay || 4000;
+      const delayMs = DEFAULT_DELAY;
       
       // Optimized delays for Puppeteer 23.x performance
       const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
@@ -3309,7 +3310,7 @@ function setupFrameHandling(page, forceDebug) {
       // Only add delay if we're continuing with more reloads
       if (i < totalReloads) {
     // Reduce delay for problematic sites
-    const adjustedDelay = i > 1 ? Math.min(delayMs, 2000) : delayMs;
+    const adjustedDelay = i > 1 ? Math.min(DEFAULT_DELAY, 2000) : DEFAULT_DELAY;
     await fastTimeout(adjustedDelay);
       }
     }
