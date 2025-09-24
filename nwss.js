@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.12 ===
+// === Network scanner script (nwss.js) v2.0.13 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -130,7 +130,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.12'; // Script version
+const VERSION = '2.0.13'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -3278,11 +3278,20 @@ function setupFrameHandling(page, forceDebug) {
             
           if (forceDebug) console.log(formatLogMessage('debug', `Standard reload #${i} completed for ${currentUrl}`));
         } catch (standardReloadErr) {
-            // Only warn for non-timeout errors
-            if (!standardReloadErr.message.includes('timeout')) {
+            // Categorize errors into expected vs unexpected
+            const isExpectedError = standardReloadErr.message.includes('timeout') ||
+                                   standardReloadErr.message.includes('detached Frame') ||
+                                   standardReloadErr.message.includes('Attempted to use detached') ||
+                                   standardReloadErr.message.includes('Navigating frame was detached') ||
+                                   standardReloadErr.message.includes('document invalid') ||
+                                   standardReloadErr.message.includes('Page document invalid');
+            
+            if (!isExpectedError) {
+              // Only warn for truly unexpected errors
               console.warn(messageColors.warn(`[standard reload #${i} failed] ${currentUrl}: ${standardReloadErr.message}`));
             } else if (forceDebug) {
-              console.log(formatLogMessage('debug', `Reload #${i} timed out for ${currentUrl}, continuing anyway`));
+              // Expected errors only shown in debug mode
+              console.log(formatLogMessage('debug', `[reload #${i}] Expected error for ${currentUrl}: ${standardReloadErr.message}`));
             }
           
           // Check if this is a persistent failure that should skip remaining reloads
