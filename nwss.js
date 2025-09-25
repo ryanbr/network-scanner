@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.14 ===
+// === Network scanner script (nwss.js) v2.0.15 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -130,7 +130,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.14'; // Script version
+const VERSION = '2.0.15'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1335,6 +1335,7 @@ function setupFrameHandling(page, forceDebug) {
         '--memory-pressure-off',
         '--max_old_space_size=2048',
         '--no-first-run',
+        '--disable-prompt-on-repost',  // Fixes form popup on page reload
         '--disable-default-apps',
         '--disable-component-extensions-with-background-pages',
         '--disable-background-networking',
@@ -1994,6 +1995,34 @@ function setupFrameHandling(page, forceDebug) {
       // --- Apply all fingerprint spoofing (user agent, Brave, fingerprint protection) ---
       try {
         await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
+        
+        // Client Hints protection for Chrome user agents
+        if (siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
+          let platform = 'Windows';
+          let platformVersion = '15.0.0';
+          let arch = 'x86';
+          
+          if (siteConfig.userAgent.toLowerCase() === 'chrome_mac') {
+            platform = 'macOS';
+            platformVersion = '13.5.0';
+            arch = 'arm';
+          } else if (siteConfig.userAgent.toLowerCase() === 'chrome_linux') {
+            platform = 'Linux';
+            platformVersion = '6.5.0';
+            arch = 'x86';
+          }
+          
+          await page.setExtraHTTPHeaders({
+            'Sec-CH-UA': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+            'Sec-CH-UA-Platform': `"${platform}"`,
+            'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
+            'Sec-CH-UA-Mobile': '?0',
+            'Sec-CH-UA-Arch': `"${arch}"`,
+            'Sec-CH-UA-Bitness': '"64"',
+            'Sec-CH-UA-Full-Version': '"140.0.7339.208"',
+            'Sec-CH-UA-Full-Version-List': '"Chromium";v="140.0.7339.208", "Not=A?Brand";v="24.0.0.0", "Google Chrome";v="140.0.7339.208"'
+          });
+        }
       } catch (fingerprintErr) {
         if (fingerprintErr.message.includes('Session closed') || 
             fingerprintErr.message.includes('Protocol error') ||
