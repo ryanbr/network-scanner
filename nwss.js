@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.17 ===
+// === Network scanner script (nwss.js) v2.0.18 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -130,7 +130,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.17'; // Script version
+const VERSION = '2.0.18'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -2555,7 +2555,7 @@ function setupFrameHandling(page, forceDebug) {
               const netToolsHandler = createNetToolsHandler({
                 whoisTerms,
                 whoisOrTerms,
-                whoisDelay: siteConfig.whois_delay || whois_delay,
+                whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
                 whoisServer,
                 whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
                 debugLogFile,
@@ -2662,7 +2662,7 @@ function setupFrameHandling(page, forceDebug) {
              const netToolsHandler = createNetToolsHandler({
                whoisTerms,
                whoisOrTerms,
-               whoisDelay: siteConfig.whois_delay || whois_delay, // Site-specific or global fallback
+               whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay, // Site-specific or global fallback
 	       whoisServer, // Pass whois server configuration
                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
                debugLogFile, // Pass debug log file for whois error logging
