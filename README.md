@@ -35,8 +35,8 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 
 | Argument                  | Description |
 |:---------------------------|:------------|
-| `--localhost`               | Output as `127.0.0.1 domain.com` |
-| `--localhost-0.0.0.0`       | Output as `0.0.0.0 domain.com` |
+| `--localhost[=IP]`          | Output as `IP domain.com` (default: 127.0.0.1) |
+|                             | Examples: `--localhost`, `--localhost=0.0.0.0`, `--localhost=192.168.1.1` |
 | `--plain`                   | Output just domains (no adblock formatting) |
 | `--dnsmasq`                 | Output as `local=/domain.com/` (dnsmasq format) |
 | `--dnsmasq-old`             | Output as `server=/domain.com/` (dnsmasq old format) |
@@ -253,6 +253,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `source`             | Boolean | `false` | Save page source HTML after load |
 | `screenshot`         | Boolean | `false` | Capture screenshot on load failure |
 | `headful`            | Boolean | `false` | Launch browser with GUI for this site |
+| `localhost`          | String | - | Force custom IP format for this site (e.g., "127.0.0.1", "0.0.0.0", "192.168.1.1") |
 | `adblock_rules`      | Boolean | `false` | Generate adblock filter rules with resource types for this site |
 | `interact_duration`  | Milliseconds | `2000` | Duration of interaction simulation |
 | `interact_scrolling` | Boolean | `true` | Enable scrolling simulation |

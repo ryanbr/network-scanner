@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.19 ===
+// === Network scanner script (nwss.js) v2.0.20 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -130,7 +130,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.19'; // Script version
+const VERSION = '2.0.20'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -173,8 +173,12 @@ const silentMode = args.includes('--silent');
 const showTitles = args.includes('--titles');
 const dumpUrls = args.includes('--dumpurls');
 const subDomainsMode = args.includes('--sub-domains');
-const localhostMode = args.includes('--localhost');
-const localhostModeAlt = args.includes('--localhost-0.0.0.0');
+// Parse --localhost with optional IP address
+let localhostIP = null;
+const localhostIndex = args.findIndex(arg => arg.startsWith('--localhost'));
+if (localhostIndex !== -1) {
+  localhostIP = args[localhostIndex].includes('=') ? args[localhostIndex].split('=')[1] : '127.0.0.1';
+}
 const disableInteract = args.includes('--no-interact');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
@@ -230,7 +234,7 @@ if (adblockRulesMode) {
   if (!outputFile) {
     if (forceDebug) console.log(formatLogMessage('debug', `--adblock-rules ignored: requires --output (-o) to specify an output file`));
     adblockRulesMode = false;
-  } else if (localhostMode || localhostModeAlt || plainOutput || dnsmasqMode || dnsmasqOldMode || unboundMode || privoxyMode || piholeMode) {
+  } else if (localhostIP || plainOutput || dnsmasqMode || dnsmasqOldMode || unboundMode || privoxyMode || piholeMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--adblock-rules ignored: incompatible with localhost/plain output modes`));
     adblockRulesMode = false;
   }
@@ -238,7 +242,7 @@ if (adblockRulesMode) {
 
 // Validate --dnsmasq usage
 if (dnsmasqMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqOldMode || unboundMode || privoxyMode || piholeMode) {
+  if (localhostIP || plainOutput || adblockRulesMode || dnsmasqOldMode || unboundMode || privoxyMode || piholeMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     dnsmasqMode = false;
   }
@@ -246,7 +250,7 @@ if (dnsmasqMode) {
 
 // Validate --dnsmasq-old usage
 if (dnsmasqOldMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || unboundMode || privoxyMode || piholeMode) {
+  if (localhostIP || plainOutput || adblockRulesMode || dnsmasqMode || unboundMode || privoxyMode || piholeMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--dnsmasq-old ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     dnsmasqOldMode = false;
   }
@@ -254,7 +258,7 @@ if (dnsmasqOldMode) {
 
 // Validate --unbound usage
 if (unboundMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || privoxyMode || piholeMode) {
+  if (localhostIP || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || privoxyMode || piholeMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--unbound ignored: incompatible with localhost/plain/adblock-rules/dnsmasq output modes`));
     unboundMode = false;
   }
@@ -262,7 +266,7 @@ if (unboundMode) {
 
 // Validate --privoxy usage
 if (privoxyMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || unboundMode || piholeMode) {
+  if (localhostIP || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || unboundMode || piholeMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--privoxy ignored: incompatible with localhost/plain/adblock-rules/dnsmasq/unbound output modes`));
     privoxyMode = false;
   }
@@ -270,7 +274,7 @@ if (privoxyMode) {
 
 // Validate --pihole usage
 if (piholeMode) {
-  if (localhostMode || localhostModeAlt || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || unboundMode || privoxyMode) {
+  if (localhostIP || plainOutput || adblockRulesMode || dnsmasqMode || dnsmasqOldMode || unboundMode || privoxyMode) {
     if (forceDebug) console.log(formatLogMessage('debug', `--pihole ignored: incompatible with localhost/plain/adblock-rules/dnsmasq/unbound/privoxy output modes`));
     piholeMode = false;
   }
@@ -430,8 +434,8 @@ Options:
   --append                       Append new rules to output file instead of overwriting (requires -o)
     
 Output Format Options:
-  --localhost                    Output as 127.0.0.1 domain.com
-  --localhost-0.0.0.0            Output as 0.0.0.0 domain.com
+  --localhost[=IP]               Output as IP domain.com (default: 127.0.0.1)
+                                 Examples: --localhost, --localhost=0.0.0.0, --localhost=192.168.1.1
   --plain                        Output just domains (no adblock formatting)
   --dnsmasq                      Output as local=/domain.com/ (dnsmasq format)
   --dnsmasq-old                  Output as server=/domain.com/ (dnsmasq old format)
@@ -1478,8 +1482,7 @@ function setupFrameHandling(page, forceDebug) {
     const allowFirstParty = siteConfig.firstParty === true || siteConfig.firstParty === 1;
     const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === true || siteConfig.thirdParty === 1;
     const perSiteSubDomains = siteConfig.subDomains === 1 ? true : subDomainsMode;
-    const siteLocalhost = siteConfig.localhost === true;
-    const siteLocalhostAlt = siteConfig.localhost_0_0_0_0 === true;
+    const siteLocalhostIP = siteConfig.localhost || null;
     const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
     const cloudflareBypass = siteConfig.cloudflare_bypass === true;
     // Add redirect and same-page loop protection
@@ -3392,8 +3395,7 @@ function setupFrameHandling(page, forceDebug) {
       } else {
         // Format rules using the output module
         const globalOptions = {
-        localhostMode,
-        localhostModeAlt,
+        localhostIP,
         plainOutput,
         adblockRulesMode,
         dnsmasqMode,
@@ -3434,8 +3436,7 @@ function setupFrameHandling(page, forceDebug) {
       // For other errors, preserve any matches we found before the error
       if (matchedDomains && (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0))) {
         const globalOptions = {
-          localhostMode,
-          localhostModeAlt,
+          localhostIP,
           plainOutput,
           adblockRulesMode,
           dnsmasqMode,
@@ -3883,8 +3884,7 @@ function setupFrameHandling(page, forceDebug) {
   const detectedDomainsCount = getDetectedDomainsCount();
   if (forceDebug) {
     const globalOptions = {
-      localhostMode,
-      localhostModeAlt,
+      localhostIP,
       plainOutput,
       adblockRules: adblockRulesMode,
       dnsmasq: dnsmasqMode,

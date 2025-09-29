@@ -33,12 +33,15 @@ Enable colored console output for status messages.
 
 .SS Output Format Options
 .TP
-.B \--localhost
-Output rules as \fB127.0.0.1 domain.com\fR format for hosts file.
+.BR \--localhost [ =\fIIP\fR ]
+Output rules as \fBIP domain.com\fR format for hosts file. If no IP is specified, defaults to \fB127.0.0.1\fR.
 
-.TP
-.B \--localhost-0.0.0.0
-Output rules as \fB0.0.0.0 domain.com\fR format for hosts file.
+Examples:
+.RS
+\fB\--localhost\fR (uses 127.0.0.1)
+\fB\--localhost=0.0.0.0\fR
+\fB\--localhost=192.168.1.1\fR
+.RE
 
 .TP
 .B \--plain
@@ -578,11 +581,9 @@ Number. Output full subdomains instead of root domains (1/0).
 
 .TP
 .B localhost
-Boolean. Force localhost output format (127.0.0.1) for this site.
+String. Force custom IP format for this site. Examples: \fB"127.0.0.1"\fR, \fB"0.0.0.0"\fR, \fB"192.168.1.1"\fR, \fB"10.0.0.1"\fR.
 
-.TP
-.B localhost_0_0_0_0
-Boolean. Force localhost output format (0.0.0.0) for this site.
+When set, overrides global \fB\--localhost\fR flag for this specific site.
 
 .TP
 .B dnsmasq
@@ -970,9 +971,11 @@ Format: \fB(^|\\.)domain\\.com$\fR
 For Pi-hole regex filters. Blocks domain and subdomains at DNS level.
 
 .SS Hosts File Formats
-Flags: \fB\--localhost\fR, \fB\--localhost-0.0.0.0\fR
+Flag: \fB\--localhost[=IP]\fR
 .br
-Formats: \fB127.0.0.1 domain.com\fR, \fB0.0.0.0 domain.com\fR
+Format: \fBIP domain.com\fR (default IP: 127.0.0.1)
+.br
+Examples: \fB\--localhost\fR, \fB\--localhost=0.0.0.0\fR, \fB\--localhost=10.0.0.1\fR
 .br
 For system hosts files.
 
@@ -987,6 +990,19 @@ Flag: \fB\--plain\fR
 Format: \fBdomain.com\fR
 .br
 Simple domain list without formatting.
+
+.SS Custom IP Examples
+.EX
+# Standard localhost blocking
+node nwss.js -o hosts.txt --localhost
+
+# Block to null route
+node nwss.js -o hosts.txt --localhost=0.0.0.0
+
+# Route to local server
+node nwss.js -o hosts.txt --localhost=192.168.1.100
+node nwss.js -o hosts.txt --localhost=10.0.0.1
+.EE
 
 .SH FILES
 
@@ -1089,6 +1105,16 @@ Report bugs to the project repository or maintainer.
 .BR dnsmasq (8),
 .BR unbound (8),
 .BR privoxy (8)
+
+.SH EXAMPLES OF CONFIG WITH CUSTOM LOCALHOST IP
+.EX
+{
+  "url": "https://example.com",
+  "filterRegex": "ads|tracking",
+  "localhost": "10.0.0.1"
+}
+.EE
+This configuration will output rules in the format \fB10.0.0.1 domain.com\fR for this specific site, overriding any global \fB\--localhost\fR flag.
 
 .SH AUTHORS
 Written for malware research and network security analysis.
