@@ -516,7 +516,7 @@ Redirect Handling Options:
   interact_intensity: "low"|"medium"|"high"     Interaction simulation intensity (default: medium)
   delay: <milliseconds>                        Delay after load (default: 4000)
   reload: <number>                             Reload page n times after load (default: 1)
-  forcereload: true/false                      Force an additional reload after reloads
+  forcereload: true/false or ["domain1.com", "domain2.com"]  Force cache-clearing reload for all URLs or specific domains
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
   subDomains: 1/0                              Output full subdomains (default: 0)
   localhost: true/false                        Force localhost output (127.0.0.1)

@@ -303,7 +303,7 @@ Number of times to reload the page (default: 1).
 
 .TP
 .B forcereload
-Boolean. Force an additional reload after reloads.
+Boolean or Array. Force cache-clearing reload for all URLs or specific domains. Can be \fBtrue\fR/\fBfalse\fR or array of domain names like \fB["domain1.com", "domain2.com"]\fR. When set to \fBtrue\fR, applies to all URLs in the site configuration. When set to an array, applies only to URLs whose domains match the specified domains. Supports exact hostname matching and subdomain matching (e.g., "example.com" matches both "example.com" and "subdomain.example.com"). Domain matching is case-insensitive and automatically handles protocols, ports, and paths.
 
 .TP
 .B timeout
@@ -781,6 +781,37 @@ With default settings (\fBignore_similar_threshold: 80\fR):
       "resourceTypes": ["script", "fetch", "xhr"]
     }
   ]
+}
+.EE
+
+.SS Force reload examples:
+.EX
+# Force reload for all URLs in a site configuration
+{
+  "url": ["https://site1.com", "https://site2.com"],
+  "filterRegex": "ads|tracking",
+  "forcereload": true
+}
+
+# Force reload only for specific domains
+{
+  "url": [
+    "https://example.com/page1",
+    "https://test.org/page2", 
+    "https://demo.net/page3"
+  ],
+  "filterRegex": "\\\\.(space|website)\\\\b",
+  "forcereload": ["example.com", "demo.net"],
+  "comments": [
+    "Only example.com and demo.net URLs get force reload",
+    "test.org URLs use standard reload"
+  ]
+}
+
+# Mixed configuration with domain-specific force reload
+{
+  "url": "https://cdn.example.com/content/page.html",
+  "forcereload": ["example.com"]
 }
 .EE
 
