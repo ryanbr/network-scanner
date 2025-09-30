@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.20 ===
+// === Network scanner script (nwss.js) v2.0.21 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -130,7 +130,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.20'; // Script version
+const VERSION = '2.0.21'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -3209,30 +3209,70 @@ function setupFrameHandling(page, forceDebug) {
         // Original behavior: force reload for all URLs
         useForceReload = true;
       } else if (Array.isArray(siteConfig.forcereload)) {
+        // Input validation: filter out invalid entries
+        const validDomains = siteConfig.forcereload.filter(domain => {
+          if (typeof domain !== 'string') {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `Invalid forcereload entry (not string): ${typeof domain} - ${JSON.stringify(domain)}`));
+            }
+            return false;
+          }
+          
+          if (domain.trim() === '') {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `Invalid forcereload entry (empty string)`));
+            }
+            return false;
+          }
+          
+          return true;
+        });
+        
+        if (validDomains.length === 0) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `No valid domains in forcereload array for ${currentUrl}`));
+          }
+          useForceReload = false;
+        } else {
         // New behavior: force reload only for matching domains
         const currentDomain = safeGetDomain(currentUrl, true); // Get full hostname
         const currentRootDomain = safeGetDomain(currentUrl, false); // Get root domain
         
-        useForceReload = siteConfig.forcereload.some(domain => {
-          // Clean the domain (remove protocol if present)
-          const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+        useForceReload = validDomains.some(domain => {
+          // Enhanced domain cleaning: handle protocols, ports, paths, and normalize case
+          let cleanDomain = domain.trim();
+          cleanDomain = cleanDomain.replace(/^https?:\/\//, '');  // Remove protocol
+          cleanDomain = cleanDomain.replace(/:\d+$/, '');         // Remove port (e.g., :8080)
+          cleanDomain = cleanDomain.replace(/\/.*$/, '');         // Remove path
+          cleanDomain = cleanDomain.toLowerCase();               // Normalize case
+          
+          // Additional validation: basic domain format check
+          if (!/^[a-z0-9.-]+$/.test(cleanDomain)) {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `Skipping invalid domain format in forcereload: ${domain} -> ${cleanDomain}`));
+            }
+            return false;
+          }
           
           // Check if current URL matches this domain
           // Support both exact hostname match and subdomain match
-          if (currentDomain === cleanDomain || currentRootDomain === cleanDomain) {
+          if (currentDomain.toLowerCase() === cleanDomain || currentRootDomain.toLowerCase() === cleanDomain) {
             return true;
           }
           
           // Check if current hostname ends with the domain (subdomain match)
-          if (currentDomain.endsWith('.' + cleanDomain)) {
+          if (currentDomain.toLowerCase().endsWith('.' + cleanDomain)) {
             return true;
           }
           
           return false;
         });
+        }
         
         if (forceDebug && useForceReload) {
           console.log(formatLogMessage('debug', `Force reload enabled for ${currentUrl} - matches domain in forcereload list`));
+        } else if (forceDebug && validDomains.length > 0) {
+          console.log(formatLogMessage('debug', `Force reload not applied for ${currentUrl} - no domain match in [${validDomains.join(', ')}]`));
         }
       }
       // If forcereload is not specified, false, or any other value, useForceReload remains false
