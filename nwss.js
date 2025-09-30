@@ -3202,7 +3202,40 @@ function setupFrameHandling(page, forceDebug) {
       updatePageUsage(page, true);
 
       const totalReloads = (siteConfig.reload || 1) - 1; // Subtract 1 because initial load counts as first
-      const useForceReload = siteConfig.forcereload === true;
+      
+      // Enhanced forcereload logic: support boolean or domain array
+      let useForceReload = false;
+      if (siteConfig.forcereload === true) {
+        // Original behavior: force reload for all URLs
+        useForceReload = true;
+      } else if (Array.isArray(siteConfig.forcereload)) {
+        // New behavior: force reload only for matching domains
+        const currentDomain = safeGetDomain(currentUrl, true); // Get full hostname
+        const currentRootDomain = safeGetDomain(currentUrl, false); // Get root domain
+        
+        useForceReload = siteConfig.forcereload.some(domain => {
+          // Clean the domain (remove protocol if present)
+          const cleanDomain = domain.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+          
+          // Check if current URL matches this domain
+          // Support both exact hostname match and subdomain match
+          if (currentDomain === cleanDomain || currentRootDomain === cleanDomain) {
+            return true;
+          }
+          
+          // Check if current hostname ends with the domain (subdomain match)
+          if (currentDomain.endsWith('.' + cleanDomain)) {
+            return true;
+          }
+          
+          return false;
+        });
+        
+        if (forceDebug && useForceReload) {
+          console.log(formatLogMessage('debug', `Force reload enabled for ${currentUrl} - matches domain in forcereload list`));
+        }
+      }
+      // If forcereload is not specified, false, or any other value, useForceReload remains false
       
       if (useForceReload && forceDebug) {
         console.log(formatLogMessage('debug', `Using force reload mechanism for all ${totalReloads + 1} reload(s) on ${currentUrl}`));
