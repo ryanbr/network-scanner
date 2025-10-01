@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.22 ===
+// === Network scanner script (nwss.js) v2.0.23 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -132,7 +132,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.22'; // Script version
+const VERSION = '2.0.23'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -575,7 +575,7 @@ Advanced Options:
   whois_timeout_multiplier: 1.5              Timeout increase multiplier per retry (default: 1.5)
   whois_use_fallback: true                   Add TLD-specific fallback servers (default: true)
   whois_retry_on_timeout: true               Retry on timeout errors (default: true)
-  whois_retry_on_error: false                Retry on connection/other errors (default: false)
+  whois_retry_on_error: true                 Retry on connection/other errors (default: true)
   whois_delay: <milliseconds>                Delay between whois requests for this site (default: global whois_delay)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
   dig-or: ["term1", "term2"]                  Check dig output for ANY specified term (OR logic)
