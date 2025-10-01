@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.21 ===
+// === Network scanner script (nwss.js) v2.0.22 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -44,6 +44,8 @@ const { performPageInteraction, createInteractionConfig } = require('./lib/inter
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
+// Dry run functionality
+const { initializeDryRunCollections, addDryRunMatch, addDryRunNetTools, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
 
@@ -130,7 +132,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.21'; // Script version
+const VERSION = '2.0.22'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -954,103 +956,6 @@ function shouldEnableCDPForUrl(url, cdpSpecificList) {
 }
 
 /**
- * Outputs dry run results to console with formatted display
- * If outputFile is specified, also captures output for file writing
- * @param {string} url - The URL being processed  
- * @param {Array} matchedItems - Array of matched items with regex, domain, and resource type
- * @param {Array} netToolsResults - Array of whois/dig results
- * @param {string} pageTitle - Title of the page (if available)
- */
-function outputDryRunResults(url, matchedItems, netToolsResults, pageTitle) {
-  const lines = [];
-  
-  lines.push(`\n=== DRY RUN RESULTS === ${url}`);
-
-  console.log(`\n${messageColors.scanning('=== DRY RUN RESULTS ===')} ${url}`);
-  
-  if (pageTitle && pageTitle.trim()) {
-    lines.push(`Title: ${pageTitle.trim()}`);
-    console.log(`${messageColors.info('Title:')} ${pageTitle.trim()}`);
-  }
-  
-  if (matchedItems.length === 0 && netToolsResults.length === 0) {
-    lines.push(`No matching rules found on ${url}`);
-    
-    // Store output for file writing if outputFile is specified
-    if (outputFile) {
-      dryRunOutput.push(...lines);
-      dryRunOutput.push(''); // Add empty line
-    }
-    console.log(messageColors.warn(`No matching rules found on ${url}`));
-    return;
-  }
-  
-  const totalMatches = matchedItems.length + netToolsResults.length;
-  lines.push(`Matches found: ${totalMatches}`);
-  console.log(`${messageColors.success('Matches found:')} ${totalMatches}`);
-  
-  matchedItems.forEach((item, index) => {
-    lines.push('');
-    lines.push(`[${index + 1}] Regex Match:`);
-    lines.push(`  Pattern: ${item.regex}`);
-    lines.push(`  Domain: ${item.domain}`);
-    lines.push(`  Resource Type: ${item.resourceType}`);
-    lines.push(`  Full URL: ${item.fullUrl}`);
-
-    console.log(`\n${messageColors.highlight(`[${index + 1}]`)} ${messageColors.match('Regex Match:')}`);
-    console.log(`  Pattern: ${item.regex}`);
-    console.log(`  Domain: ${item.domain}`);
-    console.log(`  Resource Type: ${item.resourceType}`);
-    console.log(`  Full URL: ${item.fullUrl}`);
-    
-    // Show searchstring results if available
-    if (item.searchStringMatch) {
-      lines.push(`  ✓ Searchstring Match: ${item.searchStringMatch.type} - "${item.searchStringMatch.term}"`);
-      console.log(`  ${messageColors.success('✓ Searchstring Match:')} ${item.searchStringMatch.type} - "${item.searchStringMatch.term}"`);
-    } else if (item.searchStringChecked) {
-      lines.push(`  ✗ Searchstring: No matches found in content`);
-      console.log(`  ${messageColors.warn('✗ Searchstring:')} No matches found in content`);
-    }
-    
-    // Generate adblock rule
-    const adblockRule = `||${item.domain}^$${item.resourceType}`;
-    lines.push(`  Adblock Rule: ${adblockRule}`);
-    console.log(`  ${messageColors.info('Adblock Rule:')} ${adblockRule}`);
-  });
-  
-  // Display nettools results
-  netToolsResults.forEach((result, index) => {
-    const resultIndex = matchedItems.length + index + 1;
-    lines.push('');
-    lines.push(`[${resultIndex}] NetTools Match:`);
-    lines.push(`  Domain: ${result.domain}`);
-    lines.push(`  Tool: ${result.tool.toUpperCase()}`);
-    lines.push(`  ✓ Match: ${result.matchType} - "${result.matchedTerm}"`);
-    if (result.details) {
-      lines.push(`  Details: ${result.details}`);
-    }
-    console.log(`\n${messageColors.highlight(`[${resultIndex}]`)} ${messageColors.match('NetTools Match:')}`);
-    console.log(`  Domain: ${result.domain}`);
-    console.log(`  Tool: ${result.tool.toUpperCase()}`);
-    console.log(`  ${messageColors.success('✓ Match:')} ${result.matchType} - "${result.matchedTerm}"`);
-    if (result.details) {
-      console.log(`  Details: ${result.details}`);
-    }
-    
-    // Generate adblock rule for nettools matches
-    const adblockRule = `||${result.domain}^`;
-    lines.push(`  Adblock Rule: ${adblockRule}`);
-    console.log(`  ${messageColors.info('Adblock Rule:')} ${adblockRule}`);
-  });
-
-  // Store output for file writing if outputFile is specified
-  if (outputFile) {
-    dryRunOutput.push(...lines);
-    dryRunOutput.push(''); // Add empty line between sites
-  }
-}
-
-/**
  * Helper function to check if a URL should be processed (valid HTTP/HTTPS)
  * @param {string} url - URL to validate
  * @param {boolean} forceDebug - Debug logging flag
@@ -1543,9 +1448,7 @@ function setupFrameHandling(page, forceDebug) {
     
     // Initialize dry run matches collection
     if (dryRunMode) {
-      matchedDomains.set('dryRunMatches', []);
-      matchedDomains.set('dryRunNetTools', []);
-      matchedDomains.set('dryRunSearchString', new Map()); // Map URL to search results
+      initializeDryRunCollections(matchedDomains);
     }
     const timeout = siteConfig.timeout || TIMEOUTS.DEFAULT_PAGE;
 
@@ -2434,7 +2337,7 @@ function setupFrameHandling(page, forceDebug) {
                   const allowedResourceTypes = siteConfig.resourceTypes;
                   if (!allowedResourceTypes || !Array.isArray(allowedResourceTypes) || allowedResourceTypes.includes(resourceType)) {
                     if (dryRunMode) {
-                      matchedDomains.get('dryRunMatches').push({
+                      addDryRunMatch(matchedDomains, {
                         regex: matchedRegexPattern,
                         domain: reqDomain,
                         resourceType: resourceType,
@@ -2598,7 +2501,7 @@ function setupFrameHandling(page, forceDebug) {
            // If NO searchstring AND NO nettools are defined, match immediately (existing behavior)
            if (!hasSearchString && !hasSearchStringAnd && !hasNetTools) {
              if (dryRunMode) {
-               matchedDomains.get('dryRunMatches').push({
+               addDryRunMatch(matchedDomains, {
                  regex: matchedRegexPattern,
                  domain: reqDomain,
                  resourceType: resourceType,
@@ -2641,8 +2544,7 @@ function setupFrameHandling(page, forceDebug) {
              }
 
              if (dryRunMode) {
-               // For dry run, we'll collect the domain for nettools checking
-               matchedDomains.get('dryRunMatches').push({
+               addDryRunMatch(matchedDomains, {
                  regex: matchedRegexPattern,
                  domain: reqDomain,
                  resourceType: resourceType,
@@ -2722,7 +2624,7 @@ function setupFrameHandling(page, forceDebug) {
                console.log(formatLogMessage('debug', `${reqUrl} matched regex ${matchedRegexPattern} and resourceType ${resourceType}, queued for ${searchType} content search`));
              }
              if (dryRunMode) {
-               matchedDomains.get('dryRunMatches').push({
+               addDryRunMatch(matchedDomains, {
                  regex: matchedRegexPattern,
                  domain: reqDomain,
                  resourceType: resourceType,
@@ -3433,38 +3335,18 @@ function setupFrameHandling(page, forceDebug) {
     updatePageUsage(page, false);
 
       if (dryRunMode) {
-        // Get page title for dry run output
-        let pageTitle = '';
-        try {
-          pageTitle = await page.title();
-        } catch (titleErr) {
-          if (forceDebug) {
-            console.log(formatLogMessage('debug', `Failed to get page title for ${currentUrl}: ${titleErr.message}`));
-          }
+        // Process dry run results using the module
+        const dryRunResult = await processDryRunResults(currentUrl, matchedDomains, page, outputFile, dryRunOutput, forceDebug);
+
+        if (!dryRunResult.success) {
+          console.warn(messageColors.warn(`Dry run processing failed for ${currentUrl}: ${dryRunResult.error}`));
         }
-        
-        // Get collected matches and enhance with searchstring results
-        const dryRunMatches = matchedDomains.get('dryRunMatches') || [];
-        const dryRunNetTools = matchedDomains.get('dryRunNetTools') || [];
-        const dryRunSearchString = matchedDomains.get('dryRunSearchString') || new Map();
-        
-        // Enhance matches with searchstring results
-        const enhancedMatches = dryRunMatches.map(match => {
-          const searchResult = dryRunSearchString.get(match.fullUrl);
-          return {
-            ...match,
-            searchStringMatch: searchResult && searchResult.matched ? searchResult : null,
-            searchStringChecked: match.needsSearchStringCheck
-          };
-        });
         
         // Wait a moment for async nettools/searchstring operations to complete
         // Use fast timeout helper for Puppeteer 22.x compatibility
         await fastTimeout(TIMEOUTS.CURL_HANDLER_DELAY); // Wait for async operations
         
-        outputDryRunResults(currentUrl, enhancedMatches, dryRunNetTools, pageTitle);
-        
-        return { url: currentUrl, rules: [], success: true, dryRun: true, matchCount: dryRunMatches.length + dryRunNetTools.length };
+        return { url: currentUrl, rules: [], success: true, dryRun: true, matchCount: dryRunResult.matchCount };
       } else {
         // Format rules using the output module
         const globalOptions = {
@@ -3884,14 +3766,9 @@ function setupFrameHandling(page, forceDebug) {
 
   // Handle dry run output file writing
   if (dryRunMode && outputFile && dryRunOutput.length > 0) {
-    try {
-      const dryRunContent = dryRunOutput.join('\n');
-      fs.writeFileSync(outputFile, dryRunContent);
-      if (!silentMode) {
-        console.log(`${messageColors.fileOp('📄 Dry run results saved to:')} ${outputFile}`);
-      }
-    } catch (writeErr) {
-      console.error(`❌ Failed to write dry run output to ${outputFile}: ${writeErr.message}`);
+    const writeResult = writeDryRunOutput(outputFile, dryRunOutput, silentMode);
+    if (!writeResult.success && forceDebug) {
+      console.log(formatLogMessage('debug', `Dry run file write failed: ${writeResult.error}`));
     }
   }
 
