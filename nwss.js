@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.24 ===
+// === Network scanner script (nwss.js) v2.0.25 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -132,7 +132,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.24'; // Script version
+const VERSION = '2.0.25'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -997,7 +997,7 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
 
 function setupFrameHandling(page, forceDebug) {
   // Track active frames and clear on navigation to prevent detached frame access
-  let activeFrames = new Map(); // Use Map to track frame state
+  let activeFrames = new Set(); // Use Set to track frame references
   
   // Clear frame tracking on navigation to prevent stale references
   page.on('framenavigated', (frame) => {
@@ -1056,7 +1056,7 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     // Store frame with timestamp for tracking
-    activeFrames.set(frame, Date.now());
+    activeFrames.add(frame);
     
     if (frame !== page.mainFrame() && frame.parentFrame()) { // Only handle child frames
       try {       
@@ -1143,7 +1143,7 @@ function setupFrameHandling(page, forceDebug) {
   // Optional: Handle frame detachment for cleanup
   page.on('framedetached', (frame) => {
     // Remove from active tracking
-    activeFrames.delete(frame);
+    activeFrames.delete(frame); // This works for both Map and Set
     
     // Skip logging if we can't access frame URL
     let frameUrl;
