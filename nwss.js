@@ -1951,7 +1951,7 @@ function setupFrameHandling(page, forceDebug) {
    // Parse searchstring patterns using module
    const { searchStrings, searchStringsAnd, hasSearchString, hasSearchStringAnd } = parseSearchStrings(siteConfig.searchstring, siteConfig.searchstring_and);
    const useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring
-   let useGrep = siteConfig.grep === true && useCurl; // Grep requires curl to be enabled
+   let useGrep = siteConfig.grep === true; // Grep can work independently
 
    // Get user agent for curl if needed
    let curlUserAgent = '';
@@ -1973,7 +1973,7 @@ function setupFrameHandling(page, forceDebug) {
    }
 
    if (useGrep && forceDebug) {
-     console.log(formatLogMessage('debug', `Grep-based pattern matching enabled for ${currentUrl}`));
+     console.log(formatLogMessage('debug', `Grep-based pattern matching enabled for ${currentUrl}${useCurl ? ' (with curl)' : ' (with response handler)'}`));
    }
    
    // Validate grep availability if needed
@@ -1993,7 +1993,6 @@ function setupFrameHandling(page, forceDebug) {
      if (!curlCheck.isAvailable) {
        console.warn(formatLogMessage('warn', `Curl not available for ${currentUrl}: ${curlCheck.error}. Skipping curl-based analysis.`));
        useCurl = false;
-       useGrep = false; // Grep requires curl
      } else if (forceDebug) {
        console.log(formatLogMessage('debug', `Using curl: ${curlCheck.version}`));
      }
@@ -2643,7 +2642,7 @@ function setupFrameHandling(page, forceDebug) {
            
            // If curl is enabled, download and analyze content immediately
            if (useCurl) {
-             // Check bypass_cache before attempting cache lookup
+             // Check bypass_cache before attempting cache lookup (curl mode)
              let cachedContent = null;
              if (!shouldBypassCacheForUrl(reqUrl, siteConfig)) {
                // Check request cache first if smart cache is available and caching is enabled
@@ -2732,8 +2731,30 @@ function setupFrameHandling(page, forceDebug) {
                }
              }
              }
+            } else if (useGrep && (hasSearchString || hasSearchStringAnd)) {
+             // Use grep with response handler (no curl)
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `[grep-response] Queuing ${reqUrl} for grep analysis via response handler`));
+             }
+             
+             // Queue for grep processing via response handler
+             // The response handler will download content and call grep
+             if (dryRunMode) {
+               matchedDomains.get('dryRunMatches').push({
+                 regex: matchedRegexPattern,
+                 domain: reqDomain,
+                 resourceType: resourceType,
+                 fullUrl: reqUrl,
+                 isFirstParty: isFirstParty,
+                 needsGrepCheck: true
+               });
+             }
+             
+             // Don't process immediately - let response handler do the work
+             if (forceDebug) {
+               console.log(formatLogMessage('debug', `URL ${reqUrl} queued for grep analysis via response handler`));
+             }
            }
-
           // No break needed since we've already determined if regex matched
         }
         request.continue();
@@ -2742,8 +2763,8 @@ function setupFrameHandling(page, forceDebug) {
       // Mark page as actively processing network requests
       updatePageUsage(page, true);
 
-     // Add response handler ONLY if searchstring/searchstring_and is defined AND neither curl nor grep is enabled
-     if ((hasSearchString || hasSearchStringAnd) && !useCurl && !useGrep) {
+     // Add response handler if searchstring is defined and either no curl, or grep without curl
+     if ((hasSearchString || hasSearchStringAnd) && (!useCurl || (useGrep && !useCurl))) {
        const responseHandler = createResponseHandler({
          searchStrings,
          searchStringsAnd,
@@ -2761,6 +2782,7 @@ function setupFrameHandling(page, forceDebug) {
          } : undefined,
          currentUrl,
          perSiteSubDomains,
+         useGrep, // Pass grep flag to response handler
          ignoreDomains,
          matchesIgnoreDomain,
          getRootDomain,
