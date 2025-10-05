@@ -223,7 +223,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `whois_timeout_multiplier` | Number | `1.5` | Timeout increase multiplier per retry |
 | `whois_use_fallback` | Boolean | `true` | Add TLD-specific fallback servers |
 | `whois_retry_on_timeout` | Boolean | `true` | Retry on timeout errors |
-| `whois_retry_on_error` | Boolean | `false` | Retry on connection/other errors |
+| `whois_retry_on_error` | Boolean | `true` | Retry on connection/other errors |
 | `dig`                | Array | - | Check dig output for ALL specified terms (AND logic) |
 | `dig-or`             | Array | - | Check dig output for ANY specified term (OR logic) |
 | `dig_subdomain`      | Boolean | `false` | Use subdomain for dig lookup instead of root domain |
