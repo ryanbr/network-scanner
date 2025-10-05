@@ -1398,12 +1398,28 @@ function setupFrameHandling(page, forceDebug) {
    * @returns {Promise<object>} A promise that resolves to an object containing scan results.
    */
   async function processUrl(currentUrl, siteConfig, browserInstance) {
-    const allowFirstParty = siteConfig.firstParty === true || siteConfig.firstParty === 1;
-    const allowThirdParty = siteConfig.thirdParty === undefined || siteConfig.thirdParty === true || siteConfig.thirdParty === 1;
-    const perSiteSubDomains = siteConfig.subDomains === 1 ? true : subDomainsMode;
-    const siteLocalhostIP = siteConfig.localhost || null;
-    const cloudflarePhishBypass = siteConfig.cloudflare_phish === true;
-    const cloudflareBypass = siteConfig.cloudflare_bypass === true;
+    // V8 Optimization: Single destructuring to avoid multiple property lookups
+    const {
+      firstParty,
+      thirdParty,
+      subDomains,
+      localhost,
+      cloudflare_phish,
+      cloudflare_bypass,
+      flowproxy_detection,
+      privoxy,
+      pihole,
+      even_blocked,
+      comments,
+      bypass_cache
+    } = siteConfig;
+    
+    const allowFirstParty = firstParty === true || firstParty === 1;
+    const allowThirdParty = thirdParty === undefined || thirdParty === true || thirdParty === 1;
+    const perSiteSubDomains = subDomains === 1 ? true : subDomainsMode;
+    const siteLocalhostIP = localhost || null;
+    const cloudflarePhishBypass = cloudflare_phish === true;
+    const cloudflareBypass = cloudflare_bypass === true;
     // Add redirect and same-page loop protection
     const MAX_REDIRECT_DEPTH = siteConfig.max_redirects || 10;
     const redirectHistory = new Set();
@@ -1412,14 +1428,14 @@ function setupFrameHandling(page, forceDebug) {
     const MAX_SAME_PAGE_LOADS = 3;
     let currentPageUrl = currentUrl;
 
-    const sitePrivoxy = siteConfig.privoxy === true;
-    const sitePihole = siteConfig.pihole === true;
-    const flowproxyDetection = siteConfig.flowproxy_detection === true;
+    const sitePrivoxy = privoxy === true;
+    const sitePihole = pihole === true;
+    const flowproxyDetection = flowproxy_detection === true;
     
-    const evenBlocked = siteConfig.even_blocked === true;
+    const evenBlocked = even_blocked === true;
     // Log site-level comments if debug mode is enabled
-    if (forceDebug && siteConfig.comments) {
-      const siteComments = Array.isArray(siteConfig.comments) ? siteConfig.comments : [siteConfig.comments];
+    if (forceDebug && comments) {
+      const siteComments = Array.isArray(comments) ? comments : [comments];
       console.log(formatLogMessage('debug', `Site comments for ${currentUrl}: ${siteComments.length} item(s)`));
       siteComments.forEach((comment, idx) => 
         console.log(formatLogMessage('debug', `  Site comment ${idx + 1}: ${comment}`))
@@ -1427,11 +1443,11 @@ function setupFrameHandling(page, forceDebug) {
     }
 
    // Log bypass_cache setting if enabled
-   if (forceDebug && siteConfig.bypass_cache === true) {
+   if (forceDebug && bypass_cache === true) {
      console.log(formatLogMessage('debug', `Cache bypass enabled for all URLs in site: ${currentUrl}`));
    }
 
-    if (siteConfig.firstParty === 0 && siteConfig.thirdParty === 0) {
+    if (firstParty === 0 && thirdParty === 0) {
       console.warn(`⚠ Skipping ${currentUrl} because both firstParty and thirdParty are disabled.`);
       return { url: currentUrl, rules: [], success: false, skipped: true };
     }
@@ -1923,19 +1939,16 @@ function setupFrameHandling(page, forceDebug) {
           let platformVersion = '15.0.0';
           let arch = 'x86';
           
-          // V8 Optimization: Use Map for platform lookups
-          const platformConfig = new Map([
-            ['chrome_mac', { platform: 'macOS', platformVersion: '13.5.0', arch: 'arm' }],
-            ['chrome_linux', { platform: 'Linux', platformVersion: '6.5.0', arch: 'x86' }]
-          ]);
-          
-          const config = platformConfig.get(userAgentKey);
-          if (config) {
-            platform = config.platform;
-            platformVersion = config.platformVersion;
-            arch = config.arch;
+          if (userAgentKey === 'chrome_mac') {
+            platform = 'macOS';
+            platformVersion = '13.5.0'; 
+            arch = 'arm';
+          } else if (userAgentKey === 'chrome_linux') {
+            platform = 'Linux';
+            platformVersion = '6.5.0';
+            arch = 'x86';
           }
-          
+                    
           await page.setExtraHTTPHeaders({
             'Sec-CH-UA': '"Chromium";v="141", "Not=A?Brand";v="24", "Google Chrome";v="141"',
             'Sec-CH-UA-Platform': `"${platform}"`,
