@@ -87,6 +87,17 @@ const CONCURRENCY_LIMITS = {
   HIGH_CONCURRENCY_THRESHOLD: 12  // Auto-enable aggressive caching above this
 };
 
+// V8 Optimization: Use Map for user agent lookups instead of object
+const USER_AGENTS = new Map([
+  ['chrome', "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"],
+  ['chrome_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"],
+  ['chrome_linux', "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"],
+  ['firefox', "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/143.0"],
+  ['firefox_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/143.0"],
+  ['firefox_linux', "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/143.0"],
+  ['safari', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"]
+]);
+
 const REALTIME_CLEANUP_THRESHOLD = 8; // Default pages to keep for realtime cleanup
 
 /**
@@ -1907,29 +1918,33 @@ function setupFrameHandling(page, forceDebug) {
         
         // Client Hints protection for Chrome user agents
         if (siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
+          const userAgentKey = siteConfig.userAgent.toLowerCase();
           let platform = 'Windows';
           let platformVersion = '15.0.0';
           let arch = 'x86';
           
-          if (siteConfig.userAgent.toLowerCase() === 'chrome_mac') {
-            platform = 'macOS';
-            platformVersion = '13.5.0';
-            arch = 'arm';
-          } else if (siteConfig.userAgent.toLowerCase() === 'chrome_linux') {
-            platform = 'Linux';
-            platformVersion = '6.5.0';
-            arch = 'x86';
+          // V8 Optimization: Use Map for platform lookups
+          const platformConfig = new Map([
+            ['chrome_mac', { platform: 'macOS', platformVersion: '13.5.0', arch: 'arm' }],
+            ['chrome_linux', { platform: 'Linux', platformVersion: '6.5.0', arch: 'x86' }]
+          ]);
+          
+          const config = platformConfig.get(userAgentKey);
+          if (config) {
+            platform = config.platform;
+            platformVersion = config.platformVersion;
+            arch = config.arch;
           }
           
           await page.setExtraHTTPHeaders({
-            'Sec-CH-UA': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+            'Sec-CH-UA': '"Chromium";v="141", "Not=A?Brand";v="24", "Google Chrome";v="141"',
             'Sec-CH-UA-Platform': `"${platform}"`,
             'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
             'Sec-CH-UA-Mobile': '?0',
             'Sec-CH-UA-Arch': `"${arch}"`,
             'Sec-CH-UA-Bitness': '"64"',
-            'Sec-CH-UA-Full-Version': '"140.0.7339.208"',
-            'Sec-CH-UA-Full-Version-List': '"Chromium";v="140.0.7339.208", "Not=A?Brand";v="24.0.0.0", "Google Chrome";v="140.0.7339.208"'
+            'Sec-CH-UA-Full-Version': '"141.0.7390.55"',
+            'Sec-CH-UA-Full-Version-List': '"Chromium";v="141.0.7390.55", "Not=A?Brand";v="24.0.0.0", "Google Chrome";v="141.0.7390.55"'
           });
         }
       } catch (fingerprintErr) {
@@ -1959,16 +1974,7 @@ function setupFrameHandling(page, forceDebug) {
    // Get user agent for curl if needed
    let curlUserAgent = '';
    if (useCurl && siteConfig.userAgent) {
-     const userAgents = {
-       chrome: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-       chrome_mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-       chrome_linux: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-       firefox: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/143.0",
-       firefox_mac: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/143.0",
-       firefox_linux: "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/143.0",
-       safari: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
-     };
-     curlUserAgent = userAgents[siteConfig.userAgent.toLowerCase()] || '';
+     curlUserAgent = USER_AGENTS.get(siteConfig.userAgent.toLowerCase()) || '';
    }
 
    if (useCurl && forceDebug) {
