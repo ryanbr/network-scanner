@@ -1031,7 +1031,6 @@ function setupFrameHandling(page, forceDebug) {
       // Enhanced frame validation with multiple safety checks
       let frameUrl;
       try {
-        // Test frame accessibility first
         frameUrl = frame.url();
         
         // Check if frame is detached (if method exists)
@@ -1041,12 +1040,17 @@ function setupFrameHandling(page, forceDebug) {
           }
           return;
         }
+        
+        activeFrames.add(frame);
+        
+        if (forceDebug) {
+          console.log(formatLogMessage('debug', `New frame attached: ${frameUrl || 'about:blank'}`));
+        }
       } catch (frameAccessError) {
         // Frame is not accessible (likely detached)
         return;
       }
-      
-      activeFrames.add(frame);
+
     } catch (detachError) {
       // Frame state checking can throw in 23.x, handle gracefully
       if (forceDebug) {
@@ -1055,14 +1059,10 @@ function setupFrameHandling(page, forceDebug) {
       return;
     }
 
-    // Store frame with timestamp for tracking
-    activeFrames.add(frame);
     
     if (frame !== page.mainFrame() && frame.parentFrame()) { // Only handle child frames
-      try {       
-        if (forceDebug) {
-          console.log(formatLogMessage('debug', `New frame attached: ${frameUrl || 'about:blank'}`));
-        }
+      let frameUrl;
+        frameUrl = frame.url();
         
         // Don't try to navigate to frames with invalid/empty URLs
         if (!frameUrl ||
@@ -1100,6 +1100,7 @@ function setupFrameHandling(page, forceDebug) {
         // Let frames load naturally - manual navigation often causes Protocol errors
         // await frame.goto(frame.url(), { waitUntil: 'domcontentloaded', timeout: 5000 });
         
+        try {        
         if (forceDebug) {
           console.log(formatLogMessage('debug', `Frame will load naturally: ${frameUrl}`));
         }
@@ -1145,15 +1146,12 @@ function setupFrameHandling(page, forceDebug) {
     // Remove from active tracking
     activeFrames.delete(frame); // This works for both Map and Set
     
-    // Skip logging if we can't access frame URL
-    let frameUrl;
+
     if (forceDebug) {
+      let frameUrl;
       try {
         frameUrl = frame.url();
-      } catch (urlErr) {
-        // Frame already detached, can't get URL
-        return;
-      }
+
       if (frameUrl &&
           frameUrl !== 'about:blank' &&
           frameUrl !== 'about:srcdoc' &&
@@ -1162,6 +1160,11 @@ function setupFrameHandling(page, forceDebug) {
           !frameUrl.startsWith('chrome-extension://')) {
         console.log(formatLogMessage('debug', `Frame detached: ${frameUrl}`));
       }
+      } catch (urlErr) {
+        // Frame already detached, can't get URL - this is expected
+        return;
+      }
+
     }
   });
 }
