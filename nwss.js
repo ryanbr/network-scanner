@@ -1117,11 +1117,11 @@ function setupFrameHandling(page, forceDebug) {
   });
   // Handle frame navigations (keep this for monitoring)
   page.on('framenavigated', (frame) => {
-    let frameUrl;
 
     // Skip if frame is not in our active set
     if (!activeFrames.has(frame)) return;
 
+    let frameUrl;
     try {
       frameUrl = frame.url();
     } catch (urlErr) {
