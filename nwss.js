@@ -3493,20 +3493,29 @@ function setupFrameHandling(page, forceDebug) {
 // Temporarily store the pLimit function  
   const originalLimit = limit;
 
-  // Create a flat list of all URL tasks with their site configs for true concurrency
-  const allTasks = [];
+  // V8 Optimization: Calculate total URLs first to pre-allocate array
+  let totalUrls = 0;
   for (const site of sites) {
     const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
-    urlsToProcess.forEach(url => {
-      allTasks.push({
-        url,
-        config: { ...site, _originalUrl: url }, // Preserve original URL for CDP domain checking
-        taskId: allTasks.length // For tracking
-      });
-    });
+    totalUrls += urlsToProcess.length;
   }
   
-  const totalUrls = allTasks.length;
+  // Pre-allocate array with exact size to prevent multiple reallocations
+  const allTasks = new Array(totalUrls);
+  let taskIndex = 0;
+  
+  // Populate the pre-allocated array
+  for (const site of sites) {
+    const urlsToProcess = Array.isArray(site.url) ? site.url : [site.url];
+    for (const url of urlsToProcess) {
+      allTasks[taskIndex++] = {
+        url,
+        config: { ...site, _originalUrl: url }, // Preserve original URL for CDP domain checking
+        taskId: taskIndex - 1 // For tracking
+      };
+    }
+  }
+
 
   let results = [];
   let processedUrlCount = 0;
