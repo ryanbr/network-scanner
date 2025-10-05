@@ -56,7 +56,7 @@ function fastTimeout(ms) {
 }
 
 // --- Configuration Constants ---
-const TIMEOUTS = {
+const TIMEOUTS = Object.freeze({
   DEFAULT_PAGE: 35000,                // Standard page load timeout (35s)
   DEFAULT_NAVIGATION: 25000,          // Navigation operation timeout
   DEFAULT_NAVIGATION_REDUCED: 20000,  // Reduced timeout for faster failures
@@ -71,24 +71,24 @@ const TIMEOUTS = {
   CURL_HANDLER_DELAY: 3000,           // Wait for async curl operations
   PROTOCOL_TIMEOUT: 180000,           // Chrome DevTools Protocol timeout
   REDIRECT_JS_TIMEOUT: 5000           // JavaScript redirect detection timeout
-};
+});
 
-const CACHE_LIMITS = {
+const CACHE_LIMITS = Object.freeze({
   DISK_CACHE_SIZE: 52428800, // 50MB
   MEDIA_CACHE_SIZE: 52428800, // 50MB
   DEFAULT_CACHE_PATH: '.cache',
   DEFAULT_MAX_SIZE: 5000
-};
+});
 
-const CONCURRENCY_LIMITS = {
+const CONCURRENCY_LIMITS = Object.freeze({
   MIN: 1,
   MAX: 50,
   DEFAULT: 6,
   HIGH_CONCURRENCY_THRESHOLD: 12  // Auto-enable aggressive caching above this
-};
+});
 
 // V8 Optimization: Use Map for user agent lookups instead of object
-const USER_AGENTS = new Map([
+const USER_AGENTS = Object.freeze(new Map([
   ['chrome', "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"],
   ['chrome_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"],
   ['chrome_linux', "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"],
@@ -96,7 +96,7 @@ const USER_AGENTS = new Map([
   ['firefox_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:142.0) Gecko/20100101 Firefox/143.0"],
   ['firefox_linux', "Mozilla/5.0 (X11; Linux x86_64; rv:142.0) Gecko/20100101 Firefox/143.0"],
   ['safari', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"]
-]);
+]));
 
 const REALTIME_CLEANUP_THRESHOLD = 8; // Default pages to keep for realtime cleanup
 
@@ -1222,6 +1222,9 @@ function setupFrameHandling(page, forceDebug) {
       '/usr/bin/chromium',
       '/snap/bin/chromium'
     ];
+    // V8 Optimization: Freeze the Chrome paths array since it's constant
+    Object.freeze(systemChromePaths);
+
 
     let executablePath = null;
     for (const chromePath of systemChromePaths) {
@@ -1502,14 +1505,14 @@ function setupFrameHandling(page, forceDebug) {
     let finalUrlAfterRedirect = null;
 
     // Enhanced error types for Puppeteer 23.x compatibility
-    const CRITICAL_BROWSER_ERRORS = [
+    const CRITICAL_BROWSER_ERRORS = Object.freeze([
       'Protocol error',
       'Target closed',
       'Browser has been closed',
       'Browser protocol broken',
       'Browser process exited',
       'Browser disconnected'
-    ];
+    ]);
 
     try {
 
