@@ -281,6 +281,36 @@ These options go at the root level of your config.json:
 | `cache_requests`     | Boolean | `false` | Enable HTTP request response caching |
 
 ---
+#### Special Characters in searchstring
+
+The `searchstring` parameter supports all characters including special symbols. Only double quotes need JSON escaping:
+
+```json
+{
+  "searchstring": [
+    ")}return n}function N(n,e,r){try{\"function\"==typeof",
+    "addEventListener(\"click\",function(){",
+    "{\"status\":\"success\",\"data\":[",
+    "console.log('Debug: ' + value);",
+    "`API endpoint: ${baseUrl}/users`",
+    "@media screen and (max-width: 768px)",
+    "if(e&&e.preventDefault){e.preventDefault()}",
+    "__webpack_require__(/*! ./module */ \"./src/module.js\")",
+    "console.log('Hello world')",
+    "#header { background-color: #ff0000; }",
+    "$(document).ready(function() {",
+    "completion: 85% @ $1,500 budget",
+    "SELECT * FROM users WHERE id = *",
+    "regex: ^[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}$",
+    "typeof window !== 'undefined'"
+  ]
+}
+```
+
+**Character escaping rules:**
+- `"` becomes `\"` (required in JSON)
+- `\` becomes `\\` (if searching for literal backslashes)
+- All other characters are used literally: `'` `` ` `` `@` `#` `$` `%` `*` `^` `[` `]` `{` `}` `(` `)` `;` `=` `!` `?` `:`
 
 ## Usage Examples
 
