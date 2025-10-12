@@ -747,6 +747,12 @@ function safeMarkDomainProcessed(domain, context, metadata) {
   }
 }
 
+// Global deduplication for nettools to avoid redundant lookups across all URLs
+// Whois: keyed by root domain only (whois data is consistent for entire domain)
+// Dig: keyed by specific subdomain+config (DNS records can vary by subdomain)
+const globalProcessedWhoisDomains = new Set();
+const globalProcessedDigDomains = new Set();
+
 // Handle --clean-rules after config is loaded (so we have access to sites)
 if (cleanRules || cleanRulesFile) {
   const filesToClean = cleanRulesFile ? [cleanRulesFile] : [outputFile, compareFile].filter(Boolean);
@@ -2491,6 +2497,8 @@ function setupFrameHandling(page, forceDebug) {
               const netToolsHandler = createNetToolsHandler({
                 whoisTerms,
                 whoisOrTerms,
+               processedWhoisDomains: globalProcessedWhoisDomains,
+               processedDigDomains: globalProcessedDigDomains,
                 whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
                 whoisServer,
                 whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
@@ -2597,6 +2605,8 @@ function setupFrameHandling(page, forceDebug) {
              const netToolsHandler = createNetToolsHandler({
                whoisTerms,
                whoisOrTerms,
+               processedWhoisDomains: globalProcessedWhoisDomains,
+               processedDigDomains: globalProcessedDigDomains,
                whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay, // Site-specific or global fallback
 	       whoisServer, // Pass whois server configuration
                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
