@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.27 ===
+// === Network scanner script (nwss.js) v2.0.28 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -143,7 +143,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.27'; // Script version
+const VERSION = '2.0.28'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -1245,6 +1245,16 @@ function setupFrameHandling(page, forceDebug) {
       // Auto-detect best headless mode based on Puppeteer version
       headless: headlessMode,
       args: [
+        // CRITICAL: Remove automation detection markers
+        '--disable-blink-features=AutomationControlled',
+        '--no-first-run',
+        '--disable-default-apps',
+        '--disable-component-extensions-with-background-pages',
+        // HIGH IMPACT: Normal Chrome behavior simulation
+        '--password-store=basic',
+        '--use-mock-keychain',
+        '--disable-client-side-phishing-detection',
+        '--enable-features=NetworkService',
         // Disk space controls - 50MB cache limits
         '--disable-features=VizDisplayCompositor',
         `--disk-cache-size=${CACHE_LIMITS.DISK_CACHE_SIZE}`, // 50MB disk cache
@@ -1260,10 +1270,7 @@ function setupFrameHandling(page, forceDebug) {
         '--aggressive-cache-discard',
         '--memory-pressure-off',
         '--max_old_space_size=2048',
-        '--no-first-run',
         '--disable-prompt-on-repost',  // Fixes form popup on page reload
-        '--disable-default-apps',
-        '--disable-component-extensions-with-background-pages',
         '--disable-background-networking',
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -1290,14 +1297,13 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-backgrounding-occluded-windows',
         '--disable-background-timer-throttling',
         '--disable-features=site-per-process', // Better for single-site scanning
-        '--disable-blink-features=AutomationControlled', // Avoid detection
         '--no-zygote', // Better process isolation
         ],
         // Optimized timeouts for Puppeteer 23.x performance
         protocolTimeout: TIMEOUTS.PROTOCOL_TIMEOUT,
         slowMo: 0, // No artificial delays
         defaultViewport: null, // Use system default viewport
-        ignoreDefaultArgs: ['--enable-automation'] // Avoid automation detection
+        ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=AutomationControlled'] // Avoid automation detection
     });
     
     // Store the user data directory on the browser object for cleanup
