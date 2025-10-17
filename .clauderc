@@ -1,0 +1,30 @@
+{
+  "description": "Network scanner that monitors website requests and generates blocking rules. Uses Puppeteer to load sites, intercepts network traffic, matches patterns, and outputs rules in various formats (adblock, dnsmasq, hosts file, etc.).",
+  
+  "conventions": [
+    "Store modular functionality in ./lib/ directory with focused, single-purpose modules",
+    "Use messageColors and formatLogMessage from ./lib/colorize for consistent console output",
+    "Implement timeout protection for all Puppeteer operations using Promise.race patterns",
+    "Handle browser lifecycle with comprehensive cleanup in try-finally blocks",
+    "Validate all external tool availability before use (grep, curl, whois, dig)",
+    "Use forceDebug flag for detailed logging, silentMode for minimal output"
+  ],
+  
+  "files": {
+    "important": [
+      "nwss.js",
+      "config.json",
+      "lib/*.js",
+      "*.md",
+      "nwss.1"
+    ],
+    "ignore": [
+      "node_modules/**",
+      "logs/**",
+      "sources/**",
+      ".cache/**",
+      "*.log",
+      "*.gz"
+    ]
+  }
+}
