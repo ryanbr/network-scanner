@@ -3560,21 +3560,38 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
-  // Hang detection for debugging concurrency issues
-  let currentBatchInfo = { batchStart: 0, batchSize: 0 };
-  const hangDetectionInterval = setInterval(() => {
-  // Only show hang detection messages in debug mode
-  if (forceDebug) {
-    const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
-    const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
-    console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
-    console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
-    }
-  }, 30000); // Check every 30 seconds
+ // Enhanced hang detection with recovery
+ let currentBatchInfo = { batchStart: 0, batchSize: 0 };
+ let lastProcessedCount = 0;
+ let hangCheckCount = 0;
+ 
+ const hangDetectionInterval = setInterval(() => {
+   if (forceDebug) {
+     const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
+     const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
+     console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
+     console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
+     
+     // Check progress and force exit if hung
+     if (processedUrlCount === lastProcessedCount) {
+       hangCheckCount++;
+       console.log(formatLogMessage('warn', `[HANG CHECK] No progress for ${hangCheckCount * 30}s`));
+       if (hangCheckCount >= 10) {
+         console.log(formatLogMessage('error', `[HANG CHECK] Hung for 5 minutes. Forcing exit.`));
+         clearInterval(hangDetectionInterval);
+         process.exit(1);
+       }
+     } else {
+       hangCheckCount = 0;
+     }
+     lastProcessedCount = processedUrlCount;
+   }
+ }, 30000);
 
-  // Process URLs in batches to maintain concurrency while allowing browser restarts
-  let siteGroupIndex = 0;
-  for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
+ // Process URLs in batches with exception handling
+ let siteGroupIndex = 0;
+ try {
+   for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
     const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
     const currentBatch = allTasks.slice(batchStart, batchEnd);
 
@@ -3603,14 +3620,22 @@ function setupFrameHandling(page, forceDebug) {
         hasCriticalErrors ||
         urlsSinceLastCleanup > RESOURCE_CLEANUP_INTERVAL * 0.9  // Very close to cleanup limit
     )) {
-      healthCheck = await monitorBrowserHealth(browser, {}, {
-        siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
-        totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
-        urlsSinceCleanup: urlsSinceLastCleanup,
-        cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
-        forceDebug,
-        silentMode
-      });
+     try {
+       healthCheck = await Promise.race([
+         monitorBrowserHealth(browser, {}, {
+           siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
+           totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
+           urlsSinceCleanup: urlsSinceLastCleanup,
+           cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
+           forceDebug,
+           silentMode
+         }),
+         new Promise((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 30000))
+       ]);
+     } catch (healthError) {
+       console.log(formatLogMessage('warn', `[HEALTH CHECK] Timeout, assuming restart needed`));
+       healthCheck = { shouldRestart: true, reason: 'Health check timeout' };
+     }
     } else if (forceDebug && urlsSinceLastCleanup > 10) {
       console.log(formatLogMessage('debug', `Skipping health check: failure rate ${Math.round(recentFailureRate * 100)}%, critical errors: ${hasCriticalErrors ? 'yes' : 'no'}`));
     }
@@ -3701,9 +3726,34 @@ function setupFrameHandling(page, forceDebug) {
       console.log(formatLogMessage('debug', `[CONCURRENCY] Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
     }
     
-    // Create tasks with current browser instance and process them with TRUE concurrency
-    const batchTasks = currentBatch.map(task => originalLimit(() => processUrl(task.url, task.config, browser)));
-    const batchResults = await Promise.all(batchTasks);
+ // Create tasks with timeout protection
+ const batchTasks = currentBatch.map(task => originalLimit(() => processUrl(task.url, task.config, browser)));
+ 
+ let batchResults;
+ try {
+   batchResults = await Promise.race([
+     Promise.all(batchTasks),
+     new Promise((_, reject) => 
+       setTimeout(() => reject(new Error('Batch timeout')), 600000) // 10 min timeout
+     )
+   ]);
+ } catch (timeoutError) {
+   if (timeoutError.message.includes('timeout')) {
+     console.log(formatLogMessage('error', `[TIMEOUT] Batch hung. Restarting browser.`));
+     try {
+       await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false });
+       browser = await createBrowser();
+       urlsSinceLastCleanup = 0;
+     } catch (restartErr) {
+       throw restartErr;
+     }
+     batchResults = currentBatch.map(task => ({
+       success: false, error: 'Batch timeout', needsImmediateRestart: true, url: task.url
+     }));
+   } else {
+     throw timeoutError;
+   }
+ }
 
     // IMPROVED: Much more conservative emergency restart logic
     const criticalRestartCount = batchResults.filter(r => r.needsImmediateRestart).length;
@@ -3817,6 +3867,10 @@ function setupFrameHandling(page, forceDebug) {
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
       }
     }
+ } catch (processingError) {
+   console.log(formatLogMessage('error', `Critical error: ${processingError.message}`));
+   clearInterval(hangDetectionInterval);
+   throw processingError;
   }
 
   // Clear hang detection interval
