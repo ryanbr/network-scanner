@@ -3577,8 +3577,8 @@ function setupFrameHandling(page, forceDebug) {
      if (processedUrlCount === lastProcessedCount) {
        hangCheckCount++;
        console.log(formatLogMessage('warn', `[HANG CHECK] No progress for ${hangCheckCount * 30}s`));
-       if (hangCheckCount >= 10) {
-         console.log(formatLogMessage('error', `[HANG CHECK] Hung for 5 minutes. Triggering emergency browser restart.`));
+       if (hangCheckCount >= 5) {
+         console.log(formatLogMessage('error', `[HANG CHECK] Hung for 2.5 minutes. Triggering emergency browser restart.`));
          forceRestartFlag = true; // Set flag instead of exiting
          hangCheckCount = 0; // Reset counter for next cycle
        }
@@ -3658,7 +3658,7 @@ function setupFrameHandling(page, forceDebug) {
     if ((wouldExceedLimit || shouldRestartFromHealth || forceRestartFlag || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8 && isNotLastBatch) {      
       let restartReason = 'Unknown';
       if (forceRestartFlag) {
-        restartReason = 'Emergency restart due to 5-minute hang detection';
+        restartReason = 'Emergency restart due to 2.5-minute hang detection';
         forceRestartFlag = false; // Reset the flag
       } else if (shouldRestartFromHealth) {
         restartReason = healthCheck.reason;
