@@ -3560,10 +3560,11 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
- // Enhanced hang detection with recovery
+ // Enhanced hang detection with browser restart recovery
  let currentBatchInfo = { batchStart: 0, batchSize: 0 };
  let lastProcessedCount = 0;
  let hangCheckCount = 0;
+ let forceRestartFlag = false; // Flag to trigger restart on next iteration
  
  const hangDetectionInterval = setInterval(() => {
    if (forceDebug) {
@@ -3572,14 +3573,14 @@ function setupFrameHandling(page, forceDebug) {
      console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
      console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
      
-     // Check progress and force exit if hung
+     // Check progress and trigger browser restart if hung
      if (processedUrlCount === lastProcessedCount) {
        hangCheckCount++;
        console.log(formatLogMessage('warn', `[HANG CHECK] No progress for ${hangCheckCount * 30}s`));
        if (hangCheckCount >= 10) {
-         console.log(formatLogMessage('error', `[HANG CHECK] Hung for 5 minutes. Forcing exit.`));
-         clearInterval(hangDetectionInterval);
-         process.exit(1);
+         console.log(formatLogMessage('error', `[HANG CHECK] Hung for 5 minutes. Triggering emergency browser restart.`));
+         forceRestartFlag = true; // Set flag instead of exiting
+         hangCheckCount = 0; // Reset counter for next cycle
        }
      } else {
        hangCheckCount = 0;
@@ -3653,11 +3654,13 @@ function setupFrameHandling(page, forceDebug) {
       !healthCheck.reason?.includes('Scheduled cleanup') && 
       (healthCheck.reason?.includes('Critical') || healthCheck.reason?.includes('disconnected'));
     
-    // Restart browser if we've processed enough URLs, health check suggests it, and this isn't the last site
-    if ((wouldExceedLimit || shouldRestartFromHealth || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8 && isNotLastBatch) {
-      
+    // Restart browser if we've processed enough URLs, health check suggests it, hang detected, and this isn't the last site
+    if ((wouldExceedLimit || shouldRestartFromHealth || forceRestartFlag || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8 && isNotLastBatch) {      
       let restartReason = 'Unknown';
-      if (shouldRestartFromHealth) {
+      if (forceRestartFlag) {
+        restartReason = 'Emergency restart due to 5-minute hang detection';
+        forceRestartFlag = false; // Reset the flag
+      } else if (shouldRestartFromHealth) {
         restartReason = healthCheck.reason;
       } else if (hasHighFailureRate) {
         restartReason = `High failure rate: ${Math.round(recentFailureRate * 100)}% in recent batch`;
@@ -3867,6 +3870,22 @@ function setupFrameHandling(page, forceDebug) {
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
       }
     }
+    // Handle hang detection flag if it's still set (e.g., on last batch where normal restart wouldn't trigger)
+    if (forceRestartFlag && batchEnd < totalUrls) {
+      console.log(`\n${messageColors.fileOp('🔄 Emergency hang detection restart:')} Browser appears hung, forcing restart`);
+      try {
+        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true });
+        browser = await createBrowser();
+        urlsSinceLastCleanup = 0;
+        forceRestartFlag = false; // Reset flag
+        await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY);
+        if (forceDebug) console.log(formatLogMessage('debug', `Emergency hang detection restart completed`));
+      } catch (hangRestartErr) {
+        if (forceDebug) console.log(formatLogMessage('debug', `Hang detection restart failed: ${hangRestartErr.message}`));
+        // Continue anyway - better to try processing remaining URLs than exit
+      }
+    }
+  }
  } catch (processingError) {
    console.log(formatLogMessage('error', `Critical error: ${processingError.message}`));
    clearInterval(hangDetectionInterval);
