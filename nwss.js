@@ -1808,7 +1808,15 @@ function setupFrameHandling(page, forceDebug) {
                                   throw new Error('Page is closed');
                               }
                               
-                              const pageUrl = await page.url().catch(() => 'about:blank');
+                              // FIX: Properly wrap page.url() in try-catch to handle race condition
+                              let pageUrl;
+                              try {
+                                  pageUrl = await page.url();
+                              } catch (urlErr) {
+                                  // Page closed between isClosed check and url call
+                                  throw new Error('Page closed while getting URL');
+                              }
+
                               if (pageUrl === 'about:blank') {
                                   throw new Error('Cannot inject on about:blank');
                               }
