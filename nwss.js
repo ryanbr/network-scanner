@@ -3080,7 +3080,15 @@ function setupFrameHandling(page, forceDebug) {
         }
 
         console.log(formatLogMessage('info', `${messageColors.loaded('Loaded:')} (${siteCounter}/${totalUrls}) ${currentUrl}`));
-        await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
+
+        // FIX: Check page state before evaluation
+        if (page && !page.isClosed()) {
+          try {
+            await page.evaluate(() => { console.log('Safe to evaluate on loaded page.'); });
+          } catch (evalErr) {
+            // Page closed during evaluation - safe to ignore
+          }
+        }
         
         // Mark page as processing frames
         updatePageUsage(page, true);
