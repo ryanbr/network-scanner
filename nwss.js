@@ -3165,10 +3165,19 @@ function setupFrameHandling(page, forceDebug) {
       const networkIdleTimeout = Math.min(timeout / 2, TIMEOUTS.NETWORK_IDLE_MAX);  // Balanced: 10s timeout
       const actualDelay = Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);  // Balanced: 2s delay for stability
       
-      await page.waitForNetworkIdle({ 
-        idleTime: networkIdleTime, 
-        timeout: networkIdleTimeout 
-      });
+      // FIX: Check page state before waiting for network idle
+      if (page && !page.isClosed()) {
+        try {
+          await page.waitForNetworkIdle({ 
+            idleTime: networkIdleTime, 
+            timeout: networkIdleTimeout 
+          });
+        } catch (networkIdleErr) {
+          // Page closed or network idle timeout - continue anyway
+          if (forceDebug) console.log(formatLogMessage('debug', `Network idle wait failed: ${networkIdleErr.message}`));
+        }
+      }
+
       // Use fast timeout helper for Puppeteer 23.x compatibility with better performance
       await fastTimeout(actualDelay);
 
