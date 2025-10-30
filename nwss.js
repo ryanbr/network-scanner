@@ -2856,20 +2856,23 @@ function setupFrameHandling(page, forceDebug) {
       // --- Runtime CSS Element Blocking (Fallback) ---
       // Apply CSS blocking after page load as a fallback in case evaluateOnNewDocument didn't work
       if (cssBlockedSelectors && Array.isArray(cssBlockedSelectors) && cssBlockedSelectors.length > 0) {
-        try {
-          await page.evaluate((selectors) => {
-            const existingStyle = document.querySelector('#css-blocker-runtime');
-            if (!existingStyle) {
-              const style = document.createElement('style');
-              style.id = 'css-blocker-runtime';
-              style.type = 'text/css';
-              const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
-              style.innerHTML = cssRules;
-              document.head.appendChild(style);
-            }
-          }, cssBlockedSelectors);
-        } catch (cssRuntimeErr) {
-          console.warn(formatLogMessage('warn', `[css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`));
+        // FIX: Check page state before evaluation
+        if (page && !page.isClosed()) {
+          try {
+            await page.evaluate((selectors) => {
+              const existingStyle = document.querySelector('#css-blocker-runtime');
+              if (!existingStyle) {
+                const style = document.createElement('style');
+                style.id = 'css-blocker-runtime';
+                style.type = 'text/css';
+                const cssRules = selectors.map(selector => `${selector} { display: none !important; visibility: hidden !important; }`).join('\n');
+                style.innerHTML = cssRules;
+                document.head.appendChild(style);
+              }
+            }, cssBlockedSelectors);
+          } catch (cssRuntimeErr) {
+            console.warn(formatLogMessage('warn', `[css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`));
+          }
         }
       }
 
