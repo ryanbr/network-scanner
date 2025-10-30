@@ -3349,6 +3349,11 @@ function setupFrameHandling(page, forceDebug) {
       // Fallback to standard reload if force reload failed or wasn't attempted
       if (!reloadSuccess) {
         try {
+            // FIX: Check page state before reload validation
+            if (page.isClosed()) {
+              throw new Error('Page closed before reload check');
+            }
+
             const canReload = await page.evaluate(() => {
               return !!(document && document.body);
             }).catch(() => false);
