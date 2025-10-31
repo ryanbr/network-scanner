@@ -2916,7 +2916,7 @@ function setupFrameHandling(page, forceDebug) {
           timeout: Math.min(timeout, TIMEOUTS.DEFAULT_PAGE), // Cap at default page timeout
           // Puppeteer 23.x: Fixed referrer header handling
           ...(siteConfig.referrer_headers && (() => {
-            const referrerUrl = getReferrerForUrl(url, siteConfig.referrer_headers, siteConfig.referrer_disable, forceDebug);
+            const referrerUrl = getReferrerForUrl(currentUrl, siteConfig.referrer_headers, siteConfig.referrer_disable, forceDebug);
             return referrerUrl 
               ? { referer: referrerUrl } 
               : {};
