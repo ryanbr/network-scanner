@@ -49,7 +49,7 @@ const { initializeDryRunCollections, addDryRunMatch, addDryRunNetTools, processD
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Referrer header generation
-const { generateReferrerUrl, validateReferrerConfig } = require('./lib/referrer');
+const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 
 // Fast setTimeout helper for Puppeteer 22.x compatibility
 // Uses standard Promise constructor for better performance than node:timers/promises
@@ -378,6 +378,16 @@ if (validateConfig) {
            console.warn(`⚠ Referrer warnings: ${validation.warnings.join(', ')}`);
          }
        }
+       // Validate referrer_disable format
+       if (site.referrer_disable) {
+         const disableValidation = validateReferrerDisable(site.referrer_disable);
+         if (!disableValidation.isValid) {
+           console.warn(`⚠ Invalid referrer_disable configuration: ${disableValidation.errors.join(', ')}`);
+         }
+         if (disableValidation.warnings.length > 0) {
+           console.warn(`⚠ Referrer disable warnings: ${disableValidation.warnings.join(', ')}`);
+         }
+       }
     }
 
     if (validation.isValid) {
@@ -556,6 +566,7 @@ Redirect Handling Options:
   bypass_cache: true/false                     Skip all caching for this site's URLs (default: false)
   referrer_headers: "url" or ["url1", "url2"] Set referrer header for realistic traffic sources
   custom_headers: {"Header": "value"}         Add custom HTTP headers to requests
+  referrer_disable: ["url1", "url2"]         Disable referrer headers for specific URLs
 
 Cloudflare Protection Options:
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
@@ -614,6 +625,7 @@ Referrer Header Options:
   referrer_headers: {"mode": "news_sites"}     Random news website referrers
   referrer_headers: {"mode": "custom", "url": "https://example.com"} Custom referrer URL
   referrer_headers: {"mode": "mixed"}          Mixed referrer types for varied traffic
+  referrer_disable: ["https://example.com/no-ref", "sensitive-site.com"] Disable referrer for specific URLs
   custom_headers: {"Header": "Value"}          Additional HTTP headers
 `);
   process.exit(0);
@@ -2904,7 +2916,7 @@ function setupFrameHandling(page, forceDebug) {
           timeout: Math.min(timeout, TIMEOUTS.DEFAULT_PAGE), // Cap at default page timeout
           // Puppeteer 23.x: Fixed referrer header handling
           ...(siteConfig.referrer_headers && (() => {
-            const referrerUrl = generateReferrerUrl(siteConfig.referrer_headers, forceDebug);
+            const referrerUrl = getReferrerForUrl(url, siteConfig.referrer_headers, siteConfig.referrer_disable, forceDebug);
             return referrerUrl 
               ? { referer: referrerUrl } 
               : {};
