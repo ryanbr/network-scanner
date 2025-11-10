@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.32 ===
+// === Network scanner script (nwss.js) v2.0.33 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -50,6 +50,8 @@ const { initializeDryRunCollections, addDryRunMatch, addDryRunNetTools, processD
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
+// Adblock rules parser
+const { parseAdblockRules } = require('./lib/adblock_rules');
 
 // Fast setTimeout helper for Puppeteer 22.x compatibility
 // Uses standard Promise constructor for better performance than node:timers/promises
@@ -145,7 +147,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
-const VERSION = '2.0.32'; // Script version
+const VERSION = '2.0.33'; // Script version
 
 // get startTime
 const startTime = Date.now();
@@ -243,6 +245,11 @@ if (cleanupIntervalIndex !== -1 && args[cleanupIntervalIndex + 1]) {
 
 const enableColors = args.includes('--color') || args.includes('--colour');
 let adblockRulesMode = args.includes('--adblock-rules');
+
+// Adblock variables (request blocking)
+let adblockEnabled = false;
+let adblockMatcher = null;
+let adblockStats = { blocked: 0, allowed: 0 };
 
 // Validate --adblock-rules usage - ignore if used incorrectly instead of erroring
 if (adblockRulesMode) {
@@ -452,6 +459,24 @@ if (validateRules || validateRulesFile) {
   }
 }
 
+// Parse --block-ads argument for request-level ad blocking
+const blockAdsIndex = args.findIndex(arg => arg.startsWith('--block-ads'));
+if (blockAdsIndex !== -1) {
+  const rulesFile = args[blockAdsIndex].includes('=') 
+    ? args[blockAdsIndex].split('=')[1] 
+    : args[blockAdsIndex + 1];
+  
+  if (!rulesFile || !fs.existsSync(rulesFile)) {
+    console.log(`Error: Adblock rules file not found: ${rulesFile || '(not specified)'}`);
+    process.exit(1);
+  }
+  
+  adblockEnabled = true;
+  adblockMatcher = parseAdblockRules(rulesFile, { enableLogging: forceDebug });
+  const stats = adblockMatcher.getStats();
+  if (!silentMode) console.log(messageColors.success(`Adblock enabled: Loaded ${stats.total} blocking rules from ${rulesFile}`));
+}
+
 if (args.includes('--help') || args.includes('-h')) {
   console.log(`Usage: node nwss.js [options]
 
@@ -471,6 +496,10 @@ Output Format Options:
   --privoxy                      Output as { +block } .domain.com (Privoxy format)
   --pihole                       Output as (^|\\.)domain\\.com$ (Pi-hole regex format)
   --adblock-rules                Generate adblock filter rules with resource type modifiers (requires -o)
+  
+Request Blocking:
+  --block-ads=<file>             Block ads/trackers using EasyList format rules (||domain.com^, /ads/*, etc)
+                                 Works at request-level for maximum performance
 
 General Options:
   --verbose                      Force verbose mode globally
@@ -2345,6 +2374,27 @@ function setupFrameHandling(page, forceDebug) {
           console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: ${isMainFrame ? 'main' : 'iframe'}] ${frameUrl} → ${request.url()}`));
         }
 
+        // Apply adblock rules BEFORE expensive regex checks for better performance
+        if (adblockEnabled && adblockMatcher) {
+          try {
+            const result = adblockMatcher.shouldBlock(
+              checkedUrl,
+              currentUrl,
+              request.resourceType()
+            );
+            
+            if (result.blocked) {
+              adblockStats.blocked++;
+              if (forceDebug) {
+                console.log(formatLogMessage('debug', `${messageColors.blocked('[adblock]')} ${checkedUrl} (${result.reason})`));
+              }
+              request.abort();
+              return;
+            }
+            adblockStats.allowed++;
+          } catch (err) { /* Silently continue on adblock errors */ }
+        }
+
         // Show --debug output and the url while its scanning
         if (forceDebug) {
           const simplifiedUrl = getRootDomain(currentUrl);
@@ -4049,6 +4099,12 @@ function setupFrameHandling(page, forceDebug) {
        console.log(formatLogMessage('debug', `Cached detections: ${cloudflareStats.size}`));
      }
      // Log smart cache statistics (if cache is enabled)
+     // Adblock statistics
+     if (adblockEnabled) {
+       console.log(formatLogMessage('debug', '=== Adblock Statistics ==='));
+       const blockRate = ((adblockStats.blocked / (adblockStats.blocked + adblockStats.allowed)) * 100).toFixed(1);
+       console.log(formatLogMessage('debug', `Blocked: ${adblockStats.blocked} requests (${blockRate}% block rate), Allowed: ${adblockStats.allowed}`));
+     }
     if (smartCache) {
     const cacheStats = smartCache.getStats();  
     console.log(formatLogMessage('debug', '=== Smart Cache Statistics ==='));
