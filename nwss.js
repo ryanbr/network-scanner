@@ -51,7 +51,7 @@ const { clearSiteData } = require('./lib/clear_sitedata');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
-const { parseAdblockRules } = require('./lib/adblock_rules');
+const { parseAdblockRules } = require('./lib/adblock');
 
 // Fast setTimeout helper for Puppeteer 22.x compatibility
 // Uses standard Promise constructor for better performance than node:timers/promises
