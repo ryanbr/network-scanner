@@ -1673,7 +1673,8 @@ function setupFrameHandling(page, forceDebug) {
           return { url: currentUrl, rules: [], success: false, vpnFailed: true };
         }
         if (!silentMode) {
-          console.log(formatLogMessage('info', `[vpn] WireGuard connected via ${vpnResult.interface} for ${currentUrl}`));
+          const ipInfo = vpnResult.externalIP ? ` (${vpnResult.externalIP})` : '';
+          console.log(formatLogMessage('info', `[vpn] WireGuard connected via ${vpnResult.interface}${ipInfo} for ${currentUrl}`));
         }
       } else if (siteConfig.openvpn) {
         const ovpnResult = await ovpnConnect(siteConfig, forceDebug);
@@ -1682,7 +1683,8 @@ function setupFrameHandling(page, forceDebug) {
           return { url: currentUrl, rules: [], success: false, vpnFailed: true };
         }
         if (!silentMode) {
-          console.log(formatLogMessage('info', `[vpn] OpenVPN connected via ${ovpnResult.connection} for ${currentUrl}`));
+          const ipInfo = ovpnResult.externalIP ? ` (${ovpnResult.externalIP})` : '';
+          console.log(formatLogMessage('info', `[vpn] OpenVPN connected via ${ovpnResult.connection}${ipInfo} for ${currentUrl}`));
         }
       }
 
