@@ -53,8 +53,10 @@ const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = r
 // Adblock rules parser
 const { parseAdblockRules } = require('./lib/adblock');
 // WireGuard VPN
-const { connectForSite, disconnectForSite, disconnectAll, validateWireGuardAvailability, validateVpnConfig, normalizeVpnConfig } = require('./lib/wireguard_vpn');
-
+const { connectForSite: wgConnect, disconnectForSite: wgDisconnect, disconnectAll: wgDisconnectAll, validateVpnConfig, normalizeVpnConfig } = require('./lib/wireguard_vpn');
+// OpenVPN
+const { connectForSite: ovpnConnect, disconnectForSite: ovpnDisconnect, disconnectAll: ovpnDisconnectAll, validateOvpnConfig, normalizeOvpnConfig } = require('./lib/openvpn_vpn');
+ 
 
 // Fast setTimeout helper for Puppeteer 22.x compatibility
 // Uses standard Promise constructor for better performance than node:timers/promises
@@ -400,7 +402,7 @@ if (validateConfig) {
        }
     }
 
-    // Validate vpn configuration
+    // Validate VPN configurations
     for (const site of sites) {
       if (site.vpn) {
         const vpnNorm = normalizeVpnConfig(site.vpn);
@@ -411,6 +413,19 @@ if (validateConfig) {
         if (vpnValidation.warnings.length > 0) {
           vpnValidation.warnings.forEach(w => console.warn(`⚠ VPN warning for ${site.url}: ${w}`));
         }
+      }
+      if (site.openvpn) {
+        const ovpnNorm = normalizeOvpnConfig(site.openvpn);
+        const ovpnValidation = validateOvpnConfig(ovpnNorm);
+        if (!ovpnValidation.isValid) {
+          console.warn(`⚠ Invalid openvpn configuration for ${site.url}: ${ovpnValidation.errors.join(', ')}`);
+        }
+        if (ovpnValidation.warnings.length > 0) {
+          ovpnValidation.warnings.forEach(w => console.warn(`⚠ OpenVPN warning for ${site.url}: ${w}`));
+        }
+      }
+      if (site.vpn && site.openvpn) {
+        console.warn(`⚠ ${site.url} has both vpn and openvpn configured — only one will be used (vpn takes precedence)`);
       }
     }
 
@@ -656,13 +671,18 @@ Advanced Options:
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
 
-VPN Options:
-  vpn: "/etc/wireguard/wg0.conf"              WireGuard config file path (requires sudo)
-  vpn: { config: "wg-us" }                    Config name (resolved from /etc/wireguard/)
-  vpn: { config_inline: "[Interface]\\n..." }  Inline WireGuard config
-  vpn: { config: "wg0", interface: "wg0",     Full options: health_check (default: true),
-         health_check: true, test_host: "1.1.1.1",  test_host, retry (default: true),
-         retry: true, max_retries: 2 }         max_retries (default: 2)
+VPN Options (requires sudo, affects system routing — not isolated per-site during concurrent scans):
+  vpn: "/etc/wireguard/wg0.conf"              WireGuard config file path
+  vpn: { config: "wg-us", interface: "wg0",   WireGuard with options: health_check, test_host,
+         health_check: true, retry: true }      retry, max_retries
+  openvpn: "/path/to/server.ovpn"             OpenVPN config file path (uses embedded credentials)
+  openvpn: { config: "server.ovpn",           OpenVPN with options: username, password,
+             username: "user",                  auth_file, health_check, test_host, retry,
+             password: "pass",                  max_retries, connect_timeout, extra_args
+             health_check: true,
+             retry: true,
+             max_retries: 2,
+             connect_timeout: 30000 }
 
   window_cleanup: true/false/"realtime"/"all"  Window cleanup mode:
                                                true/false - Close extra windows after URL group completes (default: false)
@@ -1500,7 +1520,8 @@ function setupFrameHandling(page, forceDebug) {
     } catch (emergencyErr) {
       if (forceDebug) console.log(formatLogMessage('debug', `Emergency cleanup failed: ${emergencyErr.message}`));
     }
-    disconnectAll(forceDebug);
+    wgDisconnectAll(forceDebug);
+    ovpnDisconnectAll(forceDebug);
   }
  
   let siteCounter = 0;
@@ -1646,13 +1667,22 @@ function setupFrameHandling(page, forceDebug) {
 
       // --- Connect VPN if configured for this site ---
       if (siteConfig.vpn) {
-        const vpnResult = await connectForSite(siteConfig, forceDebug);
+        const vpnResult = await wgConnect(siteConfig, forceDebug);
         if (!vpnResult.success) {
-          console.warn(formatLogMessage('warn', `[vpn] Failed for ${currentUrl}: ${vpnResult.error}`));
+          console.warn(formatLogMessage('warn', `[vpn] WireGuard failed for ${currentUrl}: ${vpnResult.error}`));
           return { url: currentUrl, rules: [], success: false, vpnFailed: true };
         }
         if (!silentMode) {
-          console.log(formatLogMessage('info', `[vpn] Connected via ${vpnResult.interface} for ${currentUrl}`));
+          console.log(formatLogMessage('info', `[vpn] WireGuard connected via ${vpnResult.interface} for ${currentUrl}`));
+        }
+      } else if (siteConfig.openvpn) {
+        const ovpnResult = await ovpnConnect(siteConfig, forceDebug);
+        if (!ovpnResult.success) {
+          console.warn(formatLogMessage('warn', `[vpn] OpenVPN failed for ${currentUrl}: ${ovpnResult.error}`));
+          return { url: currentUrl, rules: [], success: false, vpnFailed: true };
+        }
+        if (!silentMode) {
+          console.log(formatLogMessage('info', `[vpn] OpenVPN connected via ${ovpnResult.connection} for ${currentUrl}`));
         }
       }
 
@@ -3668,9 +3698,14 @@ function setupFrameHandling(page, forceDebug) {
     
       // Disconnect VPN for this site
       if (siteConfig.vpn) {
-        const vpnDown = disconnectForSite(siteConfig, forceDebug);
+        const vpnDown = wgDisconnect(siteConfig, forceDebug);
         if (vpnDown.tornDown && forceDebug) {
-          console.log(formatLogMessage('debug', `[vpn] Interface torn down for ${currentUrl}`));
+          console.log(formatLogMessage('debug', `[vpn] WireGuard interface torn down for ${currentUrl}`));
+        }
+      } else if (siteConfig.openvpn) {
+        const ovpnDown = ovpnDisconnect(siteConfig, forceDebug);
+        if (ovpnDown.tornDown && forceDebug) {
+          console.log(formatLogMessage('debug', `[vpn] OpenVPN connection torn down for ${currentUrl}`));
         }
       }
 
@@ -4236,8 +4271,9 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
-  // Tear down any remaining VPN interfaces
-  disconnectAll(forceDebug);
+  // Tear down any remaining VPN interfaces/connections
+  wgDisconnectAll(forceDebug);
+  ovpnDisconnectAll(forceDebug);
 
   // Perform comprehensive final cleanup using enhanced browserexit module
   if (forceDebug) console.log(formatLogMessage('debug', `Starting comprehensive browser cleanup...`));
