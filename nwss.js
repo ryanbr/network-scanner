@@ -912,9 +912,6 @@ if (cleanRules || cleanRulesFile) {
   }
 }
 
-// Add global cycling index tracker for whois server selection
-let globalWhoisServerIndex = 0;
-
 // Track dry run output for file writing
 let dryRunOutput = [];
 
