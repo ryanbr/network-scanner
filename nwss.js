@@ -52,6 +52,9 @@ const { clearSiteData } = require('./lib/clear_sitedata');
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
 const { parseAdblockRules } = require('./lib/adblock');
+// WireGuard VPN
+const { connectForSite, disconnectForSite, disconnectAll, validateWireGuardAvailability, validateVpnConfig, normalizeVpnConfig } = require('./lib/wireguard_vpn');
+
 
 // Fast setTimeout helper for Puppeteer 22.x compatibility
 // Uses standard Promise constructor for better performance than node:timers/promises
@@ -397,6 +400,20 @@ if (validateConfig) {
        }
     }
 
+    // Validate vpn configuration
+    for (const site of sites) {
+      if (site.vpn) {
+        const vpnNorm = normalizeVpnConfig(site.vpn);
+        const vpnValidation = validateVpnConfig(vpnNorm);
+        if (!vpnValidation.isValid) {
+          console.warn(`⚠ Invalid vpn configuration for ${site.url}: ${vpnValidation.errors.join(', ')}`);
+        }
+        if (vpnValidation.warnings.length > 0) {
+          vpnValidation.warnings.forEach(w => console.warn(`⚠ VPN warning for ${site.url}: ${w}`));
+        }
+      }
+    }
+
     if (validation.isValid) {
       console.log(`${messageColors.success('✅ Configuration is valid!')}`);
       console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
@@ -638,6 +655,14 @@ Advanced Options:
   goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
+
+VPN Options:
+  vpn: "/etc/wireguard/wg0.conf"              WireGuard config file path (requires sudo)
+  vpn: { config: "wg-us" }                    Config name (resolved from /etc/wireguard/)
+  vpn: { config_inline: "[Interface]\\n..." }  Inline WireGuard config
+  vpn: { config: "wg0", interface: "wg0",     Full options: health_check (default: true),
+         health_check: true, test_host: "1.1.1.1",  test_host, retry (default: true),
+         retry: true, max_retries: 2 }         max_retries (default: 2)
 
   window_cleanup: true/false/"realtime"/"all"  Window cleanup mode:
                                                true/false - Close extra windows after URL group completes (default: false)
@@ -1475,6 +1500,7 @@ function setupFrameHandling(page, forceDebug) {
     } catch (emergencyErr) {
       if (forceDebug) console.log(formatLogMessage('debug', `Emergency cleanup failed: ${emergencyErr.message}`));
     }
+    disconnectAll(forceDebug);
   }
  
   let siteCounter = 0;
@@ -1617,6 +1643,18 @@ function setupFrameHandling(page, forceDebug) {
     ]);
 
     try {
+
+      // --- Connect VPN if configured for this site ---
+      if (siteConfig.vpn) {
+        const vpnResult = await connectForSite(siteConfig, forceDebug);
+        if (!vpnResult.success) {
+          console.warn(formatLogMessage('warn', `[vpn] Failed for ${currentUrl}: ${vpnResult.error}`));
+          return { url: currentUrl, rules: [], success: false, vpnFailed: true };
+        }
+        if (!silentMode) {
+          console.log(formatLogMessage('info', `[vpn] Connected via ${vpnResult.interface} for ${currentUrl}`));
+        }
+      }
 
       // Check for Protocol timeout errors that indicate browser is broken
       if (browserInstance.process() && browserInstance.process().killed) {
@@ -3627,7 +3665,15 @@ function setupFrameHandling(page, forceDebug) {
       };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
-      
+    
+      // Disconnect VPN for this site
+      if (siteConfig.vpn) {
+        const vpnDown = disconnectForSite(siteConfig, forceDebug);
+        if (vpnDown.tornDown && forceDebug) {
+          console.log(formatLogMessage('debug', `[vpn] Interface torn down for ${currentUrl}`));
+        }
+      }
+
       if (cdpSessionManager) {
         // Mark page as idle when cleanup starts
         if (page && !page.isClosed()) {
@@ -4189,7 +4235,10 @@ function setupFrameHandling(page, forceDebug) {
       }
     }
   }
- 
+
+  // Tear down any remaining VPN interfaces
+  disconnectAll(forceDebug);
+
   // Perform comprehensive final cleanup using enhanced browserexit module
   if (forceDebug) console.log(formatLogMessage('debug', `Starting comprehensive browser cleanup...`));
 
