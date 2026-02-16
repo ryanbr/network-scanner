@@ -152,8 +152,9 @@ Example:
 | `even_blocked`       | Boolean | `false` | Add matching rules even if requests are blocked |
 | `bypass_cache`       | Boolean | `false` | Skip all caching for this site's URLs |
 | `window_cleanup`     | Boolean or String | `false` | Close old/unused browser windows/tabs after entire URL group completes |
+| `window_cleanup_threshold` | Integer | `8` | For `"realtime"` mode: max pages to keep open before cleanup |
 
-**Window cleanup modes:** `false` (disabled), `true` (conservative - closes obvious leftovers), `"all"` (aggressive - closes all content pages). Both active modes preserve the main Puppeteer window and wait 16 seconds before cleanup to avoid interfering with active operations.
+**Window cleanup modes:** `false` (disabled), `true` (conservative - closes obvious leftovers), `"realtime"` (continuously cleanup oldest pages when threshold exceeded), `"all"` (aggressive - closes all content pages after group). Both active modes preserve the main Puppeteer window and wait 16 seconds before cleanup to avoid interfering with active operations.
 
 
 ### Redirect Handling Options
@@ -191,6 +192,11 @@ When a page redirects to a new domain, first-party/third-party detection is base
 "referrer_headers": {"mode": "social_media"}
 "referrer_headers": {"mode": "direct_navigation"}
 "referrer_headers": {"mode": "custom", "custom": ["https://news.ycombinator.com/"]}
+```
+
+**Disable referrer for specific URLs:**
+```json
+"referrer_disable": ["https://example.com/no-ref", "sensitive-site.com"]
 ```
 
 ### Protection Bypassing
@@ -244,7 +250,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 |:---------------------|:-------|:-------:|:------------|
 | `goto_options`       | Object | `{"waitUntil": "load"}` | Custom page.goto() options |
 | `clear_sitedata`     | Boolean | `false` | Clear all cookies, cache, storage before each load |
-| `forcereload`        | Boolean | `false` | Force an additional reload after reloads |
+| `forcereload`        | Boolean or Array | `false` | Force cache-clearing reload for all URLs (`true`) or specific domains (`["domain1.com"]`) |
 | `isBrave`            | Boolean | `false` | Spoof Brave browser detection |
 | `evaluateOnNewDocument` | Boolean | `false` | Inject fetch/XHR interceptor in page |
 | `cdp`                | Boolean | `false` | Enable CDP logging for this site |
@@ -260,6 +266,54 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `interact_clicks`    | Boolean | `false` | Enable element clicking simulation |
 | `interact_typing`    | Boolean | `false` | Enable typing simulation |
 | `interact_intensity` | String | `"medium"` | Interaction simulation intensity: "low", "medium", "high" |
+| `dnsmasq`            | Boolean | `false` | Force dnsmasq output for this site |
+| `dnsmasq_old`        | Boolean | `false` | Force dnsmasq old format output for this site |
+| `unbound`            | Boolean | `false` | Force unbound output for this site |
+| `privoxy`            | Boolean | `false` | Force Privoxy output for this site |
+| `pihole`             | Boolean | `false` | Force Pi-hole regex output for this site |
+| `ignore_similar`     | Boolean | - | Override global `ignore_similar` setting for this site |
+| `ignore_similar_threshold` | Integer | - | Override global similarity threshold for this site |
+| `ignore_similar_ignored_domains` | Boolean | - | Override global `ignore_similar_ignored_domains` for this site |
+
+### VPN Options
+
+Route traffic through a VPN for specific sites. Requires `sudo` privileges. The VPN connection is established before scanning and torn down after the site completes.
+
+> **Note:** VPN modifies system-level routing. During concurrent scanning, all traffic routes through the active tunnel — not just the site that requested it. For isolated per-site VPN, run sites sequentially or use the same VPN config for all concurrent sites.
+
+#### WireGuard
+
+| Field                | Values | Default | Description |
+|:---------------------|:-------|:-------:|:------------|
+| `vpn`                | String or Object | - | WireGuard VPN configuration |
+| `vpn.config`         | String | - | Path to `.conf` file or interface name in `/etc/wireguard/` |
+| `vpn.config_inline`  | String | - | Inline WireGuard config content |
+| `vpn.interface`      | String | auto | Interface name (auto-derived from config filename) |
+| `vpn.health_check`   | Boolean | `true` | Ping through tunnel to verify connectivity |
+| `vpn.test_host`      | String | `"1.1.1.1"` | Host to ping for health check |
+| `vpn.retry`          | Boolean | `true` | Retry on connection failure |
+| `vpn.max_retries`    | Integer | `2` | Maximum retry attempts |
+
+#### OpenVPN
+
+| Field                | Values | Default | Description |
+|:---------------------|:-------|:-------:|:------------|
+| `openvpn`            | String or Object | - | OpenVPN configuration |
+| `openvpn.config`     | String | - | Path to `.ovpn` file |
+| `openvpn.config_inline` | String | - | Inline OpenVPN config content |
+| `openvpn.name`       | String | auto | Connection name (auto-derived from config filename) |
+| `openvpn.username`   | String | - | VPN username (written to secure temp file) |
+| `openvpn.password`   | String | - | VPN password (written to secure temp file) |
+| `openvpn.auth_file`  | String | - | Path to existing auth credentials file |
+| `openvpn.health_check` | Boolean | `true` | Ping through tunnel to verify connectivity |
+| `openvpn.test_host`  | String | `"1.1.1.1"` | Host to ping for health check |
+| `openvpn.retry`      | Boolean | `true` | Retry on connection failure |
+| `openvpn.max_retries` | Integer | `2` | Maximum retry attempts |
+| `openvpn.connect_timeout` | Milliseconds | `30000` | Timeout for connection establishment |
+| `openvpn.extra_args` | Array | - | Additional OpenVPN command line arguments |
+| `openvpn.verbosity`  | String | `"3"` | OpenVPN log verbosity level |
+
+> **Authentication:** If the `.ovpn` file already contains credentials (via `auth-user-pass /path/to/file` or an inline `<auth-user-pass>` block), no additional config is needed — just provide the config path. The `username`/`password` fields are only needed when the `.ovpn` file has a bare `auth-user-pass` directive that expects interactive input.
 
 ### Global Configuration Options
 
@@ -434,6 +488,41 @@ node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
 }
 ```
 
+#### Scanning through OpenVPN
+```json
+{
+  "url": "https://geo-restricted-site.com",
+  "openvpn": "/etc/openvpn/us-server.ovpn",
+  "filterRegex": "tracking|analytics",
+  "userAgent": "chrome",
+  "fingerprint_protection": "random"
+}
+```
+
+#### OpenVPN with Credentials
+```json
+{
+  "url": "https://region-locked-site.com",
+  "openvpn": {
+    "config": "/etc/openvpn/eu-server.ovpn",
+    "username": "vpn_user",
+    "password": "vpn_pass",
+    "connect_timeout": 45000
+  },
+  "filterRegex": "ads|tracking"
+}
+```
+
+#### Scanning through WireGuard
+```json
+{
+  "url": "https://another-site.com",
+  "vpn": "/etc/wireguard/wg-us.conf",
+  "filterRegex": "analytics",
+  "userAgent": "firefox"
+}
+```
+
 ---
 
 ## Memory Management
@@ -477,6 +566,39 @@ sudo apt install google-chrome-stable
 sudo apt install bind9-dnsutils whois
 ```
 
+#### OpenVPN (optional, for per-site VPN routing)
+```
+sudo apt install openvpn
+```
+
+Grant passwordless sudo for OpenVPN operations:
+```
+sudo visudo -f /etc/sudoers.d/openvpn-nwss
+```
+Add:
+```
+your_username ALL=(root) NOPASSWD: /usr/sbin/openvpn, /usr/bin/kill, /usr/bin/pgrep, /usr/bin/pkill
+```
+
+On WSL2, load the TUN module (required each reboot):
+```
+sudo modprobe tun
+```
+
+#### WireGuard (optional, for per-site VPN routing)
+```
+sudo apt install wireguard
+```
+
+Grant passwordless sudo for WireGuard operations:
+```
+sudo visudo -f /etc/sudoers.d/wg-nwss
+```
+Add:
+```
+your_username ALL=(root) NOPASSWD: /usr/bin/wg-quick, /usr/bin/wg
+```
+
 ## Notes
 
 - If both `firstParty: 0` and `thirdParty: 0` are set for a site, it will be skipped.
@@ -491,5 +613,9 @@ sudo apt install bind9-dnsutils whois
 - For maximum stealth, combine `fingerprint_protection: "random"` with appropriate `referrer_headers` modes
 - User agents are automatically updated to latest versions (Chrome 131, Firefox 133, Safari 18.2)
 - Referrer headers work independently from fingerprint protection - use both for best results
+- VPN connections (`vpn`/`openvpn`) are established before scanning and torn down after the site completes
+- If an `.ovpn` file contains embedded credentials, no additional auth config is needed in the JSON
+- VPN affects system-level routing — all concurrent scans will route through the active tunnel
+- Both `vpn` (WireGuard) and `openvpn` can be set, but `vpn` takes precedence
 
 ---
