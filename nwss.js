@@ -2611,6 +2611,7 @@ function setupFrameHandling(page, forceDebug) {
                 whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
                 whoisServer,
                 whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+                bufferedLogWrite,
                 debugLogFile,
                 fs,
                 digTerms,
@@ -2718,6 +2719,7 @@ function setupFrameHandling(page, forceDebug) {
                whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay, // Site-specific or global fallback
 	       whoisServer, // Pass whois server configuration
                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+               bufferedLogWrite,
                debugLogFile, // Pass debug log file for whois error logging
                fs, // Pass fs module for file operations
                digTerms,
