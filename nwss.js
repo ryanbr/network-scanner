@@ -694,6 +694,11 @@ const {
   ...otherGlobalConfig 
 } = config;
 
+// Pre-compile global blocked regexes ONCE (used in every processUrl call)
+const globalBlockedRegexes = Array.isArray(globalBlocked)
+  ? globalBlocked.map(pattern => new RegExp(pattern))
+  : [];
+
 // Apply global configuration overrides with validation
 // Priority: Command line args > config.json > defaults
 const MAX_CONCURRENT_SITES = (() => {
@@ -943,6 +948,39 @@ if (dumpUrls) {
   }
 }
 
+// --- Buffered Log Writer ---
+// Avoids blocking I/O on every intercepted request in debug/dumpurls mode
+const _logBuffers = new Map();  // filePath -> string[]
+const LOG_FLUSH_INTERVAL = 2000; // Flush every 2 seconds
+let _logFlushTimer = null;
+
+function bufferedLogWrite(filePath, entry) {
+  if (!filePath) return;
+  if (!_logBuffers.has(filePath)) {
+    _logBuffers.set(filePath, []);
+  }
+  _logBuffers.get(filePath).push(entry);
+}
+
+function flushLogBuffers() {
+  for (const [filePath, entries] of _logBuffers) {
+    if (entries.length > 0) {
+      try {
+        fs.appendFileSync(filePath, entries.join(''));
+      } catch (err) {
+        console.warn(formatLogMessage('warn', `Failed to flush log buffer to ${filePath}: ${err.message}`));
+      }
+      entries.length = 0; // Clear buffer
+    }
+  }
+}
+
+// Start periodic flush if any logging is enabled
+if (forceDebug || dumpUrls) {
+  _logFlushTimer = setInterval(flushLogBuffers, LOG_FLUSH_INTERVAL);
+  _logFlushTimer.unref(); // Don't keep process alive just for flushing
+}
+
 // Log comments if debug mode is enabled and comments exist
 if (forceDebug && globalComments) {
   const commentList = Array.isArray(globalComments) ? globalComments : [globalComments];
@@ -1047,15 +1085,21 @@ function shouldBypassCacheForUrl(url, siteConfig) {
   return siteConfig.bypass_cache === true;
 }
 
-// ability to use widcards in ignoreDomains
+// ability to use wildcards in ignoreDomains
+// Cache compiled wildcard regexes to avoid recompilation on every request
+const _wildcardRegexCache = new Map();
 function matchesIgnoreDomain(domain, ignorePatterns) {
   return ignorePatterns.some(pattern => {
     if (pattern.includes('*')) {
-      // Convert wildcard pattern to regex
-      const regexPattern = pattern
-        .replace(/\./g, '\\.')  // Escape dots
-        .replace(/\*/g, '.*');  // Convert * to .*
-      return new RegExp(`^${regexPattern}$`).test(domain);
+      let compiled = _wildcardRegexCache.get(pattern);
+      if (!compiled) {
+        const regexPattern = pattern
+          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')  // Escape all regex specials including *
+          .replace(/\\\*/g, '.*');                    // Convert escaped \* back to .*
+        compiled = new RegExp(`^${regexPattern}$`);
+        _wildcardRegexCache.set(pattern, compiled);
+      }
+      return compiled.test(domain);
     }
     return domain.endsWith(pattern);
   });
@@ -1065,14 +1109,6 @@ function setupFrameHandling(page, forceDebug) {
   // Track active frames and clear on navigation to prevent detached frame access
   let activeFrames = new Set(); // Use Set to track frame references
   
-  // Clear frame tracking on navigation to prevent stale references
-  page.on('framenavigated', (frame) => {
-    if (frame === page.mainFrame()) {
-      // Main frame navigated - clear all tracked frames
-      activeFrames.clear();
-    }
-  });
-
   // Handle frame creation with error suppression
   page.on('frameattached', async (frame) => {
     // Enhanced frame handling with detached frame protection
@@ -1182,10 +1218,16 @@ function setupFrameHandling(page, forceDebug) {
       }
     }
   });
-  // Handle frame navigations (keep this for monitoring)
+  // Handle frame navigations - clear stale tracking and monitor activity
   page.on('framenavigated', (frame) => {
 
-    // Skip if frame is not in our active set
+    // Main frame navigated - clear all tracked frames to prevent stale references
+    if (frame === page.mainFrame()) {
+      activeFrames.clear();
+      return;
+    }
+
+    // Skip child frames not in our active set
     if (!activeFrames.has(frame)) return;
 
     let frameUrl;
@@ -1399,12 +1441,16 @@ function setupFrameHandling(page, forceDebug) {
   // Set up cleanup on process termination
   process.on('SIGINT', async () => {
     if (forceDebug) console.log(formatLogMessage('debug', 'SIGINT received, performing cleanup...'));
+    flushLogBuffers();
+    if (_logFlushTimer) clearInterval(_logFlushTimer);
     await performEmergencyCleanup();
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
     if (forceDebug) console.log(formatLogMessage('debug', 'SIGTERM received, performing cleanup...'));
+    flushLogBuffers();
+    if (_logFlushTimer) clearInterval(_logFlushTimer);
     await performEmergencyCleanup();
     process.exit(0);
   });
@@ -2195,11 +2241,10 @@ function setupFrameHandling(page, forceDebug) {
         ? siteConfig.blocked.map(pattern => new RegExp(pattern))
         : [];
 		
-      // Add global blocked patterns
-      const globalBlockedRegexes = Array.isArray(globalBlocked)
-        ? globalBlocked.map(pattern => new RegExp(pattern))
-        : [];
-      const allBlockedRegexes = [...blockedRegexes, ...globalBlockedRegexes];
+      // Combine site-specific with pre-compiled global blocked patterns
+      const allBlockedRegexes = blockedRegexes.length > 0
+        ? [...blockedRegexes, ...globalBlockedRegexes]
+        : globalBlockedRegexes; // Avoid spread when no site-specific patterns
 
       /**
        * Helper function to add domain to matched collection
@@ -2329,12 +2374,14 @@ function setupFrameHandling(page, forceDebug) {
       // - URL matching against blocklists (`blockedRegexes`).
       // - URL matching against filter patterns (`regexes`) for domain extraction.
       // - Global `ignoreDomains` list.
+      // Pre-compute values that are constant for this URL
+      const simplifiedCurrentUrl = getRootDomain(currentUrl);
+
       page.on('request', request => {
         const checkedUrl = request.url();
-        const checkedHostname = safeGetDomain(checkedUrl, true);
-        const checkedRootDomain = safeGetDomain(checkedUrl, false); // Root domain for first-party detection
+        const fullSubdomain = safeGetDomain(checkedUrl, true);  // Full hostname for cache
+        const checkedRootDomain = safeGetDomain(checkedUrl, false);
         // Check against ALL first-party domains (original + all redirects)
-        // This prevents redirect destinations from being marked as third-party
         const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
         
         // Block infinite iframe loops - safely access frame URL
@@ -2347,9 +2394,9 @@ function setupFrameHandling(page, forceDebug) {
           }
         })();
         if (frameUrl && frameUrl.includes('creative.dmzjmp.com') && 
-            request.url().includes('go.dmzjmp.com/api/models')) {
+            checkedUrl.includes('go.dmzjmp.com/api/models')) {
           if (forceDebug) {
-            console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${request.url()}`));
+            console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${checkedUrl}`));
           }
           request.abort();
           return;
@@ -2357,19 +2404,19 @@ function setupFrameHandling(page, forceDebug) {
 
         // Enhanced debug logging to show which frame the request came from
         if (forceDebug) {
-          let frameUrl = 'unknown-frame';
+          let debugFrameUrl = 'unknown-frame';
           let isMainFrame = false;
           
           try {
             const frame = request.frame();
             if (frame) {
-              frameUrl = frame.url();
+              debugFrameUrl = frame.url();
               isMainFrame = frame === page.mainFrame();
             }
           } catch (frameErr) {
-            frameUrl = 'detached-frame';
+            debugFrameUrl = 'detached-frame';
           }
-          console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: ${isMainFrame ? 'main' : 'iframe'}] ${frameUrl} → ${request.url()}`));
+          console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: ${isMainFrame ? 'main' : 'iframe'}] ${debugFrameUrl} → ${checkedUrl}`));
         }
 
         // Apply adblock rules BEFORE expensive regex checks for better performance
@@ -2395,46 +2442,36 @@ function setupFrameHandling(page, forceDebug) {
 
         // Show --debug output and the url while its scanning
         if (forceDebug) {
-          const simplifiedUrl = getRootDomain(currentUrl);
           const timestamp = new Date().toISOString();
-          const logEntry = `${timestamp} [debug req][${simplifiedUrl}] ${request.url()}`;
+          const logEntry = `${timestamp} [debug req][${simplifiedCurrentUrl}] ${checkedUrl}\n`;
 
           // Output to console
-          console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[${simplifiedUrl}] ${request.url()}`));
+          console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[${simplifiedCurrentUrl}] ${checkedUrl}`));
 
-          // Output to file
-          if (debugLogFile) {
-            try {
-              fs.appendFileSync(debugLogFile, logEntry + '\n');
-            } catch (logErr) {
-              console.warn(formatLogMessage('warn', `Failed to write to debug log file: ${logErr.message}`));
-            }
-          }
+          // Output to file (buffered)
+          bufferedLogWrite(debugLogFile, logEntry);
         }
-        const reqUrl = request.url();
+        const reqUrl = checkedUrl;
         
-        // ALWAYS extract the FULL subdomain for cache checking to preserve unique subdomains
-        const fullSubdomain = safeGetDomain(reqUrl, true); // Always get full subdomain for cache
         const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains); // Output domain based on config
 
         if (allBlockedRegexes.some(re => re.test(reqUrl))) {
          if (forceDebug) {
-           // Find which specific pattern matched for debug logging
-            const allPatterns = [...(siteConfig.blocked || []), ...globalBlocked];
-            const matchedPattern = allPatterns.find(pattern => new RegExp(pattern).test(reqUrl));
-            const patternSource = siteConfig.blocked && siteConfig.blocked.includes(matchedPattern) ? 'site' : 'global';
-            const simplifiedUrl = getRootDomain(currentUrl);
-            console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
-            
-            // Also log to file if debug logging is enabled
-            if (debugLogFile) {
-              try {
-                const timestamp = new Date().toISOString();
-                fs.appendFileSync(debugLogFile, `${timestamp} [blocked][${simplifiedUrl}] ${reqUrl} (${patternSource} pattern: ${matchedPattern})\n`);
-              } catch (logErr) {
-                console.warn(formatLogMessage('warn', `Failed to write blocked domain to debug log: ${logErr.message}`));
+           // Find which specific pattern matched using already-compiled regexes
+            let matchedPattern = '(unknown)';
+            let patternSource = 'global';
+            for (let i = 0; i < allBlockedRegexes.length; i++) {
+              if (allBlockedRegexes[i].test(reqUrl)) {
+                matchedPattern = allBlockedRegexes[i].source;
+                patternSource = i < blockedRegexes.length ? 'site' : 'global';
+                break;
               }
             }
+            console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedCurrentUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
+            
+            // Also log to file (buffered)
+            const timestamp = new Date().toISOString();
+            bufferedLogWrite(debugLogFile, `${timestamp} [blocked][${simplifiedCurrentUrl}] ${reqUrl} (${patternSource} pattern: ${matchedPattern})\n`);
           }
           
           // NEW: Check if even_blocked is enabled and this URL matches filter regex
@@ -2461,15 +2498,14 @@ function setupFrameHandling(page, forceDebug) {
                       addMatchedDomain(reqDomain, resourceType, fullSubdomain);
                     }
                     
-                    const simplifiedUrl = getRootDomain(currentUrl);
                     if (siteConfig.verbose === 1) {
                       const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-                      console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
+                      console.log(formatLogMessage('match', `[${simplifiedCurrentUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
                     }
                     if (dumpUrls) {
                       const timestamp = new Date().toISOString();
                       const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-                      fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo} [BLOCKED BUT ADDED]\n`);
+                      bufferedLogWrite(matchedUrlsLogFile, `${timestamp} [match][${simplifiedCurrentUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo} [BLOCKED BUT ADDED]\n`);
                     }
                     break; // Only match once per URL
                   }
@@ -2625,15 +2661,14 @@ function setupFrameHandling(page, forceDebug) {
              } else {
                addMatchedDomain(reqDomain, resourceType);
              }
-             const simplifiedUrl = getRootDomain(currentUrl);
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-              console.log(formatLogMessage('match', `[${simplifiedUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
+              console.log(formatLogMessage('match', `[${simplifiedCurrentUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
              }
              if (dumpUrls) {
                const timestamp = new Date().toISOString();
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-               fs.appendFileSync(matchedUrlsLogFile, `${timestamp} [match][${simplifiedUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo}\n`);
+               bufferedLogWrite(matchedUrlsLogFile, `${timestamp} [match][${simplifiedCurrentUrl}] ${reqUrl} (resourceType: ${resourceType})${resourceInfo}\n`);
              }
             } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
@@ -4117,6 +4152,12 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
   
+  // Flush any remaining buffered log entries before compression/exit
+  flushLogBuffers();
+  if (_logFlushTimer) {
+    clearInterval(_logFlushTimer);
+  }
+
   // Compress log files if --compress-logs is enabled
   if (compressLogs && dumpUrls && !dryRunMode) {
     // Collect all existing log files for compression
