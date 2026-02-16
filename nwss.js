@@ -1790,10 +1790,6 @@ function setupFrameHandling(page, forceDebug) {
         }
       });
       
-      page.on('response', (response) => {
-        // Response handler - removed incorrect error logging
-      });
-
       // Apply flowProxy timeouts if detection is enabled
       if (flowproxyDetection) {
         const flowproxyTimeouts = getFlowProxyTimeouts(siteConfig);
