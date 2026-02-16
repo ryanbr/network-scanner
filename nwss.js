@@ -210,7 +210,7 @@ const dryRunMode = args.includes('--dry-run');
 const compressLogs = args.includes('--compress-logs');
 const removeTempFiles = args.includes('--remove-tempfiles');
 const validateConfig = args.includes('--validate-config');
-const validateRules = args.includes('--validate-rules');
+let validateRules = args.includes('--validate-rules');
 const testValidation = args.includes('--test-validation');
 let cleanRules = args.includes('--clean-rules');
 const clearCache = args.includes('--clear-cache');
@@ -1311,7 +1311,6 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-client-side-phishing-detection',
         '--enable-features=NetworkService',
         // Disk space controls - 50MB cache limits
-        '--disable-features=VizDisplayCompositor',
         `--disk-cache-size=${CACHE_LIMITS.DISK_CACHE_SIZE}`, // 50MB disk cache
         `--media-cache-size=${CACHE_LIMITS.MEDIA_CACHE_SIZE}`, // 50MB media cache
         '--disable-application-cache',
@@ -1324,7 +1323,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-ipc-flooding-protection',
         '--aggressive-cache-discard',
         '--memory-pressure-off',
-        '--max_old_space_size=2048',
+        '--max_old_space_size=2048',   // V8 heap limit
         '--disable-prompt-on-repost',  // Fixes form popup on page reload
         '--disable-background-networking',
         '--no-sandbox',
@@ -1339,7 +1338,6 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-extensions',
         '--no-default-browser-check',
         '--safebrowsing-disable-auto-update',
-        '--max_old_space_size=1024',
         '--ignore-ssl-errors',
         '--ignore-certificate-errors',
         '--ignore-certificate-errors-spki-list',
