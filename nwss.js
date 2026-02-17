@@ -2442,8 +2442,16 @@ function setupFrameHandling(page, forceDebug) {
 
       page.on('request', request => {
         const checkedUrl = request.url();
-        const fullSubdomain = safeGetDomain(checkedUrl, true);  // Full hostname for cache
-        const checkedRootDomain = safeGetDomain(checkedUrl, false);
+        // Parse URL once, derive all domain variants from single parse
+        let fullSubdomain = '';
+        let checkedRootDomain = '';
+        try {
+          const parsedUrl = new URL(checkedUrl);
+          fullSubdomain = parsedUrl.hostname;
+          const pslResult = psl.parse(fullSubdomain);
+          checkedRootDomain = pslResult.domain || fullSubdomain;
+        } catch (e) {}
+
         // Check against ALL first-party domains (original + all redirects)
         const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
         
@@ -2516,7 +2524,7 @@ function setupFrameHandling(page, forceDebug) {
         }
         const reqUrl = checkedUrl;
         
-        const reqDomain = safeGetDomain(reqUrl, perSiteSubDomains); // Output domain based on config
+        const reqDomain = perSiteSubDomains ? fullSubdomain : checkedRootDomain;
 
         if (allBlockedRegexes.some(re => re.test(reqUrl))) {
          if (forceDebug) {
