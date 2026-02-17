@@ -744,6 +744,17 @@ const globalBlockedRegexes = Array.isArray(globalBlocked)
   ? globalBlocked.map(pattern => new RegExp(pattern))
   : [];
 
+// Pre-split ignoreDomains into exact Set (O(1) lookup) and wildcard array
+const _ignoreDomainsExact = new Set();
+const _ignoreDomainsWildcard = [];
+for (const pattern of ignoreDomains) {
+  if (pattern.includes('*')) {
+    _ignoreDomainsWildcard.push(pattern);
+  } else {
+    _ignoreDomainsExact.add(pattern);
+  }
+}
+
 // Apply global configuration overrides with validation
 // Priority: Command line args > config.json > defaults
 const MAX_CONCURRENT_SITES = (() => {
@@ -1131,22 +1142,30 @@ function shouldBypassCacheForUrl(url, siteConfig) {
 // Cache compiled wildcard regexes to avoid recompilation on every request
 const _wildcardRegexCache = new Map();
 function matchesIgnoreDomain(domain, ignorePatterns) {
-  const len = ignorePatterns.length;
-  for (let i = 0; i < len; i++) {
-    const pattern = ignorePatterns[i];
-    if (pattern.charCodeAt(0) === 42 || pattern.includes('*')) {
-      let compiled = _wildcardRegexCache.get(pattern);
-      if (!compiled) {
-        const regexPattern = pattern
-          .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')  // Escape all regex specials including *
-          .replace(/\\\*/g, '.*');                    // Convert escaped \* back to .*
-        compiled = new RegExp(`^${regexPattern}$`);
-        _wildcardRegexCache.set(pattern, compiled);
-      }
-      if (compiled.test(domain)) return true;
-    } else {
-      if (domain.endsWith(pattern)) return true;
+  // Fast path: exact match or suffix match against Set (O(n) for parts, but no regex)
+  if (_ignoreDomainsExact.size > 0) {
+    if (_ignoreDomainsExact.has(domain)) return true;
+    // Check parent domains: sub.ads.example.com → ads.example.com → example.com
+    const parts = domain.split('.');
+    for (let i = 1; i < parts.length; i++) {
+      if (_ignoreDomainsExact.has(parts.slice(i).join('.'))) return true;
     }
+  }
+
+  // Slow path: wildcard patterns only
+  const wildcards = _ignoreDomainsWildcard;
+  const len = wildcards.length;
+  for (let i = 0; i < len; i++) {
+    const pattern = wildcards[i];
+    let compiled = _wildcardRegexCache.get(pattern);
+    if (!compiled) {
+      const regexPattern = pattern
+        .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        .replace(/\\\*/g, '.*');
+      compiled = new RegExp(`^${regexPattern}$`);
+      _wildcardRegexCache.set(pattern, compiled);
+    }
+    if (compiled.test(domain)) return true;
   }
   return false;
 }
