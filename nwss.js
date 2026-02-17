@@ -2526,18 +2526,17 @@ function setupFrameHandling(page, forceDebug) {
         
         const reqDomain = perSiteSubDomains ? fullSubdomain : checkedRootDomain;
 
-        if (allBlockedRegexes.some(re => re.test(reqUrl))) {
-         if (forceDebug) {
-           // Find which specific pattern matched using already-compiled regexes
-            let matchedPattern = '(unknown)';
-            let patternSource = 'global';
-            for (let i = 0; i < allBlockedRegexes.length; i++) {
-              if (allBlockedRegexes[i].test(reqUrl)) {
-                matchedPattern = allBlockedRegexes[i].source;
-                patternSource = i < blockedRegexes.length ? 'site' : 'global';
-                break;
-              }
-            }
+        let blockedMatchIndex = -1;
+        for (let i = 0; i < allBlockedRegexes.length; i++) {
+          if (allBlockedRegexes[i].test(reqUrl)) {
+            blockedMatchIndex = i;
+            break;
+          }
+        }
+        if (blockedMatchIndex !== -1) {
+          if (forceDebug) {
+            const matchedPattern = allBlockedRegexes[blockedMatchIndex].source;
+            const patternSource = blockedMatchIndex < blockedRegexes.length ? 'site' : 'global';
             console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedCurrentUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
             
             // Also log to file (buffered)
