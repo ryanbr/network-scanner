@@ -1131,8 +1131,10 @@ function shouldBypassCacheForUrl(url, siteConfig) {
 // Cache compiled wildcard regexes to avoid recompilation on every request
 const _wildcardRegexCache = new Map();
 function matchesIgnoreDomain(domain, ignorePatterns) {
-  return ignorePatterns.some(pattern => {
-    if (pattern.includes('*')) {
+  const len = ignorePatterns.length;
+  for (let i = 0; i < len; i++) {
+    const pattern = ignorePatterns[i];
+    if (pattern.charCodeAt(0) === 42 || pattern.includes('*')) {
       let compiled = _wildcardRegexCache.get(pattern);
       if (!compiled) {
         const regexPattern = pattern
@@ -1141,10 +1143,12 @@ function matchesIgnoreDomain(domain, ignorePatterns) {
         compiled = new RegExp(`^${regexPattern}$`);
         _wildcardRegexCache.set(pattern, compiled);
       }
-      return compiled.test(domain);
+      if (compiled.test(domain)) return true;
+    } else {
+      if (domain.endsWith(pattern)) return true;
     }
-    return domain.endsWith(pattern);
-  });
+  }
+  return false;
 }
 
 function setupFrameHandling(page, forceDebug) {
