@@ -17,6 +17,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 - Subdomain handling (collapse to root or full subdomain)
 - Optionally match only first-party, third-party, or both
 - Enhanced redirect handling with JavaScript and meta refresh detection
+- Per-site proxy routing (SOCKS5, SOCKS4, HTTP, HTTPS) with pre-flight health checks
 
 ---
 
@@ -314,6 +315,86 @@ Route traffic through a VPN for specific sites. Requires `sudo` privileges. The 
 | `openvpn.verbosity`  | String | `"3"` | OpenVPN log verbosity level |
 
 > **Authentication:** If the `.ovpn` file already contains credentials (via `auth-user-pass /path/to/file` or an inline `<auth-user-pass>` block), no additional config is needed — just provide the config path. The `username`/`password` fields are only needed when the `.ovpn` file has a bare `auth-user-pass` directive that expects interactive input.
+
+### Proxy Options
+
+Route traffic through a proxy for specific sites. Supports SOCKS5, SOCKS4, HTTP, and HTTPS proxies. Unlike VPN, proxy routing is per-site-group — only URLs in the same config block use the proxy; other sites connect directly.
+
+> **Note:** Chromium's `--proxy-server` flag is browser-wide. Sites requiring different proxies (or direct vs proxied) are automatically separated into different browser instances. Tasks are sorted so proxy groups are contiguous to minimise restarts.
+
+| Field                | Values | Default | Description |
+|:---------------------|:-------|:-------:|:------------|
+| `proxy`              | String | - | Proxy URL: `socks5://host:port`, `http://host:port`, `https://host:port`, or `http://user:pass@host:port` |
+| `proxy_bypass`       | Array  | `[]` | Domains that skip the proxy (e.g. `["localhost", "127.0.0.1", "*.local"]`) |
+| `proxy_remote_dns`   | Boolean | `true` | Resolve DNS through the proxy (SOCKS only — prevents DNS leaks) |
+| `proxy_debug`        | Boolean | `false` | Print proxy diagnostics: launch args, auth, health checks, error codes |
+
+Legacy aliases (`socks5_proxy`, `socks5_bypass`, `socks5_remote_dns`, `socks5_debug`) are supported for backwards compatibility.
+
+#### Proxy Examples
+
+**SOCKS5 — no auth:**
+```json
+{
+  "url": ["https://blocked-site.com/", "https://another-blocked.com/"],
+  "proxy": "socks5://127.0.0.1:1080",
+  "search_string": ["tracking.js"]
+}
+```
+
+**HTTP proxy with credentials:**
+```json
+{
+  "url": ["https://geo-restricted.com/"],
+  "proxy": "http://user:pass@proxy.corp.com:3128",
+  "search_string": ["analytics"]
+}
+```
+
+**SOCKS5 with bypass list and debug:**
+```json
+{
+  "url": ["https://target-site.com/"],
+  "proxy": "socks5://user:pass@proxy.example.com:9050",
+  "proxy_bypass": ["localhost", "127.0.0.1", "*.internal.corp"],
+  "proxy_remote_dns": true,
+  "proxy_debug": true,
+  "search_string": ["tracker"]
+}
+```
+
+**Mixed direct + proxied in one config:**
+```json
+[
+  {
+    "url": ["https://direct-site.com/"],
+    "search_string": ["ads"]
+  },
+  {
+    "url": ["https://blocked-site.com/"],
+    "proxy": "socks5://127.0.0.1:1080",
+    "search_string": ["ads"]
+  }
+]
+```
+
+#### Proxy Error Handling
+
+If a proxy is unreachable, the batch is skipped with a clear error before any navigation is attempted:
+
+```
+[error] [proxy] Unreachable: socks5://127.0.0.1:1080 — Connection refused
+[error] [proxy] Skipping 5 URL(s) in this batch
+```
+
+If a proxy fails mid-scan, Chromium's error code is detected and diagnosed:
+
+```
+[error] [proxy] ERR_SOCKS_CONNECTION_FAILED — proxy: socks5://127.0.0.1:1080 — URL: https://example.com/
+[error] [proxy] Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?
+```
+
+Detected error codes: `ERR_PROXY_CONNECTION_FAILED`, `ERR_SOCKS_CONNECTION_FAILED`, `ERR_TUNNEL_CONNECTION_FAILED`, `ERR_PROXY_AUTH_UNSUPPORTED`, `ERR_PROXY_AUTH_REQUESTED`, `ERR_SOCKS_CONNECTION_HOST_UNREACHABLE`, `ERR_PROXY_CERTIFICATE_INVALID`, `ERR_NO_SUPPORTED_PROXIES`.
 
 ### Global Configuration Options
 

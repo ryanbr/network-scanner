@@ -1,4 +1,4 @@
-// === Network scanner script (nwss.js) v2.0.33 ===
+// === Network scanner script (nwss.js) v2.0.51 ===
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
@@ -44,6 +44,7 @@ const { performPageInteraction, createInteractionConfig } = require('./lib/inter
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
+const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy } = require('./lib/proxy');
 // Dry run functionality
 const { initializeDryRunCollections, addDryRunMatch, addDryRunNetTools, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
 // Enhanced site data clearing functionality
@@ -1354,7 +1355,7 @@ function setupFrameHandling(page, forceDebug) {
    * Uses system Chrome and temporary directories to minimize disk usage
    * @returns {Promise<import('puppeteer').Browser>} Browser instance
    */
-  async function createBrowser() {
+  async function createBrowser(extraArgs = []) {
     // Create temporary user data directory that we can fully control and clean up
     const tempUserDataDir = `/tmp/puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`;
     userDataDir = tempUserDataDir; // Store for cleanup tracking (use outer scope variable)
@@ -1458,6 +1459,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-background-timer-throttling',
         '--disable-features=site-per-process', // Better for single-site scanning
         '--no-zygote', // Better process isolation
+        ...extraArgs,
         ],
         // Optimized timeouts for Puppeteer 23.x performance
         protocolTimeout: TIMEOUTS.PROTOCOL_TIMEOUT,
@@ -2128,6 +2130,11 @@ function setupFrameHandling(page, forceDebug) {
         } catch (clearErr) {
           if (forceDebug) console.log(formatLogMessage('debug', `[clear_sitedata] Failed for ${currentUrl}: ${clearErr.message}`));
         }
+      }
+
+      // --- Apply proxy authentication if configured ---
+      if (needsProxy(siteConfig)) {
+        await applyProxyAuth(page, siteConfig, forceDebug);
       }
 
       // --- Apply all fingerprint spoofing (user agent, Brave, fingerprint protection) ---
@@ -3337,6 +3344,25 @@ function setupFrameHandling(page, forceDebug) {
           siteCounter++;
           // Continue processing with the redirected URL instead of throwing error
         } else {
+          // Detect proxy-specific failures and provide clear diagnostics
+          if (needsProxy(siteConfig) && err.message) {
+            const proxyErrors = [
+              'ERR_PROXY_CONNECTION_FAILED',
+              'ERR_SOCKS_CONNECTION_FAILED',
+              'ERR_TUNNEL_CONNECTION_FAILED',
+              'ERR_PROXY_AUTH_UNSUPPORTED',
+              'ERR_PROXY_AUTH_REQUESTED',
+              'ERR_SOCKS_CONNECTION_HOST_UNREACHABLE',
+              'ERR_PROXY_CERTIFICATE_INVALID',
+              'ERR_NO_SUPPORTED_PROXIES'
+            ];
+            const proxyErr = proxyErrors.find(e => err.message.includes(e));
+            if (proxyErr) {
+              const info = getProxyInfo(siteConfig);
+              console.error(formatLogMessage('error', `[proxy] ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
+              console.error(formatLogMessage('error', `[proxy] Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
+            }
+          }
           console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
           throw err;
         }
@@ -3662,6 +3688,26 @@ function setupFrameHandling(page, forceDebug) {
       }
       
     } catch (err) {
+      // Detect proxy-specific failures at top level
+      if (needsProxy(siteConfig) && err.message) {
+        const proxyErrors = [
+          'ERR_PROXY_CONNECTION_FAILED',
+          'ERR_SOCKS_CONNECTION_FAILED',
+          'ERR_TUNNEL_CONNECTION_FAILED',
+          'ERR_PROXY_AUTH_UNSUPPORTED',
+          'ERR_PROXY_AUTH_REQUESTED',
+          'ERR_SOCKS_CONNECTION_HOST_UNREACHABLE',
+          'ERR_PROXY_CERTIFICATE_INVALID',
+          'ERR_NO_SUPPORTED_PROXIES'
+        ];
+        const proxyErr = proxyErrors.find(e => err.message.includes(e));
+        if (proxyErr) {
+          const info = getProxyInfo(siteConfig);
+          console.error(formatLogMessage('error', `[proxy] ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
+          console.error(formatLogMessage('error', `[proxy] Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
+        }
+      }
+
       // Only restart for truly fatal browser errors
       const isFatalError = CRITICAL_BROWSER_ERRORS.some(errorType => 
         err.message.includes(errorType)
@@ -3789,6 +3835,14 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
+  // Helper to get a stable proxy key for grouping browser instances
+  const proxyKeyFor = (siteConfig) => {
+    if (!needsProxy(siteConfig)) return '';
+    return getProxyInfo(siteConfig);
+  };
+
+  // Sort tasks so proxy groups are contiguous — direct connections first, then each proxy
+  allTasks.sort((a, b) => proxyKeyFor(a.config).localeCompare(proxyKeyFor(b.config)));
 
   let results = [];
   let processedUrlCount = 0;
@@ -3832,6 +3886,7 @@ function setupFrameHandling(page, forceDebug) {
 
  // Process URLs in batches with exception handling
  let siteGroupIndex = 0;
+ let currentProxyKey = '';  // Track active proxy config — '' means direct connection
  try {
    for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
     const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
@@ -3952,11 +4007,64 @@ function setupFrameHandling(page, forceDebug) {
         if (forceDebug) console.log(formatLogMessage('debug', `Browser cleanup warning: ${browserCloseErr.message}`));
       }
       
-      // Create new browser for next batch
-      browser = await createBrowser();
+      // Create new browser for next batch (preserve current proxy config)
+      const restartProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
+      browser = await createBrowser(restartProxyArgs);
       if (forceDebug) console.log(formatLogMessage('debug', `New browser instance created for batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1}`));
       
       // Reset cleanup counter and add delay
+      urlsSinceLastCleanup = 0;
+      await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
+    }
+
+    // --- Proxy-aware browser restart ---
+    // --proxy-server is browser-wide, so if the batch needs a different proxy we must restart
+    const batchProxyKey = proxyKeyFor(currentBatch[0].config);
+    if (batchProxyKey !== currentProxyKey) {
+      const debug = forceDebug || currentBatch[0].config.proxy_debug || currentBatch[0].config.socks5_debug;
+      if (debug) {
+        const from = currentProxyKey || 'direct';
+        const to = batchProxyKey || 'direct';
+        console.log(formatLogMessage('proxy', `Switching proxy: ${from} → ${to}`));
+      }
+
+      try {
+        await handleBrowserExit(browser, {
+          forceDebug, timeout: 10000, exitOnFailure: false,
+          cleanTempFiles: true, comprehensiveCleanup: removeTempFiles
+        });
+        if (userDataDir && fs.existsSync(userDataDir)) {
+          fs.rmSync(userDataDir, { recursive: true, force: true });
+        }
+      } catch (proxyRestartErr) {
+        if (forceDebug) console.log(formatLogMessage('debug', `Proxy switch browser cleanup: ${proxyRestartErr.message}`));
+      }
+
+      const proxyArgs = batchProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
+
+      // Pre-flight: verify proxy is reachable before launching browser
+      if (proxyArgs.length > 0) {
+        const health = await testProxy(currentBatch[0].config, 5000);
+        if (!health.reachable) {
+          const info = getProxyInfo(currentBatch[0].config);
+          console.error(formatLogMessage('error', `[proxy] Unreachable: ${info} — ${health.error}`));
+          console.error(formatLogMessage('error', `[proxy] Skipping ${currentBatch.length} URL(s) in this batch`));
+          const skipResults = currentBatch.map(task => ({
+            success: false, url: task.url, rules: [],
+            error: `Proxy unreachable: ${health.error}`
+          }));
+          results.push(...skipResults);
+          processedUrlCount += currentBatch.length;
+          urlsSinceLastCleanup += currentBatch.length;
+          continue;
+        }
+        if (forceDebug) {
+          console.log(formatLogMessage('proxy', `Proxy reachable (${health.latencyMs}ms)`));
+        }
+      }
+
+      browser = await createBrowser(proxyArgs);
+      currentProxyKey = batchProxyKey;
       urlsSinceLastCleanup = 0;
       await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
@@ -3986,7 +4094,8 @@ function setupFrameHandling(page, forceDebug) {
      console.log(formatLogMessage('error', `[TIMEOUT] Batch hung. Restarting browser.`));
      try {
        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false });
-       browser = await createBrowser();
+       const timeoutProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
+       browser = await createBrowser(timeoutProxyArgs);
        urlsSinceLastCleanup = 0;
      } catch (restartErr) {
        throw restartErr;
@@ -4104,7 +4213,7 @@ function setupFrameHandling(page, forceDebug) {
             comprehensive: true 
           });
         }
-        browser = await createBrowser();
+        browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0; // Reset counter
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY); // Give browser time to stabilize
       } catch (emergencyRestartErr) {
@@ -4116,7 +4225,7 @@ function setupFrameHandling(page, forceDebug) {
       console.log(`\n${messageColors.fileOp('🔄 Emergency hang detection restart:')} Browser appears hung, forcing restart`);
       try {
         await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true });
-        browser = await createBrowser();
+        browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0;
         forceRestartFlag = false; // Reset flag
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY);
