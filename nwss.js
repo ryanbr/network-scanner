@@ -1367,9 +1367,17 @@ function setupFrameHandling(page, forceDebug) {
     if (launchHeadless) {
       const puppeteerInfo = detectPuppeteerVersion();
       
+      // Check if any site needs fingerprint protection — use stealth-friendly headless mode
+      const needsStealth = sites.some(site => site.fingerprint_protection);
+      
       if (puppeteerInfo.useShellMode) {
-        headlessMode = 'shell'; // Use fast chrome-headless-shell for 22.x+
-        if (forceDebug) console.log(formatLogMessage('debug', `Using chrome-headless-shell (Puppeteer ${puppeteerInfo.version || 'v' + puppeteerInfo.majorVersion + '.x'})`));
+        if (needsStealth) {
+          headlessMode = 'new'; // Full Chrome in headless — harder to detect than chrome-headless-shell
+          if (forceDebug) console.log(formatLogMessage('debug', `Using headless=new for stealth (fingerprint_protection detected)`));
+        } else {
+          headlessMode = 'shell'; // Use fast chrome-headless-shell for 22.x+
+          if (forceDebug) console.log(formatLogMessage('debug', `Using chrome-headless-shell (Puppeteer ${puppeteerInfo.version || 'v' + puppeteerInfo.majorVersion + '.x'})`));
+        }
       } else {
         headlessMode = true; // Use regular headless for older versions
         if (forceDebug) console.log(formatLogMessage('debug', 'Could not detect Puppeteer version, using regular headless mode'));
@@ -1494,7 +1502,9 @@ function setupFrameHandling(page, forceDebug) {
 
   // Log which headless mode is being used
   if (forceDebug && launchHeadless) {
-    console.log(formatLogMessage('debug', `Using chrome-headless-shell for maximum performance`));
+    const needsStealth = sites.some(site => site.fingerprint_protection);
+    const modeLabel = needsStealth ? 'headless=new (stealth mode)' : 'chrome-headless-shell (performance mode)';
+    console.log(formatLogMessage('debug', `Using ${modeLabel}`));
   }
 
   // Initial cleanup of any existing Chrome temp files - always comprehensive on startup
@@ -1652,6 +1662,11 @@ function setupFrameHandling(page, forceDebug) {
     let cdpSessionManager = null;
     // Use Map to track domains and their resource types for --adblock-rules or --dry-run
     const matchedDomains = (adblockRulesMode || siteConfig.adblock_rules || dryRunMode) ? new Map() : new Set();
+
+    // Local domain dedup scoped to THIS processUrl call only
+    // Prevents cross-config contamination from the global domain cache
+    const localDetectedDomains = new Set();
+    const isLocallyDetected = (domain) => localDetectedDomains.has(domain);
     
     // Initialize dry run matches collection
     if (dryRunMode) {
@@ -2430,6 +2445,7 @@ function setupFrameHandling(page, forceDebug) {
 
       // Mark full subdomain as detected for future reference
       markDomainAsDetected(cacheKey);
+      localDetectedDomains.add(cacheKey);
       
       // Also mark in smart cache with context (if cache is enabled)
       if (smartCache) {
@@ -2499,7 +2515,7 @@ function setupFrameHandling(page, forceDebug) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${checkedUrl}`));
           }
-          request.abort();
+          request.abort('blockedbyclient');
           return;
         }
 
@@ -2534,7 +2550,7 @@ function setupFrameHandling(page, forceDebug) {
               if (forceDebug) {
                 console.log(formatLogMessage('debug', `${messageColors.blocked('[adblock]')} ${checkedUrl} (${result.reason})`));
               }
-              request.abort();
+              request.abort('blockedbyclient');
               return;
             }
             adblockStats.allowed++;
@@ -2614,7 +2630,7 @@ function setupFrameHandling(page, forceDebug) {
             }
           }
           
-          request.abort();
+          request.abort('blockedbyclient');
           return;
         }
 
@@ -2724,7 +2740,7 @@ function setupFrameHandling(page, forceDebug) {
                 dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
                 matchedDomains,
                 addMatchedDomain,
-                isDomainAlreadyDetected,
+                isDomainAlreadyDetected: isLocallyDetected,
                 onWhoisResult: smartCache ? (domain, result) => smartCache.cacheNetTools(domain, 'whois', result) : undefined,
                 onDigResult: smartCache ? (domain, result, recordType) => smartCache.cacheNetTools(domain, 'dig', result, recordType) : undefined,
                 cachedWhois: smartCache ? smartCache.getCachedNetTools(reqDomain, 'whois') : null,
@@ -2773,8 +2789,8 @@ function setupFrameHandling(page, forceDebug) {
              }
             } else if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
              // If nettools are configured (whois/dig), perform checks on the domain
-             // Skip nettools check if full subdomain was already detected
-             if (isDomainAlreadyDetected(fullSubdomain)) {
+             // Skip nettools check if full subdomain was already detected in THIS scan
+             if (localDetectedDomains.has(fullSubdomain)) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `Skipping nettools check for already detected subdomain: ${fullSubdomain}`));
                }
@@ -2833,7 +2849,7 @@ function setupFrameHandling(page, forceDebug) {
                dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
                matchedDomains,
                addMatchedDomain,
-               isDomainAlreadyDetected,
+               isDomainAlreadyDetected: isLocallyDetected,
                // Add cache callbacks if smart cache is available and caching is enabled
                onWhoisResult: smartCache ? (domain, result) => {
                  smartCache.cacheNetTools(domain, 'whois', result);
@@ -2863,8 +2879,8 @@ function setupFrameHandling(page, forceDebug) {
              }
            } else {
              // If searchstring or searchstring_and IS defined (with or without nettools), queue for content checking
-             // Skip searchstring check if full subdomain was already detected
-             if (isDomainAlreadyDetected(fullSubdomain)) {
+             // Skip searchstring check if full subdomain was already detected in THIS scan
+             if (localDetectedDomains.has(fullSubdomain)) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `Skipping searchstring check for already detected subdomain: ${fullSubdomain}`));
                }
@@ -2920,7 +2936,7 @@ function setupFrameHandling(page, forceDebug) {
                    searchStringsAnd,
                    matchedDomains,
                    addMatchedDomain, // Pass the helper function
-                   isDomainAlreadyDetected,
+                   isDomainAlreadyDetected: isLocallyDetected,
                    onContentFetched: smartCache && !ignoreCache ? (url, content) => {
                      // Only cache if not bypassing cache
                      if (!shouldBypassCacheForUrl(url, siteConfig)) {
@@ -2956,7 +2972,7 @@ function setupFrameHandling(page, forceDebug) {
                    regexes,
                    matchedDomains,
                    addMatchedDomain,
-                   isDomainAlreadyDetected,
+                   isDomainAlreadyDetected: isLocallyDetected,
                    onContentFetched: smartCache && !ignoreCache ? (url, content) => {
                      // Only cache if not bypassing cache
                      if (!shouldBypassCacheForUrl(url, siteConfig)) {
@@ -3027,7 +3043,7 @@ function setupFrameHandling(page, forceDebug) {
          matchedDomains,
          addMatchedDomain, // Pass the helper function
          bypassCache: (url) => shouldBypassCacheForUrl(url, siteConfig),
-         isDomainAlreadyDetected,
+         isDomainAlreadyDetected: isLocallyDetected,
          onContentFetched: smartCache && !ignoreCache ? (url, content) => {
            // Only cache if not bypassing cache
            if (!shouldBypassCacheForUrl(url, siteConfig)) {
@@ -3374,8 +3390,16 @@ function setupFrameHandling(page, forceDebug) {
         
         // Mark page as processing during interactions
         updatePageUsage(page, true);
-        // Use enhanced interaction module
-        await performPageInteraction(page, currentUrl, interactionConfig, forceDebug);
+        // Use enhanced interaction module with hard abort timeout
+        const INTERACTION_HARD_TIMEOUT = 15000;
+        try {
+          await Promise.race([
+            performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
+          ]);
+        } catch (interactTimeoutErr) {
+          if (forceDebug) console.log(formatLogMessage('debug', `[interaction] Aborted after ${INTERACTION_HARD_TIMEOUT}ms: ${interactTimeoutErr.message}`));
+        }
       }
 
       const delayMs = DEFAULT_DELAY;
