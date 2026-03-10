@@ -1439,7 +1439,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-features=SafeBrowsing',
         '--disable-dev-shm-usage',
         '--disable-sync',
-        '--disable-gpu',
+        '--use-gl=swiftshader',  // Software WebGL — prevents ad script crashes in headless
         '--mute-audio',
         '--disable-translate',
         '--window-size=1920,1080',
