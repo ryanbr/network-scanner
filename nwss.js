@@ -619,7 +619,7 @@ Redirect Handling Options:
   source: true/false                           Save page source HTML after load
   firstParty: true/false                       Allow first-party matches (default: false)
   thirdParty: true/false                       Allow third-party matches (default: true)
-  screenshot: true/false                       Capture screenshot on load failure
+  screenshot: true/false/\"force\"                Capture screenshot (true=on failure, \"force\"=always)
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
   adblock_rules: true/false                    Generate adblock filter rules with resource types for this site
@@ -2515,7 +2515,7 @@ function setupFrameHandling(page, forceDebug) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${checkedUrl}`));
           }
-          request.abort('blockedbyclient');
+          request.abort();
           return;
         }
 
@@ -3822,6 +3822,20 @@ function setupFrameHandling(page, forceDebug) {
             if (window.gc) window.gc(); // Force garbage collection if available
           });
         } catch (gcErr) { /* ignore */ }
+
+        // Force screenshot — always capture regardless of success/failure
+        if (siteConfig.screenshot === 'force' && page && !page.isClosed()) {
+          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 80);
+          const filename = `screenshots/${safeUrl}-${timestamp}.png`;
+          try {
+            if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots', { recursive: true });
+            await page.screenshot({ path: filename, type: 'png', fullPage: true });
+            console.log(formatLogMessage('info', `Screenshot saved: ${filename}`));
+          } catch (screenshotErr) {
+            console.warn(messageColors.warn(`[screenshot failed] ${currentUrl}: ${screenshotErr.message}`));
+          }
+        }
 
         try {
           await page.close();
