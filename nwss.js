@@ -1447,7 +1447,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-features=SafeBrowsing',
         '--disable-dev-shm-usage',
         '--disable-sync',
-        '--use-gl=swiftshader',  // Software WebGL — prevents ad script crashes in headless
+        '--disable-gpu',  // WebGL null-context handled by fingerprint.js Proxy mock
         '--mute-audio',
         '--disable-translate',
         '--window-size=1920,1080',
