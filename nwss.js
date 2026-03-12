@@ -39,7 +39,7 @@ const { processResults } = require('./lib/post-processing');
 // Colorize various text when used
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 // Enhanced mouse interaction and page simulation
-const { performPageInteraction, createInteractionConfig } = require('./lib/interaction');
+const { performPageInteraction, createInteractionConfig, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
 // Domain detection cache for performance optimization
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
@@ -3658,6 +3658,32 @@ function setupFrameHandling(page, forceDebug) {
             // Don't break the loop for simple timeouts
           }
         }
+
+      // Post-reload interaction: trigger onclick ad scripts (Monetag etc.)
+      // Each reload gives a fresh session with a new random ad domain —
+      // without clicks the SDK never fires and we miss those domains.
+      if (interactEnabled && !page.isClosed()) {
+        try {
+          // Brief wait for ad scripts to re-register after reload
+          await fastTimeout(800);
+          // Quick mouse moves to build movement score (Monetag tracks this)
+          const vp = page.viewport() || { width: 1920, height: 1080 };
+          const startX = 200 + Math.floor(Math.random() * (vp.width - 400));
+          const startY = 200 + Math.floor(Math.random() * (vp.height - 400));
+          await page.mouse.move(startX, startY);
+          for (let m = 0; m < 2; m++) {
+            const endX = 200 + Math.floor(Math.random() * (vp.width - 400));
+            const endY = 200 + Math.floor(Math.random() * (vp.height - 400));
+            await humanLikeMouseMove(page, startX, startY, endX, endY, { steps: 3, curve: 0.04, jitter: 1 });
+          }
+          // Content clicks to trigger document-level onclick handlers
+          await performContentClicks(page, { clicks: 2, preDelay: 200, forceDebug });
+          if (forceDebug) console.log(formatLogMessage('debug', `Post-reload interaction completed for reload #${i}`));
+        } catch (postReloadInteractErr) {
+          // Non-critical — continue with remaining reloads
+          if (forceDebug) console.log(formatLogMessage('debug', `Post-reload interaction failed: ${postReloadInteractErr.message}`));
+        }
+      }
 
       // Only add delay if we're continuing with more reloads
       if (i < totalReloads) {
