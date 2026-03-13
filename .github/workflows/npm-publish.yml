@@ -1,13 +1,12 @@
 name: Publish to NPM
 on:
-  push:
-    branches: [ main, master ]
+  workflow_dispatch:
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # This is key!
+      contents: write
       
     steps:
       - uses: actions/checkout@v4
