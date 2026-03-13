@@ -151,7 +151,7 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload, purgeStaleTrackers } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
 const VERSION = '2.0.33'; // Script version
@@ -1588,6 +1588,7 @@ function setupFrameHandling(page, forceDebug) {
     wgDisconnectAll(forceDebug);
     ovpnDisconnectAll(forceDebug);
     cleanupCloudflareCache();
+    purgeStaleTrackers();
   }
  
   let siteCounter = 0;
@@ -4107,6 +4108,7 @@ function setupFrameHandling(page, forceDebug) {
       
       // Reset cleanup counter and add delay
       urlsSinceLastCleanup = 0;
+      purgeStaleTrackers();
       await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
 
@@ -4159,6 +4161,7 @@ function setupFrameHandling(page, forceDebug) {
       browser = await createBrowser(proxyArgs);
       currentProxyKey = batchProxyKey;
       urlsSinceLastCleanup = 0;
+      purgeStaleTrackers();
       await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
     
@@ -4190,6 +4193,7 @@ function setupFrameHandling(page, forceDebug) {
        const timeoutProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
        browser = await createBrowser(timeoutProxyArgs);
        urlsSinceLastCleanup = 0;
+       purgeStaleTrackers();
      } catch (restartErr) {
        throw restartErr;
      }
@@ -4308,6 +4312,7 @@ function setupFrameHandling(page, forceDebug) {
         }
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0; // Reset counter
+        purgeStaleTrackers();
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY); // Give browser time to stabilize
       } catch (emergencyRestartErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
@@ -4320,6 +4325,7 @@ function setupFrameHandling(page, forceDebug) {
         await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true });
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0;
+        purgeStaleTrackers();
         forceRestartFlag = false; // Reset flag
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY);
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency hang detection restart completed`));
