@@ -20,7 +20,8 @@ const {
   handleCloudflareProtection,
   getCacheStats,
   clearDetectionCache,
-  parallelChallengeDetection
+  parallelChallengeDetection,
+  cleanup: cleanupCloudflareCache
 } = require('./lib/cloudflare');
 // FP Bypass
 const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
@@ -1495,7 +1496,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-accelerated-2d-canvas', // Software canvas only (we spoof it anyway)
         '--disable-hang-monitor',      // Remove per-renderer hang check overhead
         '--disable-features=PaintHolding', // Don't hold frames in renderer memory
-        '--js-flags=--max-old-space-size=512', // Cap V8 heap per renderer to 256MB
+        '--js-flags=--max-old-space-size=512', // Cap V8 heap per renderer to 512MB
         ...extraArgs,
         ],
         // Optimized timeouts for Puppeteer 23.x performance
@@ -1586,6 +1587,7 @@ function setupFrameHandling(page, forceDebug) {
     }
     wgDisconnectAll(forceDebug);
     ovpnDisconnectAll(forceDebug);
+    cleanupCloudflareCache();
   }
  
   let siteCounter = 0;
