@@ -1495,7 +1495,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-accelerated-2d-canvas', // Software canvas only (we spoof it anyway)
         '--disable-hang-monitor',      // Remove per-renderer hang check overhead
         '--disable-features=PaintHolding', // Don't hold frames in renderer memory
-        '--js-flags=--max-old-space-size=512', // Cap V8 heap per renderer to 512MB
+        '--js-flags=--max-old-space-size=512', // Cap V8 heap per renderer to 256MB
         ...extraArgs,
         ],
         // Optimized timeouts for Puppeteer 23.x performance
@@ -3249,7 +3249,9 @@ function setupFrameHandling(page, forceDebug) {
         siteCounter++;
 
         // Enhanced Cloudflare handling with parallel detection
-        if (siteConfig.cloudflare_parallel_detection !== false) { // Enable by default
+        // Only run parallel detection if cloudflare handling is explicitly configured
+        const hasCloudflareConfig = siteConfig.cloudflare_bypass || siteConfig.cloudflare_phish;
+        if (hasCloudflareConfig && siteConfig.cloudflare_parallel_detection !== false) {
           try {
             const parallelResult = await parallelChallengeDetection(page, forceDebug);
             if (parallelResult.hasAnyChallenge && forceDebug) {
