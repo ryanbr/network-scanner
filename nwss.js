@@ -84,8 +84,8 @@ const TIMEOUTS = Object.freeze({
 });
 
 const CACHE_LIMITS = Object.freeze({
-  DISK_CACHE_SIZE: 52428800, // 50MB
-  MEDIA_CACHE_SIZE: 52428800, // 50MB
+  DISK_CACHE_SIZE: 1, // Effectively disabled — forcereload clears cache between loads
+  MEDIA_CACHE_SIZE: 1, // Effectively disabled — no media caching needed for scanning
   DEFAULT_CACHE_PATH: '.cache',
   DEFAULT_MAX_SIZE: 5000
 });
@@ -1020,11 +1020,28 @@ function flushLogBuffers() {
   for (const [filePath, entries] of _logBuffers) {
     if (entries.length > 0) {
       try {
-        fs.appendFileSync(filePath, entries.join(''));
+        const data = entries.join('');
+        entries.length = 0; // Clear buffer immediately
+        fs.writeFile(filePath, data, { flag: 'a' }, (err) => {
+          if (err) {
+            console.warn(formatLogMessage('warn', `Failed to flush log buffer to ${filePath}: ${err.message}`));
+          }
+        });
       } catch (err) {
         console.warn(formatLogMessage('warn', `Failed to flush log buffer to ${filePath}: ${err.message}`));
       }
-      entries.length = 0; // Clear buffer
+    }
+  }
+}
+
+// Synchronous flush for exit handlers — guarantees data is written before process exits
+function flushLogBuffersSync() {
+  for (const [filePath, entries] of _logBuffers) {
+    if (entries.length > 0) {
+      try {
+        fs.appendFileSync(filePath, entries.join(''));
+      } catch (err) { /* best effort on exit */ }
+      entries.length = 0;
     }
   }
 }
@@ -1426,12 +1443,19 @@ function setupFrameHandling(page, forceDebug) {
         '--use-mock-keychain',
         '--disable-client-side-phishing-detection',
         '--enable-features=NetworkService',
-        // Disk space controls - 50MB cache limits
-        `--disk-cache-size=${CACHE_LIMITS.DISK_CACHE_SIZE}`, // 50MB disk cache
-        `--media-cache-size=${CACHE_LIMITS.MEDIA_CACHE_SIZE}`, // 50MB media cache
+        // Disk space controls - minimal cache for scanning workloads
+        `--disk-cache-size=${CACHE_LIMITS.DISK_CACHE_SIZE}`,
+        `--media-cache-size=${CACHE_LIMITS.MEDIA_CACHE_SIZE}`,
         '--disable-application-cache',
         '--disable-offline-load-stale-cache',
         '--disable-background-downloads',
+        // DISK I/O REDUCTION: Eliminate unnecessary Chrome disk writes
+        '--disable-breakpad',          // No crash dump files
+        '--disable-component-update',  // No component update downloads
+        '--disable-logging',           // No Chrome internal log files
+        '--log-level=3',               // Fatal errors only (suppresses verbose disk logging)
+        '--no-service-autorun',        // No background service disk activity
+        '--disable-domain-reliability', // No reliability monitor disk writes
         // PERFORMANCE: Enhanced Puppeteer 23.x optimizations
         '--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor',
         '--disable-features=TranslateUI,BlinkGenPropertyTrees,Translate',
@@ -1466,6 +1490,12 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-background-timer-throttling',
         '--disable-features=site-per-process', // Better for single-site scanning
         '--no-zygote', // Better process isolation
+        // PERFORMANCE: Process and memory reduction for high concurrency
+        '--renderer-process-limit=10',  // Cap renderer processes (default: unlimited)
+        '--disable-accelerated-2d-canvas', // Software canvas only (we spoof it anyway)
+        '--disable-hang-monitor',      // Remove per-renderer hang check overhead
+        '--disable-features=PaintHolding', // Don't hold frames in renderer memory
+        '--js-flags=--max-old-space-size=512', // Cap V8 heap per renderer to 512MB
         ...extraArgs,
         ],
         // Optimized timeouts for Puppeteer 23.x performance
@@ -1517,7 +1547,7 @@ function setupFrameHandling(page, forceDebug) {
   // Set up cleanup on process termination
   process.on('SIGINT', async () => {
     if (forceDebug) console.log(formatLogMessage('debug', 'SIGINT received, performing cleanup...'));
-    flushLogBuffers();
+    flushLogBuffersSync();
     if (_logFlushTimer) clearInterval(_logFlushTimer);
     await performEmergencyCleanup();
     process.exit(0);
@@ -1525,7 +1555,7 @@ function setupFrameHandling(page, forceDebug) {
 
   process.on('SIGTERM', async () => {
     if (forceDebug) console.log(formatLogMessage('debug', 'SIGTERM received, performing cleanup...'));
-    flushLogBuffers();
+    flushLogBuffersSync();
     if (_logFlushTimer) clearInterval(_logFlushTimer);
     await performEmergencyCleanup();
     process.exit(0);
@@ -4429,7 +4459,7 @@ function setupFrameHandling(page, forceDebug) {
   }
   
   // Flush any remaining buffered log entries before compression/exit
-  flushLogBuffers();
+  flushLogBuffersSync();
   if (_logFlushTimer) {
     clearInterval(_logFlushTimer);
   }
