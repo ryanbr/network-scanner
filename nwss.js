@@ -152,7 +152,7 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, cleanupPageBeforeReload, purgeStaleTrackers } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, untrackPage, cleanupPageBeforeReload, purgeStaleTrackers } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
 const VERSION = '2.0.33'; // Script version
@@ -3899,6 +3899,7 @@ function setupFrameHandling(page, forceDebug) {
         }
 
         try {
+          untrackPage(page);
           await page.close();
           if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
         } catch (pageCloseErr) {
