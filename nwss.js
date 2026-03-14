@@ -4,6 +4,7 @@
 // const pLimit = require('p-limit'); // Will be dynamically imported
 const puppeteer = require('puppeteer');
 const fs = require('fs');
+const os = require('os');
 const psl = require('psl');
 const path = require('path');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
@@ -1375,7 +1376,7 @@ function setupFrameHandling(page, forceDebug) {
    */
   async function createBrowser(extraArgs = []) {
     // Create temporary user data directory that we can fully control and clean up
-    const tempUserDataDir = `/tmp/puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    const tempUserDataDir = path.join(os.tmpdir(), `puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`);
     userDataDir = tempUserDataDir; // Store for cleanup tracking (use outer scope variable)
 
     // Try to find system Chrome installation to avoid Puppeteer downloads
@@ -1405,11 +1406,15 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     const systemChromePaths = [
+      // Linux / WSL
       '/usr/bin/google-chrome-stable',
       '/usr/bin/google-chrome',
       '/usr/bin/chromium-browser',
       '/usr/bin/chromium',
-      '/snap/bin/chromium'
+      '/snap/bin/chromium',
+      // macOS
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium'
     ];
     // V8 Optimization: Freeze the Chrome paths array since it's constant
     Object.freeze(systemChromePaths);
