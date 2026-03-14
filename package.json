@@ -10,6 +10,7 @@
     "lint": "eslint *.js lib/*.js"
   },
   "dependencies": {
+    "ghost-cursor": "^1.4.2",
     "lru-cache": "^10.4.3",
     "p-limit": "^4.0.0",
     "psl": "^1.15.0",
