@@ -17,7 +17,8 @@
   },
   "overrides": {
     "tar-fs": "3.1.1",
-    "ws": "8.18.3"
+    "ws": "8.18.3",
+    "yauzl": ">=3.2.1"
   },
   "keywords": [
     "puppeteer",
