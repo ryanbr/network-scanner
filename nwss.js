@@ -42,6 +42,8 @@ const { processResults } = require('./lib/post-processing');
 const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
 // Enhanced mouse interaction and page simulation
 const { performPageInteraction, createInteractionConfig, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
+// Optional ghost-cursor support for advanced Bezier-based mouse movements
+const { isGhostCursorAvailable, createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
 // Domain detection cache for performance optimization
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
@@ -205,6 +207,7 @@ if (localhostIndex !== -1) {
   localhostIP = args[localhostIndex].includes('=') ? args[localhostIndex].split('=')[1] : '127.0.0.1';
 }
 const disableInteract = args.includes('--no-interact');
+const globalGhostCursor = args.includes('--ghost-cursor');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
 const dnsmasqMode = args.includes('--dnsmasq');
@@ -546,6 +549,7 @@ General Options:
   --compress-logs                Compress log files with gzip (requires --dumpurls)
   --sub-domains                  Output full subdomains instead of collapsing to root
   --no-interact                  Disable page interactions globally
+  --ghost-cursor                 Use ghost-cursor Bezier mouse movements (requires: npm i ghost-cursor)
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
@@ -658,6 +662,11 @@ Advanced Options:
   interact_scrolling: true/false              Enable scrolling simulation (default: true)
   interact_clicks: true/false                 Enable element clicking simulation (default: false)
   interact_typing: true/false                 Enable typing simulation (default: false)
+  cursor_mode: "ghost"                        Use ghost-cursor Bezier mouse (requires: npm i ghost-cursor)
+  ghost_cursor_speed: <number>                Ghost-cursor speed multiplier (default: auto)
+  ghost_cursor_hesitate: <milliseconds>       Delay before ghost-cursor clicks (default: 50)
+  ghost_cursor_overshoot: <pixels>            Max ghost-cursor overshoot distance (default: auto)
+  ghost_cursor_duration: <milliseconds>       Ghost-cursor interaction duration (default: interact_duration or 2000)
   whois: ["term1", "term2"]                   Check whois data for ALL specified terms (AND logic)
   whois-or: ["term1", "term2"]                Check whois data for ANY specified term (OR logic)
   whois_server_mode: "random" or "cycle"      Server selection mode: random (default) or cycle through list
@@ -3422,16 +3431,82 @@ function setupFrameHandling(page, forceDebug) {
 
       if (interactEnabled && !disableInteract) {
         if (forceDebug) console.log(formatLogMessage('debug', `interaction simulation enabled for ${currentUrl}`));
-        
+
         // Mark page as processing during interactions
         updatePageUsage(page, true);
         // Use enhanced interaction module with hard abort timeout
         const INTERACTION_HARD_TIMEOUT = 15000;
+
+        // Check if ghost-cursor mode is enabled for this site
+        const ghostConfig = resolveGhostCursorConfig(siteConfig, globalGhostCursor, forceDebug);
+
         try {
-          await Promise.race([
-            performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
-          ]);
+          if (ghostConfig) {
+            // Ghost-cursor mode: Bezier-based mouse movements
+            if (forceDebug) console.log(formatLogMessage('debug', `[ghost-cursor] Using ghost-cursor for ${currentUrl}`));
+            const cursor = createGhostCursor(page, { forceDebug });
+            if (cursor) {
+              await Promise.race([
+                (async () => {
+                  const viewport = page.viewport() || { width: 1200, height: 800 };
+                  const ghostDuration = ghostConfig.duration || 2000;
+                  const ghostStart = Date.now();
+                  const ghostTimeLeft = () => ghostDuration - (Date.now() - ghostStart);
+
+                  // Time-based Bezier mouse movements — runs for ghostDuration ms
+                  while (ghostTimeLeft() > 200) {
+                    const toX = Math.floor(Math.random() * (viewport.width - 100)) + 50;
+                    const toY = Math.floor(Math.random() * (viewport.height - 100)) + 50;
+                    await ghostMove(cursor, toX, toY, {
+                      moveSpeed: ghostConfig.moveSpeed,
+                      overshootThreshold: ghostConfig.overshootThreshold,
+                      forceDebug
+                    });
+                    // Random pause between movements (25-100ms)
+                    if (ghostTimeLeft() > 100) {
+                      await new Promise(r => setTimeout(r, 25 + Math.random() * 75));
+                    }
+                  }
+                  // Optional random idle movement if time allows
+                  if (ghostTimeLeft() > 100 && Math.random() < 0.3) {
+                    await ghostRandomMove(cursor, { forceDebug });
+                  }
+                  // Content clicks if enabled (uses ghost-cursor click)
+                  if (interactionConfig.includeElementClicks && ghostTimeLeft() > 100) {
+                    const clickX = Math.floor(viewport.width * 0.2 + Math.random() * viewport.width * 0.6);
+                    const clickY = Math.floor(viewport.height * 0.2 + Math.random() * viewport.height * 0.6);
+                    await ghostClick(cursor, { x: clickX, y: clickY }, {
+                      hesitate: ghostConfig.hesitate,
+                      forceDebug
+                    });
+                  }
+                  // Scrolling still uses built-in (ghost-cursor doesn't handle scroll)
+                  if (interactionConfig.includeScrolling) {
+                    await performPageInteraction(page, currentUrl, {
+                      ...interactionConfig,
+                      mouseMovements: 0,
+                      includeElementClicks: false,
+                      includeTyping: false
+                    }, forceDebug);
+                  }
+                })(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('ghost-cursor interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
+              ]);
+            } else {
+              // ghost-cursor init failed, fall back to built-in
+              if (forceDebug) console.log(formatLogMessage('debug', '[ghost-cursor] Falling back to built-in mouse'));
+              await Promise.race([
+                performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
+              ]);
+            }
+          } else {
+            // Standard built-in mouse interaction
+            await Promise.race([
+              performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
+            ]);
+          }
         } catch (interactTimeoutErr) {
           if (forceDebug) console.log(formatLogMessage('debug', `[interaction] Aborted after ${INTERACTION_HARD_TIMEOUT}ms: ${interactTimeoutErr.message}`));
         }

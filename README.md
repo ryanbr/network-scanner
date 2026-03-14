@@ -59,6 +59,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--compress-logs`           | Compress log files with gzip (requires `--dumpurls`) |
 | `--sub-domains`             | Output full subdomains instead of collapsing to root |
 | `--no-interact`             | Disable page interactions globally |
+| `--ghost-cursor`            | Use ghost-cursor Bezier mouse movements globally (requires `npm i ghost-cursor`) |
 | `--custom-json <file>`      | Use a custom config JSON file instead of config.json |
 | `--headful`                 | Launch browser with GUI (not headless) |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
@@ -267,6 +268,11 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `interact_clicks`    | Boolean | `false` | Enable element clicking simulation |
 | `interact_typing`    | Boolean | `false` | Enable typing simulation |
 | `interact_intensity` | String | `"medium"` | Interaction simulation intensity: "low", "medium", "high" |
+| `cursor_mode`        | `"ghost"` | - | Use ghost-cursor Bezier mouse movements (requires `npm i ghost-cursor`) |
+| `ghost_cursor_speed` | Number | auto | Ghost-cursor movement speed multiplier |
+| `ghost_cursor_hesitate` | Milliseconds | `50` | Delay before ghost-cursor clicks |
+| `ghost_cursor_overshoot` | Pixels | auto | Max ghost-cursor overshoot distance before correcting |
+| `ghost_cursor_duration` | Milliseconds | `interact_duration` or `2000` | How long ghost-cursor movements run |
 | `dnsmasq`            | Boolean | `false` | Force dnsmasq output for this site |
 | `dnsmasq_old`        | Boolean | `false` | Force dnsmasq old format output for this site |
 | `unbound`            | Boolean | `false` | Force unbound output for this site |
@@ -523,6 +529,27 @@ node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
 }
 ```
 
+#### Ghost Cursor (Advanced Bezier Mouse)
+```json
+{
+  "url": "https://anti-bot-site.com",
+  "interact": true,
+  "cursor_mode": "ghost",
+  "ghost_cursor_duration": 3000,
+  "ghost_cursor_speed": 1.2,
+  "fingerprint_protection": "random",
+  "filterRegex": "tracking|analytics",
+  "comments": "ghost-cursor uses Bezier curves with overshoot for realistic mouse paths"
+}
+```
+
+Or enable globally via CLI:
+```bash
+node nwss.js --ghost-cursor --debug -o rules.txt
+```
+
+> **Note:** ghost-cursor is an optional dependency. Install with `npm install ghost-cursor`. If not installed, the scanner falls back to the built-in mouse simulation automatically.
+
 #### E-commerce Site Scanning
 ```json
 {
@@ -698,5 +725,7 @@ your_username ALL=(root) NOPASSWD: /usr/bin/wg-quick, /usr/bin/wg
 - If an `.ovpn` file contains embedded credentials, no additional auth config is needed in the JSON
 - VPN affects system-level routing — all concurrent scans will route through the active tunnel
 - Both `vpn` (WireGuard) and `openvpn` can be set, but `vpn` takes precedence
+- Ghost-cursor (`cursor_mode: "ghost"`) is optional — install with `npm i ghost-cursor`. Falls back to built-in mouse if not installed
+- Ghost-cursor duration defaults to `interact_duration` (or 2000ms), capped by the 15s hard timeout
 
 ---
