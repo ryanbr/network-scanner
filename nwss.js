@@ -3429,12 +3429,41 @@ function setupFrameHandling(page, forceDebug) {
       }
       }
 
-      if (interactEnabled && !disableInteract) {
+      const delayMs = DEFAULT_DELAY;
+
+      // Optimized delays for Puppeteer 23.x performance
+      const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
+      const networkIdleTime = TIMEOUTS.NETWORK_IDLE;  // Balanced: 2s for reliable network detection
+      const networkIdleTimeout = Math.min(timeout / 2, TIMEOUTS.NETWORK_IDLE_MAX);  // Balanced: 10s timeout
+      const actualDelay = Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);  // Balanced: 2s delay for stability
+
+      // Build delay promise (networkIdle + delay + optional flowProxy delay)
+      const delayPromise = (async () => {
+        if (page && !page.isClosed()) {
+          try {
+            await page.waitForNetworkIdle({
+              idleTime: networkIdleTime,
+              timeout: networkIdleTimeout
+            });
+          } catch (networkIdleErr) {
+            if (forceDebug) console.log(formatLogMessage('debug', `Network idle wait failed: ${networkIdleErr.message}`));
+          }
+        }
+        await fastTimeout(actualDelay);
+        if (flowproxyDetection) {
+          const additionalDelay = Math.min(siteConfig.flowproxy_additional_delay || 3000, 3000);
+          if (forceDebug) console.log(formatLogMessage('debug', `Applying flowProxy additional delay: ${additionalDelay}ms`));
+          await fastTimeout(additionalDelay);
+        }
+      })();
+
+      // Build interaction promise — runs concurrently with delay
+      const interactPromise = (async () => {
+        if (!(interactEnabled && !disableInteract)) return;
         if (forceDebug) console.log(formatLogMessage('debug', `interaction simulation enabled for ${currentUrl}`));
 
         // Mark page as processing during interactions
         updatePageUsage(page, true);
-        // Use enhanced interaction module with hard abort timeout
         const INTERACTION_HARD_TIMEOUT = 15000;
 
         // Check if ghost-cursor mode is enabled for this site
@@ -3462,16 +3491,13 @@ function setupFrameHandling(page, forceDebug) {
                       overshootThreshold: ghostConfig.overshootThreshold,
                       forceDebug
                     });
-                    // Random pause between movements (25-100ms)
                     if (ghostTimeLeft() > 100) {
                       await new Promise(r => setTimeout(r, 25 + Math.random() * 75));
                     }
                   }
-                  // Optional random idle movement if time allows
                   if (ghostTimeLeft() > 100 && Math.random() < 0.3) {
                     await ghostRandomMove(cursor, { forceDebug });
                   }
-                  // Content clicks if enabled (uses ghost-cursor click)
                   if (interactionConfig.includeElementClicks && ghostTimeLeft() > 100) {
                     const clickX = Math.floor(viewport.width * 0.2 + Math.random() * viewport.width * 0.6);
                     const clickY = Math.floor(viewport.height * 0.2 + Math.random() * viewport.height * 0.6);
@@ -3480,7 +3506,6 @@ function setupFrameHandling(page, forceDebug) {
                       forceDebug
                     });
                   }
-                  // Scrolling still uses built-in (ghost-cursor doesn't handle scroll)
                   if (interactionConfig.includeScrolling) {
                     await performPageInteraction(page, currentUrl, {
                       ...interactionConfig,
@@ -3493,7 +3518,6 @@ function setupFrameHandling(page, forceDebug) {
                 new Promise((_, reject) => setTimeout(() => reject(new Error('ghost-cursor interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
               ]);
             } else {
-              // ghost-cursor init failed, fall back to built-in
               if (forceDebug) console.log(formatLogMessage('debug', '[ghost-cursor] Falling back to built-in mouse'));
               await Promise.race([
                 performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
@@ -3510,38 +3534,10 @@ function setupFrameHandling(page, forceDebug) {
         } catch (interactTimeoutErr) {
           if (forceDebug) console.log(formatLogMessage('debug', `[interaction] Aborted after ${INTERACTION_HARD_TIMEOUT}ms: ${interactTimeoutErr.message}`));
         }
-      }
+      })();
 
-      const delayMs = DEFAULT_DELAY;
-      
-      // Optimized delays for Puppeteer 23.x performance
-      const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
-      const networkIdleTime = TIMEOUTS.NETWORK_IDLE;  // Balanced: 2s for reliable network detection
-      const networkIdleTimeout = Math.min(timeout / 2, TIMEOUTS.NETWORK_IDLE_MAX);  // Balanced: 10s timeout
-      const actualDelay = Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);  // Balanced: 2s delay for stability
-      
-      // FIX: Check page state before waiting for network idle
-      if (page && !page.isClosed()) {
-        try {
-          await page.waitForNetworkIdle({ 
-            idleTime: networkIdleTime, 
-            timeout: networkIdleTimeout 
-          });
-        } catch (networkIdleErr) {
-          // Page closed or network idle timeout - continue anyway
-          if (forceDebug) console.log(formatLogMessage('debug', `Network idle wait failed: ${networkIdleErr.message}`));
-        }
-      }
-
-      // Use fast timeout helper for Puppeteer 23.x compatibility with better performance
-      await fastTimeout(actualDelay);
-
-      // Apply additional delay for flowProxy if detected
-      if (flowproxyDetection) {
-        const additionalDelay = Math.min(siteConfig.flowproxy_additional_delay || 3000, 3000);
-        if (forceDebug) console.log(formatLogMessage('debug', `Applying flowProxy additional delay: ${additionalDelay}ms`));
-        await fastTimeout(additionalDelay);
-      }
+      // Run delay and mouse interaction concurrently — mouse moves while page settles
+      await Promise.all([delayPromise, interactPromise]);
 
       // Use fast timeout helper for consistent Puppeteer 23.x compatibility
 
