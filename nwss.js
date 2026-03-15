@@ -590,6 +590,7 @@ Global config.json options:
   ignore_similar_ignored_domains: true/false      Ignore domains similar to ignoreDomains list (default: true)
   max_concurrent_sites: 8                        Maximum concurrent site processing (1-50, default: 8)
   resource_cleanup_interval: 80                  Browser restart interval in URLs processed (1-1000, default: 80)
+  disable_ad_tagging: true/false                 Disable Chrome AdTagging to prevent ad frame throttling (default: true)
 
 Per-site config.json options:
   url: "site" or ["site1", "site2"]          Single URL or list of URLs
@@ -755,7 +756,8 @@ const {
   whois_server_mode = 'random', 
   ignore_similar = true, 
   ignore_similar_threshold = 80, 
-  ignore_similar_ignored_domains = true, 
+  ignore_similar_ignored_domains = true,
+  disable_ad_tagging = true,
   max_concurrent_sites = 6,
   resource_cleanup_interval = 80,
   comments: globalComments, 
@@ -1498,7 +1500,7 @@ function setupFrameHandling(page, forceDebug) {
         ...(keepBrowserOpen ? [] : ['--disable-background-networking']),
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-features=SafeBrowsing,AdTagging',
+        `--disable-features=SafeBrowsing${disable_ad_tagging ? ',AdTagging' : ''}`,
         '--disable-dev-shm-usage',
         ...(keepBrowserOpen ? [] : ['--disable-sync']),
         '--mute-audio',
