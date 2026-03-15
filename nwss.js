@@ -4600,8 +4600,10 @@ function setupFrameHandling(page, forceDebug) {
 
   // Keep browser open if --keep-open flag is set (useful with --headful for inspection)
   if (keepBrowserOpen && !launchHeadless) {
-    console.log(messageColors.info('Browser kept open.') + ' Press Ctrl+C to exit.');
-    await new Promise(() => {}); // Block forever until user kills the process
+    console.log(messageColors.info('Browser kept open.') + ' Close the browser window or press Ctrl+C to exit.');
+    await new Promise((resolve) => {
+      browser.on('disconnected', resolve);
+    });
   }
 
   // Perform comprehensive final cleanup using enhanced browserexit module
