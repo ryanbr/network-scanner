@@ -2,7 +2,8 @@
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
-const puppeteer = require('puppeteer');
+const usePuppeteerCore = process.argv.includes('--use-puppeteer-core');
+const puppeteer = usePuppeteerCore ? require('puppeteer-core') : require('puppeteer');
 const fs = require('fs');
 const os = require('os');
 const psl = require('psl');
@@ -120,7 +121,7 @@ const REALTIME_CLEANUP_THRESHOLD = 8; // Default pages to keep for realtime clea
  */
 function detectPuppeteerVersion() {
   try {
-    const puppeteer = require('puppeteer');
+    const puppeteer = usePuppeteerCore ? require('puppeteer-core') : require('puppeteer');
     let versionString = null;
  
     // Try multiple methods to get version
@@ -1438,6 +1439,10 @@ function setupFrameHandling(page, forceDebug) {
         }
         break;
       }
+    }
+    if (usePuppeteerCore && !executablePath) {
+      console.error(formatLogMessage('error', '--use-puppeteer-core requires a system Chrome installation. No Chrome found in standard paths.'));
+      process.exit(1);
     }
     const browser = await puppeteer.launch({
       // Use system Chrome if available to avoid downloads
