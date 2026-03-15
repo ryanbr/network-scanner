@@ -208,6 +208,11 @@ if (localhostIndex !== -1) {
   localhostIP = args[localhostIndex].includes('=') ? args[localhostIndex].split('=')[1] : '127.0.0.1';
 }
 const keepBrowserOpen = args.includes('--keep-open');
+let loadExtensionPath = null;
+const loadExtIndex = args.findIndex(arg => arg === '--load-extension');
+if (loadExtIndex !== -1 && args[loadExtIndex + 1] && !args[loadExtIndex + 1].startsWith('--')) {
+  loadExtensionPath = path.resolve(args[loadExtIndex + 1]);
+}
 const disableInteract = args.includes('--no-interact');
 const globalGhostCursor = args.includes('--ghost-cursor');
 const plainOutput = args.includes('--plain');
@@ -556,6 +561,7 @@ General Options:
   --headful                      Launch browser with GUI (not headless)
   --keep-open                    Keep browser open after scan completes (use with --headful)
   --use-puppeteer-core           Use puppeteer-core with system Chrome instead of bundled Chromium
+  --load-extension <path>        Load unpacked Chrome extension from directory
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --remove-dupes                 Remove duplicate domains from output (only with -o)
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
@@ -1498,6 +1504,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-translate',
         '--window-size=1920,1080',
         ...(keepBrowserOpen ? [] : ['--disable-extensions', '--disable-component-update']),
+        ...(loadExtensionPath ? [`--load-extension=${loadExtensionPath}`, '--enable-extensions'] : []),
         '--no-default-browser-check',
         '--safebrowsing-disable-auto-update',
         '--ignore-ssl-errors',
