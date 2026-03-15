@@ -208,11 +208,12 @@ if (localhostIndex !== -1) {
   localhostIP = args[localhostIndex].includes('=') ? args[localhostIndex].split('=')[1] : '127.0.0.1';
 }
 const keepBrowserOpen = args.includes('--keep-open');
-let loadExtensionPath = null;
-const loadExtIndex = args.findIndex(arg => arg === '--load-extension');
-if (loadExtIndex !== -1 && args[loadExtIndex + 1] && !args[loadExtIndex + 1].startsWith('--')) {
-  loadExtensionPath = path.resolve(args[loadExtIndex + 1]);
-}
+const loadExtensionPaths = [];
+args.forEach((arg, idx) => {
+  if (arg === '--load-extension' && args[idx + 1] && !args[idx + 1].startsWith('--')) {
+    loadExtensionPaths.push(path.resolve(args[idx + 1]));
+  }
+});
 const disableInteract = args.includes('--no-interact');
 const globalGhostCursor = args.includes('--ghost-cursor');
 const plainOutput = args.includes('--plain');
@@ -1504,7 +1505,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-translate',
         '--window-size=1920,1080',
         ...(keepBrowserOpen ? [] : ['--disable-extensions', '--disable-component-update']),
-        ...(loadExtensionPath ? [`--load-extension=${loadExtensionPath}`, '--enable-extensions'] : []),
+        ...(loadExtensionPaths.length ? [`--load-extension=${loadExtensionPaths.join(',')}`, '--enable-extensions'] : []),
         '--no-default-browser-check',
         '--safebrowsing-disable-auto-update',
         '--ignore-ssl-errors',
