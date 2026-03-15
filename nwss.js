@@ -1498,7 +1498,7 @@ function setupFrameHandling(page, forceDebug) {
         ...(keepBrowserOpen ? [] : ['--disable-background-networking']),
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-features=SafeBrowsing',
+        '--disable-features=SafeBrowsing,AdTagging',
         '--disable-dev-shm-usage',
         ...(keepBrowserOpen ? [] : ['--disable-sync']),
         '--mute-audio',
