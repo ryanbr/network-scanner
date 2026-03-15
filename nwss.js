@@ -32,7 +32,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats } = require('./lib/nettools');
 // File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // CDP functionality
@@ -4713,6 +4713,18 @@ function setupFrameHandling(page, forceDebug) {
     }
     if (ignoreCache && forceDebug) {
       console.log(messageColors.info('Cache:') + ` Smart caching was disabled`);
+    }
+    // DNS cache statistics
+    const dnsStats = getDnsCacheStats();
+    if (dnsStats.digHits + dnsStats.digMisses > 0 || dnsStats.whoisHits + dnsStats.whoisMisses > 0) {
+      const parts = [];
+      if (dnsStats.digHits + dnsStats.digMisses > 0) {
+        parts.push(`${messageColors.success(dnsStats.digHits)} dig cached, ${messageColors.timing(dnsStats.digMisses)} fresh`);
+      }
+      if (dnsStats.whoisHits + dnsStats.whoisMisses > 0) {
+        parts.push(`${messageColors.success(dnsStats.whoisHits)} whois cached, ${messageColors.timing(dnsStats.whoisMisses)} fresh`);
+      }
+      console.log(messageColors.info('DNS cache:') + ` ${parts.join(' | ')}`);
     }
   }
   
