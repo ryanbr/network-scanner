@@ -505,22 +505,38 @@ if (validateRules || validateRulesFile) {
   }
 }
 
-// Parse --block-ads argument for request-level ad blocking
+// Parse --block-ads argument for request-level ad blocking (supports comma-separated lists)
 const blockAdsIndex = args.findIndex(arg => arg.startsWith('--block-ads'));
 if (blockAdsIndex !== -1) {
-  const rulesFile = args[blockAdsIndex].includes('=') 
-    ? args[blockAdsIndex].split('=')[1] 
+  const rulesArg = args[blockAdsIndex].includes('=')
+    ? args[blockAdsIndex].split('=')[1]
     : args[blockAdsIndex + 1];
-  
-  if (!rulesFile || !fs.existsSync(rulesFile)) {
-    console.log(`Error: Adblock rules file not found: ${rulesFile || '(not specified)'}`);
+
+  if (!rulesArg) {
+    console.log('Error: No adblock rules file specified');
     process.exit(1);
   }
-  
+
+  const rulesFiles = rulesArg.split(',').map(f => f.trim()).filter(f => f);
+  for (const file of rulesFiles) {
+    if (!fs.existsSync(file)) {
+      console.log(`Error: Adblock rules file not found: ${file}`);
+      process.exit(1);
+    }
+  }
+
+  // Concatenate multiple lists into a single temp file for the parser
+  let rulesFile = rulesFiles[0];
+  if (rulesFiles.length > 1) {
+    rulesFile = path.join(os.tmpdir(), `nwss-adblock-combined-${Date.now()}.txt`);
+    const combined = rulesFiles.map(f => fs.readFileSync(f, 'utf-8')).join('\n');
+    fs.writeFileSync(rulesFile, combined);
+  }
+
   adblockEnabled = true;
   adblockMatcher = parseAdblockRules(rulesFile, { enableLogging: forceDebug });
   const stats = adblockMatcher.getStats();
-  if (!silentMode) console.log(messageColors.success(`Adblock enabled: Loaded ${stats.total} blocking rules from ${rulesFile}`));
+  if (!silentMode) console.log(messageColors.success(`Adblock enabled: Loaded ${stats.total} blocking rules from ${rulesFiles.length} list${rulesFiles.length > 1 ? 's' : ''}`));
 }
 
 if (args.includes('--help') || args.includes('-h')) {
