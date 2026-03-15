@@ -207,6 +207,7 @@ const localhostIndex = args.findIndex(arg => arg.startsWith('--localhost'));
 if (localhostIndex !== -1) {
   localhostIP = args[localhostIndex].includes('=') ? args[localhostIndex].split('=')[1] : '127.0.0.1';
 }
+const keepBrowserOpen = args.includes('--keep-open');
 const disableInteract = args.includes('--no-interact');
 const globalGhostCursor = args.includes('--ghost-cursor');
 const plainOutput = args.includes('--plain');
@@ -553,6 +554,8 @@ General Options:
   --ghost-cursor                 Use ghost-cursor Bezier mouse movements (requires: npm i ghost-cursor)
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
+  --keep-open                    Keep browser open after scan completes (use with --headful)
+  --use-puppeteer-core           Use puppeteer-core with system Chrome instead of bundled Chromium
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --remove-dupes                 Remove duplicate domains from output (only with -o)
   --eval-on-doc                 Globally enable evaluateOnNewDocument() for Fetch/XHR interception
@@ -3974,12 +3977,14 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
 
-        try {
-          untrackPage(page);
-          await page.close();
-          if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
-        } catch (pageCloseErr) {
-          if (forceDebug) console.log(formatLogMessage('debug', `Failed to close page for ${currentUrl}: ${pageCloseErr.message}`));
+        if (!keepBrowserOpen) {
+          try {
+            untrackPage(page);
+            await page.close();
+            if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
+          } catch (pageCloseErr) {
+            if (forceDebug) console.log(formatLogMessage('debug', `Failed to close page for ${currentUrl}: ${pageCloseErr.message}`));
+          }
         }
       }
     }
@@ -4593,6 +4598,12 @@ function setupFrameHandling(page, forceDebug) {
   wgDisconnectAll(forceDebug);
   ovpnDisconnectAll(forceDebug);
 
+  // Keep browser open if --keep-open flag is set (useful with --headful for inspection)
+  if (keepBrowserOpen && !launchHeadless) {
+    console.log(messageColors.info('Browser kept open.') + ' Press Ctrl+C to exit.');
+    await new Promise(() => {}); // Block forever until user kills the process
+  }
+
   // Perform comprehensive final cleanup using enhanced browserexit module
   if (forceDebug) console.log(formatLogMessage('debug', `Starting comprehensive browser cleanup...`));
 
@@ -4617,7 +4628,7 @@ function setupFrameHandling(page, forceDebug) {
   if (forceDebug) {
     console.log(formatLogMessage('debug', `Final cleanup results: ${cleanupResult.success ? 'success' : 'failed'}`));
     console.log(formatLogMessage('debug', `Browser closed: ${cleanupResult.browserClosed}, Temp files cleaned: ${cleanupResult.tempFilesCleanedCount || 0}, User data cleaned: ${cleanupResult.userDataCleaned}`));
-    
+
     if (cleanupResult.errors.length > 0) {
       cleanupResult.errors.forEach(err => console.log(formatLogMessage('debug', `Cleanup error: ${err}`)));
     }
@@ -4625,10 +4636,10 @@ function setupFrameHandling(page, forceDebug) {
 
   // Final aggressive cleanup to catch any remaining temp files
   if (forceDebug) console.log(formatLogMessage('debug', 'Performing final aggressive temp file cleanup...'));
-  await cleanupChromeTempFiles({ 
-    includeSnapTemp: true, 
+  await cleanupChromeTempFiles({
+    includeSnapTemp: true,
     forceDebug,
-    comprehensive: true 
+    comprehensive: true
   });
   await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY); // Give filesystem time to sync
 
