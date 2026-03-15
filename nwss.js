@@ -1488,10 +1488,9 @@ function setupFrameHandling(page, forceDebug) {
         '--log-level=3',               // Fatal errors only (suppresses verbose disk logging)
         '--no-service-autorun',        // No background service disk activity
         '--disable-domain-reliability', // No reliability monitor disk writes
-        // PERFORMANCE: Enhanced Puppeteer 23.x optimizations
-        '--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor',
-        '--disable-features=TranslateUI,BlinkGenPropertyTrees,Translate',
-        '--disable-features=BackForwardCache,AcceptCHFrame',
+        // PERFORMANCE: Disable non-essential Chrome features in a single flag
+        // IMPORTANT: Chrome only reads the LAST --disable-features flag, so combine all into one
+        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding${disable_ad_tagging ? ',AdTagging' : ''}`,
         '--disable-ipc-flooding-protection',
         '--aggressive-cache-discard',
         '--memory-pressure-off',
@@ -1500,7 +1499,6 @@ function setupFrameHandling(page, forceDebug) {
         ...(keepBrowserOpen ? [] : ['--disable-background-networking']),
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        `--disable-features=SafeBrowsing${disable_ad_tagging ? ',AdTagging' : ''}`,
         '--disable-dev-shm-usage',
         ...(keepBrowserOpen ? [] : ['--disable-sync']),
         '--mute-audio',
@@ -1516,18 +1514,15 @@ function setupFrameHandling(page, forceDebug) {
         '--ignore-certificate-errors-ca-list',
         '--disable-web-security',
         '--allow-running-insecure-content',
-        '--disable-features=HttpsFirstBalancedModeAutoEnable',
         // Puppeteer 23.x: Enhanced performance and stability args
         '--disable-renderer-backgrounding',
         '--disable-backgrounding-occluded-windows',
         '--disable-background-timer-throttling',
-        '--disable-features=site-per-process', // Better for single-site scanning
         '--no-zygote', // Better process isolation
         // PERFORMANCE: Process and memory reduction for high concurrency
         '--renderer-process-limit=10',  // Cap renderer processes (default: unlimited)
         '--disable-accelerated-2d-canvas', // Software canvas only (we spoof it anyway)
         '--disable-hang-monitor',      // Remove per-renderer hang check overhead
-        '--disable-features=PaintHolding', // Don't hold frames in renderer memory
         '--js-flags=--max-old-space-size=512', // Cap V8 heap per renderer to 512MB
         ...extraArgs,
         ],
