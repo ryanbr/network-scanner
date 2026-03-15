@@ -1460,7 +1460,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-blink-features=AutomationControlled',
         '--no-first-run',
         '--disable-default-apps',
-        '--disable-component-extensions-with-background-pages',
+        ...(keepBrowserOpen ? [] : ['--disable-component-extensions-with-background-pages']),
         // HIGH IMPACT: Normal Chrome behavior simulation
         '--password-store=basic',
         '--use-mock-keychain',
@@ -1474,7 +1474,7 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-background-downloads',
         // DISK I/O REDUCTION: Eliminate unnecessary Chrome disk writes
         '--disable-breakpad',          // No crash dump files
-        '--disable-component-update',  // No component update downloads
+        ...(keepBrowserOpen ? [] : ['--disable-component-update']),  // No component update downloads
         '--disable-logging',           // No Chrome internal log files
         '--log-level=3',               // Fatal errors only (suppresses verbose disk logging)
         '--no-service-autorun',        // No background service disk activity
@@ -1488,12 +1488,12 @@ function setupFrameHandling(page, forceDebug) {
         '--memory-pressure-off',
         '--max_old_space_size=2048',   // V8 heap limit
         '--disable-prompt-on-repost',  // Fixes form popup on page reload
-        '--disable-background-networking',
+        ...(keepBrowserOpen ? [] : ['--disable-background-networking']),
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-features=SafeBrowsing',
         '--disable-dev-shm-usage',
-        '--disable-sync',
+        ...(keepBrowserOpen ? [] : ['--disable-sync']),
         '--mute-audio',
         '--disable-translate',
         '--window-size=1920,1080',
