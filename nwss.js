@@ -32,7 +32,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache } = require('./lib/nettools');
 // File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // CDP functionality
@@ -235,6 +235,8 @@ let cleanRules = args.includes('--clean-rules');
 const clearCache = args.includes('--clear-cache');
 const ignoreCache = args.includes('--ignore-cache');
 const cacheRequests = args.includes('--cache-requests');
+const dnsCacheMode = args.includes('--dns-cache');
+if (dnsCacheMode) enableDiskCache();
 
 let validateRulesFile = null;
 const validateRulesIndex = args.findIndex(arg => arg === '--validate-rules');
@@ -590,6 +592,7 @@ General Options:
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
+  --dns-cache                    Persist dig/whois results to disk between runs (3hr/4hr TTL)
   --validate-config              Validate config.json file and exit
   --validate-rules [file]        Validate rule file format (uses --output/--compare files if no file specified)
   --clean-rules [file]           Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified)
