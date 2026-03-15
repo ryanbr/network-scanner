@@ -2,6 +2,24 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [2.0.59] - 2026-03-15
+
+### Added
+- `--keep-open` flag to keep browser and all tabs open after scan completes (use with `--headful` for debugging)
+- `--use-puppeteer-core` flag to use `puppeteer-core` with system Chrome instead of bundled Chromium
+- `puppeteer-core` as optional dependency in package.json
+- Ghost-cursor integration for Bezier-based mouse movements (`--ghost-cursor` flag)
+- Help text entries for `--keep-open`, `--use-puppeteer-core`
+
+### Fixed
+- Simulated mouse events now include `pageX`/`pageY`/`screenX`/`screenY` properties — scripts reading `event.pageX`/`pageY` for bot detection (e.g. dkitac.js) previously saw zero movement
+- Stale comment reference to removed function
+- CDP timeout leaks and dead code in `cdp.js`
+
+### Improved
+- Mouse interaction runs concurrently with post-load delay for better performance
+- `maxTouchPoints` hardcoded to 0 for desktop Linux Chrome consistency
+
 ## [2.0.58] - 2026-03-14
 
 ### Fixed

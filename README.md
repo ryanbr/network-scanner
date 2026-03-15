@@ -62,6 +62,8 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--ghost-cursor`            | Use ghost-cursor Bezier mouse movements globally (requires `npm i ghost-cursor`) |
 | `--custom-json <file>`      | Use a custom config JSON file instead of config.json |
 | `--headful`                 | Launch browser with GUI (not headless) |
+| `--keep-open`               | Keep browser and tabs open after scan completes (use with `--headful` for debugging) |
+| `--use-puppeteer-core`      | Use `puppeteer-core` with system Chrome instead of bundled Chromium |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
 | `--remove-dupes`            | Remove duplicate domains from output (only with `-o`) |
 | `--dry-run`                 | Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules |
