@@ -4725,6 +4725,12 @@ function setupFrameHandling(page, forceDebug) {
         parts.push(`${messageColors.success(dnsStats.whoisHits)} whois cached, ${messageColors.timing(dnsStats.whoisMisses)} fresh`);
       }
       console.log(messageColors.info('DNS cache:') + ` ${parts.join(' | ')}`);
+      if (dnsStats.freshDig.length > 0) {
+        console.log(messageColors.info('  Fresh dig:') + ` ${dnsStats.freshDig.join(', ')}`);
+      }
+      if (dnsStats.freshWhois.length > 0) {
+        console.log(messageColors.info('  Fresh whois:') + ` ${dnsStats.freshWhois.join(', ')}`);
+      }
     }
   }
   
