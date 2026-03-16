@@ -3382,8 +3382,7 @@ function setupFrameHandling(page, forceDebug) {
               if (forceDebug) {
                 console.log(formatLogMessage('debug', `Redirect chain ended with invalid URL, keeping original: ${originalUrl}`));
               }
-              // Keep processing with the original URL or throw an error
-              throw new Error(`Redirect resulted in invalid URL: ${finalUrl}`);
+              // Continue with original URL — requests captured before the redirect are still valid
             }
           }
         }
