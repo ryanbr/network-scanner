@@ -64,6 +64,9 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--headful`                 | Launch browser with GUI (not headless) |
 | `--keep-open`               | Keep browser and tabs open after scan completes (use with `--headful` for debugging) |
 | `--use-puppeteer-core`      | Use `puppeteer-core` with system Chrome instead of bundled Chromium |
+| `--load-extension <path>`   | Load unpacked Chrome extension from directory (can be used multiple times) |
+| `--dns-cache`               | Persist dig/whois results to disk between runs (14hr TTL, `.digcache`/`.whoiscache`) |
+| `--block-ads=<files>`       | Block ads using EasyList format rules (comma-separated: `easylist.txt,easyprivacy.txt`) |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
 | `--remove-dupes`            | Remove duplicate domains from output (only with `-o`) |
 | `--dry-run`                 | Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules |
@@ -403,6 +406,53 @@ If a proxy fails mid-scan, Chromium's error code is detected and diagnosed:
 ```
 
 Detected error codes: `ERR_PROXY_CONNECTION_FAILED`, `ERR_SOCKS_CONNECTION_FAILED`, `ERR_TUNNEL_CONNECTION_FAILED`, `ERR_PROXY_AUTH_UNSUPPORTED`, `ERR_PROXY_AUTH_REQUESTED`, `ERR_SOCKS_CONNECTION_HOST_UNREACHABLE`, `ERR_PROXY_CERTIFICATE_INVALID`, `ERR_NO_SUPPORTED_PROXIES`.
+
+---
+
+## .nwssconfig — Per-Config Settings
+
+Create a `.nwssconfig` file in the project root to define CLI settings per config file. When a config filename matches a key, those settings are automatically applied. CLI flags merge with and override `.nwssconfig` settings.
+
+```json
+{
+  "configs": {
+    "config-clean1.json": {
+      "output": "outputfile.txt",
+      "max_concurrent": 30,
+      "dns_cache": true,
+      "cache_requests": true,
+      "dumpurls": true,
+      "remove_tempfiles": true,
+      "color": true
+    },
+    "config-clean2.json": {
+      "output": "outputfile.txt",
+      "max_concurrent": 15,
+      "dns_cache": true,
+      "cache_requests": true,
+      "dumpurls": true,
+      "remove_tempfiles": true,
+      "color": true,
+      "debug": true,
+      "block_ads": "easylist.txt,easyprivacy.txt"
+    }
+  }
+}
+```
+
+**Usage:**
+
+```bash
+node nwss.js config-clean1.json                    # uses .nwssconfig settings
+node nwss.js config-clean2.json --debug             # .nwssconfig + debug override
+node nwss.js config-other.json --max-concurrent 5   # no match in .nwssconfig, uses CLI flags
+```
+
+**Supported settings:** `output`, `max_concurrent`, `dns_cache`, `cache_requests`, `dumpurls`, `remove_tempfiles`, `color`, `remove_dupes`, `compress_logs`, `debug`, `silent`, `verbose`, `headful`, `keep_open`, `dry_run`, `titles`, `sub_domains`, `no_interact`, `ghost_cursor`, `plain`, `cdp`, `dnsmasq`, `unbound`, `privoxy`, `pihole`, `eval_on_doc`, `use_puppeteer_core`, `ignore_cache`, `clear_cache`, `block_ads`, `compare`, `localhost`, `append`.
+
+**Priority:** CLI flags > `.nwssconfig` > hardcoded defaults.
+
+---
 
 ### Global Configuration Options
 
