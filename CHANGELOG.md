@@ -2,6 +2,36 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [2.0.60] - 2026-03-16
+
+### Added
+- `--dns-cache` flag for persistent dig/whois disk caching between runs (`.digcache`, `.whoiscache`)
+- `--load-extension <path>` flag to load unpacked Chrome extensions (supports multiple)
+- `--block-ads` now supports comma-separated list files (`--block-ads=easylist.txt,easyprivacy.txt`)
+- `disable_ad_tagging` config option to control Chrome AdTagging (default: true)
+- DNS cache hit/miss statistics in scan summary output with fresh domain names listed
+- Concurrent dig/whois deduplication — multiple pages requesting the same domain share one lookup
+- SIGINT/SIGTERM handlers for `--keep-open` to prevent orphaned Chrome processes
+
+### Fixed
+- Adblock pipe (`|`) character handling — mid-pattern pipes were incorrectly treated as anchors, causing broad false positives on EasyList rules like `/addyn|*|adtech;`
+- Domain Map fast path was skipping resource type checks — `$ping`, `$script` etc. now correctly enforced
+- Domain extraction for `||domain.com/path` rules — path was incorrectly included in domain name
+- `--keep-open` now skips extension-blocking Chrome flags so Chrome Web Store and extensions work
+- Corrupt disk cache files are deleted instead of persisted
+- `getBaseDomain()` now uses `psl` for correct multi-part TLD handling (`.co.uk`, `.com.au`)
+- Merged 7 separate `--disable-features` flags into one — Chrome only reads the last occurrence
+
+### Improved
+- `$document` rules treated as full domain blocks (matches all resource types)
+- `adblock.js`: regex cache for compiled patterns, Set for resource type lookups, lazy parentDomains, two-level result cache with LRU eviction (32K), hoisted constants, freed parsed options after rule parsing
+- `output.js`: capped wildcard regex cache at 500, simplified `*.domain.com` suffix matching, hoisted resource type map
+- `compare.js`: pre-compiled and deduplicated 6 normalization regexes
+- `grep.js`: build grep args once outside pattern loop
+- `domain-cache.js`: use Set iterator for eviction instead of full array copy
+- `nettools.js`: hoisted ANSI strip regex, disk cache flushes once on exit instead of per-lookup
+- Dig/whois cache: 14-hour TTL, 1000 entry limit, pretty-printed JSON files
+
 ## [2.0.59] - 2026-03-15
 
 ### Added
