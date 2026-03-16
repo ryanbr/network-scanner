@@ -3288,8 +3288,8 @@ function setupFrameHandling(page, forceDebug) {
           navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
         } catch (navErr) {
           if (navErr.message.includes('timeout') || navErr.message.includes('Timeout')) {
-            if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:commit for ${currentUrl}`));
-            const fallbackOptions = { ...gotoOptions, waitUntil: 'commit', timeout: Math.min(timeout, 15000) };
+            if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:networkidle2 for ${currentUrl}`));
+            const fallbackOptions = { ...gotoOptions, waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) };
             navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
           } else {
             throw navErr;
