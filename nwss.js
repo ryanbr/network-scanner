@@ -177,6 +177,76 @@ if (args.length === 0) {
   args.push('--help');
 }
 
+// --- .nwssconfig support: inject per-config settings into args ---
+const NWSSCONFIG_PATH = path.join(__dirname, '.nwssconfig');
+if (fs.existsSync(NWSSCONFIG_PATH)) {
+  try {
+    const nwssConfig = JSON.parse(fs.readFileSync(NWSSCONFIG_PATH, 'utf-8'));
+    // Find which config file is being used (--custom-json <file> or positional .json arg)
+    const customJsonIdx = args.findIndex(arg => arg === '--custom-json');
+    const configFilename = (customJsonIdx !== -1 && args[customJsonIdx + 1])
+      ? args[customJsonIdx + 1]
+      : args.find(a => a.endsWith('.json') && !a.startsWith('--'));
+
+    if (configFilename && nwssConfig.configs && nwssConfig.configs[configFilename]) {
+      const settings = nwssConfig.configs[configFilename];
+      const originalArgs = args.join(' ');
+
+      // Map settings keys to CLI flags — only inject if not already in args
+      const settingsMap = {
+        output: ['-o', '--output'],
+        max_concurrent: ['--max-concurrent'],
+        dns_cache: ['--dns-cache'],
+        cache_requests: ['--cache-requests'],
+        dumpurls: ['--dumpurls'],
+        remove_tempfiles: ['--remove-tempfiles'],
+        color: ['--color'],
+        remove_dupes: ['--remove-dupes'],
+        compress_logs: ['--compress-logs'],
+        debug: ['--debug'],
+        silent: ['--silent'],
+        verbose: ['--verbose'],
+        headful: ['--headful'],
+        keep_open: ['--keep-open'],
+        dry_run: ['--dry-run'],
+        titles: ['--titles'],
+        sub_domains: ['--sub-domains'],
+        no_interact: ['--no-interact'],
+        ghost_cursor: ['--ghost-cursor'],
+        plain: ['--plain'],
+        cdp: ['--cdp'],
+        dnsmasq: ['--dnsmasq'],
+        unbound: ['--unbound'],
+        privoxy: ['--privoxy'],
+        pihole: ['--pihole'],
+        eval_on_doc: ['--eval-on-doc'],
+        use_puppeteer_core: ['--use-puppeteer-core'],
+        ignore_cache: ['--ignore-cache'],
+        clear_cache: ['--clear-cache'],
+        block_ads: ['--block-ads'],
+        compare: ['--compare'],
+        localhost: ['--localhost'],
+        append: ['--append']
+      };
+
+      for (const [key, flags] of Object.entries(settingsMap)) {
+        if (settings[key] === undefined) continue;
+        // Skip if any variant of the flag is already in CLI args
+        if (flags.some(f => originalArgs.includes(f))) continue;
+
+        const value = settings[key];
+        if (typeof value === 'boolean') {
+          if (value) args.push(flags[flags.length - 1]);
+        } else if (typeof value === 'string' || typeof value === 'number') {
+          args.push(flags[flags.length - 1], String(value));
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`Warning: Failed to parse .nwssconfig: ${e.message}`);
+  }
+}
+
 const headfulMode = args.includes('--headful');
 const SOURCES_FOLDER = 'sources';
 
@@ -564,6 +634,12 @@ Output Format Options:
 Request Blocking:
   --block-ads=<file>             Block ads/trackers using EasyList format rules (||domain.com^, /ads/*, etc)
                                  Works at request-level for maximum performance
+
+Per-config settings file (.nwssconfig):
+  Place a .nwssconfig file in the project root to define per-config settings.
+  When a config filename matches a key in .nwssconfig, those settings are used.
+  CLI flags merge with and override .nwssconfig settings.
+  See README.md for format details.
 
 General Options:
   --verbose                      Force verbose mode globally
