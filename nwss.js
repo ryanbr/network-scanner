@@ -3283,7 +3283,18 @@ function setupFrameHandling(page, forceDebug) {
           ? { ...defaultGotoOptions, ...siteConfig.goto_options } : defaultGotoOptions;
 
         // Enhanced navigation with redirect handling - passes existing gotoOptions
-        const navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
+        let navigationResult;
+        try {
+          navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
+        } catch (navErr) {
+          if (navErr.message.includes('timeout') || navErr.message.includes('Timeout')) {
+            if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:commit for ${currentUrl}`));
+            const fallbackOptions = { ...gotoOptions, waitUntil: 'commit', timeout: Math.min(timeout, 15000) };
+            navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
+          } else {
+            throw navErr;
+          }
+        }
         
         const { finalUrl, redirected, redirectChain, originalUrl, redirectDomains } = navigationResult;
         
