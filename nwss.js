@@ -201,7 +201,9 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         dumpurls: ['--dumpurls'],
         remove_tempfiles: ['--remove-tempfiles'],
         color: ['--color'],
-        remove_dupes: ['--remove-dupes'],
+        remove_dupes: ['--remove-dupes', '--remove-dubes'],
+        'remove-dupes': ['--remove-dupes', '--remove-dubes'],
+        'remove-dubes': ['--remove-dupes', '--remove-dubes'],
         compress_logs: ['--compress-logs'],
         debug: ['--debug'],
         silent: ['--silent'],
@@ -230,11 +232,15 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
       };
 
       for (const [key, flags] of Object.entries(settingsMap)) {
-        if (settings[key] === undefined) continue;
+        // Support both underscore and hyphen variants (e.g. dns_cache or dns-cache)
+        const value = settings[key] !== undefined ? settings[key]
+          : settings[key.replace(/_/g, '-')] !== undefined ? settings[key.replace(/_/g, '-')]
+          : settings[key.replace(/-/g, '_')] !== undefined ? settings[key.replace(/-/g, '_')]
+          : undefined;
+        if (value === undefined) continue;
         // Skip if any variant of the flag is already in CLI args
         if (flags.some(f => originalArgs.includes(f))) continue;
 
-        const value = settings[key];
         if (typeof value === 'boolean') {
           if (value) args.push(flags[flags.length - 1]);
         } else if (typeof value === 'string' || typeof value === 'number') {
