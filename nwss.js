@@ -104,9 +104,9 @@ const CONCURRENCY_LIMITS = Object.freeze({
 
 // V8 Optimization: Use Map for user agent lookups instead of object
 const USER_AGENTS = Object.freeze(new Map([
-  ['chrome', "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"],
-  ['chrome_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"],
-  ['chrome_linux', "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"],
+  ['chrome', "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"],
+  ['chrome_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"],
+  ['chrome_linux', "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"],
   ['firefox', "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:145.0) Gecko/20100101 Firefox/145.0"],
   ['firefox_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:145.0) Gecko/20100101 Firefox/145.0"],
   ['firefox_linux', "Mozilla/5.0 (X11; Linux x86_64; rv:145.0) Gecko/20100101 Firefox/145.0"],
@@ -2334,14 +2334,14 @@ function setupFrameHandling(page, forceDebug) {
           }
                     
           await page.setExtraHTTPHeaders({
-            'Sec-CH-UA': '"Not:A-Brand";v="99", "Google Chrome";v="145", "Chromium";v="145"',
+            'Sec-CH-UA': '"Not:A-Brand";v="99", "Google Chrome";v="146", "Chromium";v="146"',
             'Sec-CH-UA-Platform': `"${platform}"`,
             'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
             'Sec-CH-UA-Mobile': '?0',
             'Sec-CH-UA-Arch': `"${arch}"`,
             'Sec-CH-UA-Bitness': '"64"',
-            'Sec-CH-UA-Full-Version': '"145.0.7632.160"',
-            'Sec-CH-UA-Full-Version-List': '"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="145.0.7632.160", "Chromium";v="145.0.7632.160"'
+            'Sec-CH-UA-Full-Version': '"146.0.0.0"',
+            'Sec-CH-UA-Full-Version-List': '"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="146.0.0.0", "Chromium";v="146.0.0.0"'
           });
         }
       } catch (fingerprintErr) {
