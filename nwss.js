@@ -3350,7 +3350,8 @@ function setupFrameHandling(page, forceDebug) {
           }
           
           if (originalDomain !== finalDomain) {
-            if (!silentMode) {
+            const isPopupRedirect = !finalUrl || finalUrl === 'about:blank' || finalUrl.startsWith('chrome-error://');
+            if (!silentMode && !isPopupRedirect) {
               console.log(`🔄 Redirect detected: ${originalDomain} → ${finalDomain}`);
             }
             
@@ -3377,10 +3378,9 @@ function setupFrameHandling(page, forceDebug) {
                 }
               }
             } else {
-              // Invalid final URL - don't update currentUrl, treat as failed redirect
-              console.warn(`⚠ Redirect to invalid URL ignored: ${originalDomain} → ${finalUrl}`);
+              // Invalid final URL (ad popup redirect) - continue with original URL
               if (forceDebug) {
-                console.log(formatLogMessage('debug', `Redirect chain ended with invalid URL, keeping original: ${originalUrl}`));
+                console.log(formatLogMessage('debug', `Popup redirect ignored: ${originalDomain} → ${finalUrl}, keeping original: ${originalUrl}`));
               }
               // Continue with original URL — requests captured before the redirect are still valid
             }
