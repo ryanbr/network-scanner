@@ -3291,7 +3291,7 @@ function setupFrameHandling(page, forceDebug) {
           if ((navErr.message.includes('timeout') || navErr.message.includes('Timeout')) &&
               !navErr.message.includes('chrome-error://') && !navErr.message.includes('invalid URL')) {
             if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:networkidle2 for ${currentUrl}`));
-            const fallbackOptions = { ...gotoOptions, waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) };
+            const fallbackOptions = { ...gotoOptions, waitUntil: 'networkidle2', timeout: Math.min(timeout, 10000) };
             navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
           } else {
             throw navErr;
