@@ -3287,7 +3287,9 @@ function setupFrameHandling(page, forceDebug) {
         try {
           navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
         } catch (navErr) {
-          if (navErr.message.includes('timeout') || navErr.message.includes('Timeout')) {
+          // Only retry on genuine timeouts, not chrome-error:// redirects
+          if ((navErr.message.includes('timeout') || navErr.message.includes('Timeout')) &&
+              !navErr.message.includes('chrome-error://') && !navErr.message.includes('invalid URL')) {
             if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:networkidle2 for ${currentUrl}`));
             const fallbackOptions = { ...gotoOptions, waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) };
             navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
@@ -3523,7 +3525,10 @@ function setupFrameHandling(page, forceDebug) {
         const timeoutResult = await handleRedirectTimeout(page, currentUrl, err, safeGetDomain, forceDebug, formatLogMessage);
         
         if (timeoutResult.success) {
-          console.log(`⚠ Partial redirect timeout recovered: ${safeGetDomain(currentUrl)} → ${safeGetDomain(timeoutResult.finalUrl)}`);
+          const isPopupRedirect = timeoutResult.finalUrl && (timeoutResult.finalUrl === 'about:blank' || timeoutResult.finalUrl.startsWith('chrome-error://'));
+          if (!isPopupRedirect) {
+            console.log(`⚠ Partial redirect timeout recovered: ${safeGetDomain(currentUrl)} → ${safeGetDomain(timeoutResult.finalUrl)}`);
+          }
           currentUrl = timeoutResult.finalUrl; // Use the partial redirect URL
           siteCounter++;
           // Continue processing with the redirected URL instead of throwing error
