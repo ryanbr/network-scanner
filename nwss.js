@@ -3288,8 +3288,11 @@ function setupFrameHandling(page, forceDebug) {
           navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
         } catch (navErr) {
           // Only retry on genuine timeouts, not chrome-error:// redirects
-          if ((navErr.message.includes('timeout') || navErr.message.includes('Timeout')) &&
-              !navErr.message.includes('chrome-error://') && !navErr.message.includes('invalid URL')) {
+          let pageUrl = '';
+          try { if (!page.isClosed()) pageUrl = page.url(); } catch {}
+          const isPopupFailure = navErr.message.includes('chrome-error://') || navErr.message.includes('invalid URL') ||
+            pageUrl.startsWith('chrome-error://') || pageUrl === 'about:blank';
+          if ((navErr.message.includes('timeout') || navErr.message.includes('Timeout')) && !isPopupFailure) {
             if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:networkidle2 for ${currentUrl}`));
             const fallbackOptions = { ...gotoOptions, waitUntil: 'networkidle2', timeout: Math.min(timeout, 10000) };
             navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
