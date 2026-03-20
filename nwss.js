@@ -4160,6 +4160,9 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
+ // Track domains that failed with timeout — skip subsequent URLs to same domain
+ const failedTimeoutDomains = new Set();
+
  // Enhanced hang detection with browser restart recovery
  let currentBatchInfo = { batchStart: 0, batchSize: 0 };
  let lastProcessedCount = 0;
@@ -4385,8 +4388,17 @@ function setupFrameHandling(page, forceDebug) {
       console.log(formatLogMessage('debug', `[CONCURRENCY] Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
     }
     
- // Create tasks with timeout protection
- const batchTasks = currentBatch.map(task => originalLimit(() => processUrl(task.url, task.config, browser)));
+ // Create tasks with timeout protection — skip domains that already timed out
+ const batchTasks = currentBatch.map(task => originalLimit(() => {
+   try {
+     const taskDomain = new URL(task.url).hostname;
+     if (failedTimeoutDomains.has(taskDomain)) {
+       if (forceDebug) console.log(formatLogMessage('debug', `Skipping ${task.url} — domain ${taskDomain} already timed out`));
+       return { url: task.url, rules: [], success: false, error: 'Domain previously timed out', skipped: true };
+     }
+   } catch {}
+   return processUrl(task.url, task.config, browser);
+ }));
  
  let batchResults;
  try {
@@ -4415,6 +4427,13 @@ function setupFrameHandling(page, forceDebug) {
      throw timeoutError;
    }
  }
+
+    // Track domains that timed out — skip them in future batches
+    for (const result of batchResults) {
+      if (!result.success && result.error && result.error.includes('timeout')) {
+        try { failedTimeoutDomains.add(new URL(result.url).hostname); } catch {}
+      }
+    }
 
     // IMPROVED: Much more conservative emergency restart logic
     const criticalRestartCount = batchResults.filter(r => r.needsImmediateRestart).length;
