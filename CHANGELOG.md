@@ -2,6 +2,27 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [2.0.61] - 2026-03-17
+
+### Added
+- `.nwssconfig` file for per-config-file CLI settings — define output, concurrency, flags per JSON config
+- `--no-color` / `--no-colour` flag to disable colors (colors now enabled by default)
+- Navigation timeout fallback — retries with `waitUntil: networkidle2` on timeout, 10s cap
+- Skip domains after 3 consecutive timeouts in the same scan to avoid wasting time on down sites
+- Fingerprint cache capped at 500 entries with LRU eviction
+
+### Fixed
+- `chrome-error://` popup redirects no longer throw errors — continue processing captured requests
+- Suppressed noisy `about:blank` and `chrome-error://` redirect warnings (visible with `--debug` only)
+- Fallback retry skipped for `chrome-error://` redirects (instant failure, not genuine timeout)
+- Page URL checked before fallback retry to detect already-failed state
+- `.nwssconfig` keys support both hyphens and underscores (`dns-cache` and `dns_cache` both work)
+
+### Improved
+- Colors enabled by default — no need for `--color` flag or `color: true` in `.nwssconfig`
+- Chrome UA bumped to 146, Firefox UA bumped to 148
+- Sec-CH-UA headers updated to match Chrome 146
+
 ## [2.0.60] - 2026-03-16
 
 ### Added

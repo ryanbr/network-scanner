@@ -29,7 +29,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 |:---------------------------|:------------|
 | `-o, --output <file>`       | Output file for rules. If omitted, prints to console |
 | `--compare <file>`          | Remove rules that already exist in this file before output |
-| `--color, --colour`         | Enable colored console output for status messages |
+| `--no-color, --no-colour`   | Disable colored console output (colors enabled by default) |
 | `--append`                  | Append new rules to output file instead of overwriting (requires `-o`) |
 
 ### Output Format Options
