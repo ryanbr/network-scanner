@@ -4160,8 +4160,9 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
- // Track domains that failed with timeout — skip subsequent URLs to same domain
- const failedTimeoutDomains = new Set();
+ // Track domain timeout counts — skip domain after 3 failures
+ const domainTimeoutCounts = new Map();
+ const DOMAIN_TIMEOUT_THRESHOLD = 3;
 
  // Enhanced hang detection with browser restart recovery
  let currentBatchInfo = { batchStart: 0, batchSize: 0 };
@@ -4388,13 +4389,13 @@ function setupFrameHandling(page, forceDebug) {
       console.log(formatLogMessage('debug', `[CONCURRENCY] Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
     }
     
- // Create tasks with timeout protection — skip domains that already timed out
+ // Create tasks with timeout protection — skip domains that repeatedly timed out
  const batchTasks = currentBatch.map(task => originalLimit(() => {
    try {
      const taskDomain = new URL(task.url).hostname;
-     if (failedTimeoutDomains.has(taskDomain)) {
-       if (forceDebug) console.log(formatLogMessage('debug', `Skipping ${task.url} — domain ${taskDomain} already timed out`));
-       return { url: task.url, rules: [], success: false, error: 'Domain previously timed out', skipped: true };
+     if ((domainTimeoutCounts.get(taskDomain) || 0) >= DOMAIN_TIMEOUT_THRESHOLD) {
+       if (!silentMode) console.log(formatLogMessage('info', `Skipping ${task.url} — ${taskDomain} timed out ${DOMAIN_TIMEOUT_THRESHOLD} times`));
+       return { url: task.url, rules: [], success: false, error: 'Domain repeatedly timed out', skipped: true };
      }
    } catch {}
    return processUrl(task.url, task.config, browser);
@@ -4428,10 +4429,13 @@ function setupFrameHandling(page, forceDebug) {
    }
  }
 
-    // Track domains that timed out — skip them in future batches
+    // Track domain timeout counts — skip after threshold
     for (const result of batchResults) {
-      if (!result.success && result.error && result.error.includes('timeout')) {
-        try { failedTimeoutDomains.add(new URL(result.url).hostname); } catch {}
+      if (!result.success && !result.skipped && result.error && result.error.includes('timeout')) {
+        try {
+          const domain = new URL(result.url).hostname;
+          domainTimeoutCounts.set(domain, (domainTimeoutCounts.get(domain) || 0) + 1);
+        } catch {}
       }
     }
 
