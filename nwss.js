@@ -1198,12 +1198,19 @@ if (forceDebug && globalComments) {
  * @param {string} url - The URL string to parse.
  * @returns {string} The root domain, or the original hostname if parsing fails (e.g., for IP addresses or invalid URLs), or an empty string on error.
  */
+const _rootDomainCache = new Map();
 function getRootDomain(url) {
+  const cached = _rootDomainCache.get(url);
+  if (cached !== undefined) return cached;
   try {
     const { hostname } = new URL(url);
     const parsed = psl.parse(hostname);
-    return parsed.domain || hostname;
+    const result = parsed.domain || hostname;
+    if (_rootDomainCache.size > 5000) _rootDomainCache.clear();
+    _rootDomainCache.set(url, result);
+    return result;
   } catch {
+    _rootDomainCache.set(url, '');
     return '';
   }
 }
