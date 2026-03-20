@@ -870,6 +870,23 @@ const globalBlockedRegexes = Array.isArray(globalBlocked)
   ? globalBlocked.map(pattern => new RegExp(pattern))
   : [];
 
+// Cache compiled regexes by pattern string — avoids recompiling same patterns across URLs
+const _compiledRegexCache = new Map();
+function getCompiledRegex(pattern) {
+  let compiled = _compiledRegexCache.get(pattern);
+  if (!compiled) {
+    compiled = new RegExp(pattern.replace(/^\/(.*)\/$/, '$1'));
+    if (_compiledRegexCache.size > 2000) _compiledRegexCache.clear();
+    _compiledRegexCache.set(pattern, compiled);
+  }
+  return compiled;
+}
+function getCompiledRegexes(patterns) {
+  if (!patterns) return [];
+  const arr = Array.isArray(patterns) ? patterns : [patterns];
+  return arr.map(p => getCompiledRegex(p));
+}
+
 // Pre-split ignoreDomains into exact Set (O(1) lookup) and wildcard array
 const _ignoreDomainsExact = new Set();
 const _ignoreDomainsWildcard = [];
@@ -2361,11 +2378,7 @@ function setupFrameHandling(page, forceDebug) {
         }
       }
 
-      const regexes = Array.isArray(siteConfig.filterRegex)
-        ? siteConfig.filterRegex.map(r => new RegExp(r.replace(/^\/(.*)\/$/, '$1')))
-        : siteConfig.filterRegex
-          ? [new RegExp(siteConfig.filterRegex.replace(/^\/(.*)\/$/, '$1'))]
-          : [];
+      const regexes = getCompiledRegexes(siteConfig.filterRegex);
 
       // NEW: Get regex_and setting (defaults to false for backward compatibility)
       const useRegexAnd = siteConfig.regex_and === true;
@@ -2513,7 +2526,7 @@ function setupFrameHandling(page, forceDebug) {
   }
 
       const blockedRegexes = Array.isArray(siteConfig.blocked)
-        ? siteConfig.blocked.map(pattern => new RegExp(pattern))
+        ? siteConfig.blocked.map(pattern => getCompiledRegex(pattern))
         : [];
 		
       // Combine site-specific with pre-compiled global blocked patterns
