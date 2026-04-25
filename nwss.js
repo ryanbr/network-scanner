@@ -185,9 +185,19 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
     const nwssConfig = JSON.parse(fs.readFileSync(NWSSCONFIG_PATH, 'utf-8'));
     // Find which config file is being used (--custom-json <file> or positional .json arg)
     const customJsonIdx = args.findIndex(arg => arg === '--custom-json');
+    const positionalJson = (customJsonIdx === -1)
+      ? args.find(a => a.endsWith('.json') && !a.startsWith('--'))
+      : null;
     const configFilename = (customJsonIdx !== -1 && args[customJsonIdx + 1])
       ? args[customJsonIdx + 1]
-      : args.find(a => a.endsWith('.json') && !a.startsWith('--'));
+      : positionalJson;
+
+    // If a positional .json was used (not --custom-json), wire it to --custom-json
+    // so the real config loader picks it up instead of defaulting to config.json
+    if (positionalJson && customJsonIdx === -1) {
+      args.push('--custom-json', positionalJson);
+      process.argv.push('--custom-json', positionalJson);
+    }
 
     if (configFilename && nwssConfig.configs && nwssConfig.configs[configFilename]) {
       const settings = nwssConfig.configs[configFilename];
