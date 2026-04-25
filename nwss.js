@@ -2557,6 +2557,11 @@ function setupFrameHandling(page, forceDebug) {
       const blockedRegexes = Array.isArray(siteConfig.blocked)
         ? siteConfig.blocked.map(pattern => getCompiledRegex(pattern))
         : [];
+
+      // Pre-build Set for O(1) resourceType lookups (fired per request)
+      const allowedResourceTypesSet = Array.isArray(siteConfig.resourceTypes)
+        ? new Set(siteConfig.resourceTypes)
+        : null;
 		
       // Combine site-specific with pre-compiled global blocked patterns
       const allBlockedRegexes = blockedRegexes.length > 0
@@ -2809,8 +2814,7 @@ function setupFrameHandling(page, forceDebug) {
                   const resourceType = request.resourceType();
 
                   // Apply same filtering logic as unblocked requests
-                  const allowedResourceTypes = siteConfig.resourceTypes;
-                  if (!allowedResourceTypes || !Array.isArray(allowedResourceTypes) || allowedResourceTypes.includes(resourceType)) {
+                  if (!allowedResourceTypesSet || allowedResourceTypesSet.has(resourceType)) {
                     if (dryRunMode) {
                       addDryRunMatch(matchedDomains, {
                         regex: evenBlockedRegexPattern,
@@ -2895,9 +2899,8 @@ function setupFrameHandling(page, forceDebug) {
             
            // *** UNIVERSAL RESOURCE TYPE FILTER ***
            // Check resourceTypes filter FIRST, before ANY processing (nettools, searchstring, immediate matching)
-           const allowedResourceTypes = siteConfig.resourceTypes;
-           if (allowedResourceTypes && Array.isArray(allowedResourceTypes) && allowedResourceTypes.length > 0) {
-             if (!allowedResourceTypes.includes(resourceType)) {
+           if (allowedResourceTypesSet && allowedResourceTypesSet.size > 0) {
+             if (!allowedResourceTypesSet.has(resourceType)) {
                if (forceDebug) {
                  console.log(formatLogMessage('debug', `URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`));
                }
