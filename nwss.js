@@ -2805,14 +2805,15 @@ function setupFrameHandling(page, forceDebug) {
             if (reqDomain && !matchesIgnoreDomain(reqDomain, ignoreDomains)) {
               for (const re of regexes) {
                 if (re.test(reqUrl)) {
+                  const evenBlockedRegexPattern = re.source;
                   const resourceType = request.resourceType();
-                  
+
                   // Apply same filtering logic as unblocked requests
                   const allowedResourceTypes = siteConfig.resourceTypes;
                   if (!allowedResourceTypes || !Array.isArray(allowedResourceTypes) || allowedResourceTypes.includes(resourceType)) {
                     if (dryRunMode) {
                       addDryRunMatch(matchedDomains, {
-                        regex: matchedRegexPattern,
+                        regex: evenBlockedRegexPattern,
                         domain: reqDomain,
                         resourceType: resourceType,
                         fullUrl: reqUrl,
@@ -2822,11 +2823,11 @@ function setupFrameHandling(page, forceDebug) {
                     } else {
                       addMatchedDomain(reqDomain, resourceType, fullSubdomain);
                     }
-                    if (matchedRegexPattern) matchedRegexPatterns.add(matchedRegexPattern);
+                    matchedRegexPatterns.add(evenBlockedRegexPattern);
 
                     if (siteConfig.verbose === 1) {
                       const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
-                      console.log(formatLogMessage('match', `[${simplifiedCurrentUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
+                      console.log(formatLogMessage('match', `[${simplifiedCurrentUrl}] ${reqUrl} matched regex: ${evenBlockedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
                     }
                     if (dumpUrls) {
                       const timestamp = new Date().toISOString();
