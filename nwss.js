@@ -2902,7 +2902,7 @@ function setupFrameHandling(page, forceDebug) {
            if (allowedResourceTypesSet && allowedResourceTypesSet.size > 0) {
              if (!allowedResourceTypesSet.has(resourceType)) {
                if (forceDebug) {
-                 console.log(formatLogMessage('debug', `URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${allowedResourceTypes.join(', ')}]. Skipping ALL processing.`));
+                 console.log(formatLogMessage('debug', `URL ${reqUrl} matches regex but resourceType '${resourceType}' not in allowed types [${Array.from(allowedResourceTypesSet).join(', ')}]. Skipping ALL processing.`));
                }
                // Skip this URL entirely - doesn't match required resource types
                request.continue();
