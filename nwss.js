@@ -687,6 +687,7 @@ Validation Options:
   
 Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
+  ignoreDomainsByUrl: ["regex1", "regex2"]       Regex patterns; if any request URL matches, the request's root domain is ignored for the rest of the scan
   blocked: ["regex1", "regex2"]                   Global regex patterns to block requests (combined with per-site blocked)
   whois_server_mode: "random" or "cycle"      Default server selection mode for all sites (default: random)
   ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
@@ -854,8 +855,9 @@ try {
 // Extract config values while ignoring 'comments' field at global and site levels
 const { 
   sites = [], 
-  ignoreDomains = [], 
-  blocked: globalBlocked = [], 
+  ignoreDomains = [],
+  ignoreDomainsByUrl = [],
+  blocked: globalBlocked = [],
   whois_delay = 3000, 
   whois_server_mode = 'random', 
   ignore_similar = true, 
@@ -900,6 +902,15 @@ for (const pattern of ignoreDomains) {
     _ignoreDomainsExact.add(pattern);
   }
 }
+
+// Compile ignoreDomainsByUrl patterns once — match request URLs to dynamically ignore domains
+const _ignoreDomainsByUrlRegexes = Array.isArray(ignoreDomainsByUrl)
+  ? ignoreDomainsByUrl.map(p => {
+      try { return getCompiledRegex(p); } catch { return null; }
+    }).filter(r => r)
+  : [];
+// Runtime Set of domains marked ignored by URL pattern matches — shared across all sites in this scan
+const _dynamicallyIgnoredDomains = new Set();
 
 // Apply global configuration overrides with validation
 // Priority: Command line args > config.json > defaults
@@ -1312,6 +1323,8 @@ function shouldBypassCacheForUrl(url, siteConfig) {
 // Cache compiled wildcard regexes to avoid recompilation on every request
 const _wildcardRegexCache = new Map();
 function matchesIgnoreDomain(domain, ignorePatterns) {
+  // Dynamically ignored domains (from URL pattern matches via ignoreDomainsByUrl)
+  if (_dynamicallyIgnoredDomains.has(domain)) return true;
   // Fast path: exact match or suffix match against Set (O(n) for parts, but no regex)
   if (_ignoreDomainsExact.size > 0) {
     if (_ignoreDomainsExact.has(domain)) return true;
@@ -2783,8 +2796,21 @@ function setupFrameHandling(page, forceDebug) {
           bufferedLogWrite(debugLogFile, logEntry);
         }
         const reqUrl = checkedUrl;
-        
+
         const reqDomain = perSiteSubDomains ? fullSubdomain : checkedRootDomain;
+
+        // ignoreDomainsByUrl — if any pattern matches this URL, mark the root domain as ignored for the rest of the scan
+        if (_ignoreDomainsByUrlRegexes.length > 0 && checkedRootDomain && !_dynamicallyIgnoredDomains.has(checkedRootDomain)) {
+          for (let i = 0; i < _ignoreDomainsByUrlRegexes.length; i++) {
+            if (_ignoreDomainsByUrlRegexes[i].test(reqUrl)) {
+              _dynamicallyIgnoredDomains.add(checkedRootDomain);
+              if (forceDebug) {
+                console.log(formatLogMessage('debug', `[ignoreDomainsByUrl] ${checkedRootDomain} ignored — matched pattern: ${_ignoreDomainsByUrlRegexes[i].source}`));
+              }
+              break;
+            }
+          }
+        }
 
         let blockedMatchIndex = -1;
         for (let i = 0; i < allBlockedRegexes.length; i++) {
