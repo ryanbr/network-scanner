@@ -5,7 +5,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 - Scan websites and detect matching third-party or first-party resources
 - Output Adblock-formatted blocking rules
 - Support for multiple filters per site
-- Grouped titles (! <url>) before site matches
+- Grouped titles (! <url>) before site matches, including redirect source and matching regex
 - Ignore unwanted domains (global and per-site)
 - Block unwanted domains during scan (simulate adblock)
 - Support Chrome, Firefox, Safari user agents (desktop or mobile)
@@ -64,6 +64,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--headful`                 | Launch browser with GUI (not headless) |
 | `--keep-open`               | Keep browser and tabs open after scan completes (use with `--headful` for debugging) |
 | `--use-puppeteer-core`      | Use `puppeteer-core` with system Chrome instead of bundled Chromium |
+| `--use-obscura`             | Connect to running Obscura CDP server (`ws://127.0.0.1:9222` or `OBSCURA_WS` env). Skips fingerprint injection — Obscura provides built-in stealth |
 | `--load-extension <path>`   | Load unpacked Chrome extension from directory (can be used multiple times) |
 | `--dns-cache`               | Persist dig/whois results to disk between runs (14hr TTL, `.digcache`/`.whoiscache`) |
 | `--block-ads=<files>`       | Block ads using EasyList format rules (comma-separated: `easylist.txt,easyprivacy.txt`) |
@@ -448,7 +449,7 @@ node nwss.js config-clean2.json --debug             # .nwssconfig + debug overri
 node nwss.js config-other.json --max-concurrent 5   # no match in .nwssconfig, uses CLI flags
 ```
 
-**Supported settings:** `output`, `max_concurrent`, `dns_cache`, `cache_requests`, `dumpurls`, `remove_tempfiles`, `color`, `remove_dupes`, `compress_logs`, `debug`, `silent`, `verbose`, `headful`, `keep_open`, `dry_run`, `titles`, `sub_domains`, `no_interact`, `ghost_cursor`, `plain`, `cdp`, `dnsmasq`, `unbound`, `privoxy`, `pihole`, `eval_on_doc`, `use_puppeteer_core`, `ignore_cache`, `clear_cache`, `block_ads`, `compare`, `localhost`, `append`.
+**Supported settings:** `output`, `max_concurrent`, `dns_cache`, `cache_requests`, `dumpurls`, `remove_tempfiles`, `color`, `remove_dupes`, `compress_logs`, `debug`, `silent`, `verbose`, `headful`, `keep_open`, `dry_run`, `titles`, `sub_domains`, `no_interact`, `ghost_cursor`, `plain`, `cdp`, `dnsmasq`, `unbound`, `privoxy`, `pihole`, `eval_on_doc`, `use_puppeteer_core`, `use_obscura`, `ignore_cache`, `clear_cache`, `block_ads`, `compare`, `localhost`, `append`.
 
 **Priority:** CLI flags > `.nwssconfig` > hardcoded defaults.
 
@@ -461,6 +462,7 @@ These options go at the root level of your config.json:
 | Field                | Values | Default | Description |
 |:---------------------|:-------|:-------:|:------------|
 | `ignoreDomains`      | Array | - | Domains to completely ignore (supports wildcards like `*.ads.com`) |
+| `ignoreDomainsByUrl` | Array | - | Regex patterns; if a request URL matches, the request's root domain is dynamically ignored for the rest of the scan (e.g. `["\\/jwplayer\\/", "\\/build\\/assets\\/"]`) |
 | `blocked`            | Array | - | Global regex patterns to block requests (combined with per-site blocked) |
 | `whois_server_mode`  | String | `"random"` | Default server selection mode for all sites |
 | `ignore_similar`     | Boolean | `true` | Ignore domains similar to already found domains |
