@@ -1789,6 +1789,10 @@ function setupFrameHandling(page, forceDebug) {
    * @returns {Promise<object>} A promise that resolves to an object containing scan results.
    */
   async function processUrl(currentUrl, siteConfig, browserInstance) {
+    // Preserve the original URL (before any redirect) for output display
+    const originalRequestedUrl = currentUrl;
+    // Track regex patterns that produced matches (for title comments in output)
+    const matchedRegexPatterns = new Set();
     // V8 Optimization: Single destructuring to avoid multiple property lookups
     const {
       firstParty,
@@ -2818,7 +2822,8 @@ function setupFrameHandling(page, forceDebug) {
                     } else {
                       addMatchedDomain(reqDomain, resourceType, fullSubdomain);
                     }
-                    
+                    if (matchedRegexPattern) matchedRegexPatterns.add(matchedRegexPattern);
+
                     if (siteConfig.verbose === 1) {
                       const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
                       console.log(formatLogMessage('match', `[${simplifiedCurrentUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
@@ -2981,6 +2986,7 @@ function setupFrameHandling(page, forceDebug) {
              } else {
                addMatchedDomain(reqDomain, resourceType);
              }
+             if (matchedRegexPattern) matchedRegexPatterns.add(matchedRegexPattern);
              if (siteConfig.verbose === 1) {
                const resourceInfo = (adblockRulesMode || siteConfig.adblock_rules) ? ` (${resourceType})` : '';
               console.log(formatLogMessage('match', `[${simplifiedCurrentUrl}] ${reqUrl} matched regex: ${matchedRegexPattern} and resourceType: ${resourceType}${resourceInfo}`));
@@ -4011,12 +4017,14 @@ function setupFrameHandling(page, forceDebug) {
       };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         
-        return { 
-          url: currentUrl, 
-          rules: formattedRules, 
+        return {
+          url: currentUrl,
+          originalUrl: originalRequestedUrl,
+          rules: formattedRules,
           success: true,
           finalUrl: finalUrlAfterRedirect || currentUrl,
-          redirectDomains: redirectDomainsToExclude
+          redirectDomains: redirectDomainsToExclude,
+          matchedRegexes: Array.from(matchedRegexPatterns)
         };
       }
       
@@ -4072,13 +4080,15 @@ function setupFrameHandling(page, forceDebug) {
         };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         if (forceDebug) console.log(formatLogMessage('debug', `Saving ${formattedRules.length} rules despite page load failure`));
-        return { 
-          url: currentUrl, 
-          rules: formattedRules, 
-          success: false, 
+        return {
+          url: currentUrl,
+          originalUrl: originalRequestedUrl,
+          rules: formattedRules,
+          success: false,
           hasMatches: true,
           finalUrl: finalUrlAfterRedirect || currentUrl,
-          redirectDomains: redirectDomainsToExclude
+          redirectDomains: redirectDomainsToExclude,
+          matchedRegexes: Array.from(matchedRegexPatterns)
         };
       }
       
