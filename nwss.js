@@ -2,7 +2,8 @@
 
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
-const usePuppeteerCore = process.argv.includes('--use-puppeteer-core');
+const useObscura = process.argv.includes('--use-obscura');
+const usePuppeteerCore = process.argv.includes('--use-puppeteer-core') || useObscura;
 const puppeteer = usePuppeteerCore ? require('puppeteer-core') : require('puppeteer');
 const fs = require('fs');
 const os = require('os');
@@ -662,6 +663,8 @@ General Options:
   --headful                      Launch browser with GUI (not headless)
   --keep-open                    Keep browser open after scan completes (use with --headful)
   --use-puppeteer-core           Use puppeteer-core with system Chrome instead of bundled Chromium
+  --use-obscura                  Connect to running Obscura CDP server (ws://127.0.0.1:9222 or OBSCURA_WS env)
+                                 Skips fingerprint injection — Obscura provides built-in stealth
   --load-extension <path>        Load unpacked Chrome extension from directory
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --remove-dupes                 Remove duplicate domains from output (only with -o)
@@ -1522,6 +1525,23 @@ function setupFrameHandling(page, forceDebug) {
    * @returns {Promise<import('puppeteer').Browser>} Browser instance
    */
   async function createBrowser(extraArgs = []) {
+    // Obscura mode: connect to a running Obscura CDP server instead of launching Chrome
+    if (useObscura) {
+      const obscuraEndpoint = process.env.OBSCURA_WS || 'ws://127.0.0.1:9222/devtools/browser';
+      if (forceDebug) console.log(formatLogMessage('debug', `Connecting to Obscura at ${obscuraEndpoint}`));
+      try {
+        const browser = await puppeteer.connect({ browserWSEndpoint: obscuraEndpoint });
+        if (!silentMode) console.log(messageColors.success(`Connected to Obscura CDP at ${obscuraEndpoint}`));
+        browser._nwssUserDataDir = null; // No temp dir to clean
+        browser._nwssIsObscura = true;
+        return browser;
+      } catch (err) {
+        console.error(formatLogMessage('error', `Failed to connect to Obscura: ${err.message}`));
+        console.error(formatLogMessage('error', `Start Obscura first: obscura serve --port 9222 --stealth`));
+        process.exit(1);
+      }
+    }
+
     // Create temporary user data directory that we can fully control and clean up
     const tempUserDataDir = path.join(os.tmpdir(), `puppeteer-${Date.now()}-${Math.random().toString(36).substring(7)}`);
     userDataDir = tempUserDataDir; // Store for cleanup tracking (use outer scope variable)
@@ -2337,11 +2357,16 @@ function setupFrameHandling(page, forceDebug) {
       }
 
       // --- Apply all fingerprint spoofing (user agent, Brave, fingerprint protection) ---
+      // Skip when using Obscura — it has built-in stealth that conflicts with our injection
       try {
-        await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
+        if (!useObscura) {
+          await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
+        } else if (forceDebug) {
+          console.log(formatLogMessage('debug', `Skipping fingerprint injection — Obscura provides built-in stealth`));
+        }
         
-        // Client Hints protection for Chrome user agents
-        if (siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
+        // Client Hints protection for Chrome user agents (skipped under Obscura — it sets its own)
+        if (!useObscura && siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
           const userAgentKey = siteConfig.userAgent.toLowerCase();
           let platform = 'Windows';
           let platformVersion = '15.0.0';
@@ -4794,15 +4819,23 @@ function setupFrameHandling(page, forceDebug) {
     if (forceDebug) console.log(formatLogMessage('debug', `Browser connection check failed: ${connErr.message}`));
   }
 
-  const cleanupResult = await handleBrowserExit(browser, {
-    forceDebug,
-    timeout: 10000,
-    exitOnFailure: true,
-    cleanTempFiles: true,
-    comprehensiveCleanup: removeTempFiles,  // Use --remove-tempfiles flag
-    userDataDir: browser._nwssUserDataDir,
-    verbose: !silentMode && removeTempFiles  // Show verbose output only if removing temp files and not silent
-  });
+  // Obscura: just disconnect, don't kill — we don't own the browser process
+  let cleanupResult;
+  if (browser._nwssIsObscura) {
+    try { await browser.disconnect(); } catch {}
+    cleanupResult = { success: true, browserClosed: true, tempFilesCleanedCount: 0, userDataCleaned: false, errors: [] };
+    if (forceDebug) console.log(formatLogMessage('debug', `Disconnected from Obscura (process left running)`));
+  } else {
+    cleanupResult = await handleBrowserExit(browser, {
+      forceDebug,
+      timeout: 10000,
+      exitOnFailure: true,
+      cleanTempFiles: true,
+      comprehensiveCleanup: removeTempFiles,
+      userDataDir: browser._nwssUserDataDir,
+      verbose: !silentMode && removeTempFiles
+    });
+  }
 
   if (forceDebug) {
     console.log(formatLogMessage('debug', `Final cleanup results: ${cleanupResult.success ? 'success' : 'failed'}`));
