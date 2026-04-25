@@ -38,7 +38,7 @@
  "sites": [
     {
     "url": "https://www.anandtech.com/",
-    "filterRegex": ".",
+    "filterRegex": "teststring",
     "resourceTypes": ["script", "xhr", "document"],
     "reload": 1,
     "timeout": 25000,
@@ -50,7 +50,7 @@
   },
   {
     "url": "https://www.tomshardware.com/",
-    "filterRegex": ".",
+    "filterRegex": "anotherstrng",
     "resourceTypes": ["all"],
     "reload": 2,
     "timeout": 25000,
@@ -61,7 +61,7 @@
   },
   {
     "url": ["https://www.tomshardware.com/", "https://www.anandtech.com/"],
-    "filterRegex": ".",
+    "filterRegex": "morestrings",
     "resourceTypes": ["all"],
     "reload": 2,
     "timeout": 25000,
