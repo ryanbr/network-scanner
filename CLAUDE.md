@@ -27,7 +27,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
 
 ## Tech Stack
 
-- **Node.js** >=20.0.0
+- **Node.js** >=22.0.0
 - **puppeteer** >=20.0.0 — Headless browser automation
 - **psl** — Public Suffix List for domain parsing
 - **lru-cache** — LRU cache implementation
