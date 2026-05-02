@@ -50,6 +50,7 @@
   },
   "homepage": "https://github.com/ryanbr/network-scanner",
   "optionalDependencies": {
+    "adblock-rs": "^0.12.3",
     "puppeteer-core": ">=20.0.0"
   },
   "devDependencies": {

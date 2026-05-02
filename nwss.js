@@ -58,7 +58,8 @@ const { clearSiteData } = require('./lib/clear_sitedata');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
-const { parseAdblockRules } = require('./lib/adblock');
+const adblockJs = require('./lib/adblock');
+const adblockRust = require('./lib/adblock-rust');
 // WireGuard VPN
 const { connectForSite: wgConnect, disconnectForSite: wgDisconnect, disconnectAll: wgDisconnectAll, validateVpnConfig, normalizeVpnConfig } = require('./lib/wireguard_vpn');
 // OpenVPN
@@ -594,6 +595,22 @@ if (validateRules || validateRulesFile) {
   }
 }
 
+// Parse --adblock-engine=<js|rust> (default: js). Selects the matcher backend
+// used by --block-ads. The rust engine requires the optional adblock-rs package.
+const adblockEngineIndex = args.findIndex(arg => arg.startsWith('--adblock-engine'));
+let adblockEngineName = 'js';
+if (adblockEngineIndex !== -1) {
+  const engineArg = args[adblockEngineIndex].includes('=')
+    ? args[adblockEngineIndex].split('=')[1]
+    : args[adblockEngineIndex + 1];
+  if (engineArg === 'rust' || engineArg === 'js') {
+    adblockEngineName = engineArg;
+  } else {
+    console.log(`Error: --adblock-engine must be 'js' or 'rust' (got: ${engineArg})`);
+    process.exit(1);
+  }
+}
+
 // Parse --block-ads argument for request-level ad blocking (supports comma-separated lists)
 const blockAdsIndex = args.findIndex(arg => arg.startsWith('--block-ads'));
 if (blockAdsIndex !== -1) {
@@ -614,18 +631,31 @@ if (blockAdsIndex !== -1) {
     }
   }
 
-  // Concatenate multiple lists into a single temp file for the parser
-  let rulesFile = rulesFiles[0];
-  if (rulesFiles.length > 1) {
-    rulesFile = path.join(os.tmpdir(), `nwss-adblock-combined-${Date.now()}.txt`);
-    const combined = rulesFiles.map(f => fs.readFileSync(f, 'utf-8')).join('\n');
-    fs.writeFileSync(rulesFile, combined);
-  }
-
   adblockEnabled = true;
-  adblockMatcher = parseAdblockRules(rulesFile, { enableLogging: forceDebug });
+  const engine = adblockEngineName === 'rust' ? adblockRust : adblockJs;
+  try {
+    if (engine === adblockRust) {
+      // Rust wrapper accepts an array directly — no temp file needed.
+      adblockMatcher = engine.parseAdblockRules(rulesFiles, { enableLogging: forceDebug });
+    } else {
+      // JS engine takes a single path; concat to a temp file when multiple lists.
+      let rulesFile = rulesFiles[0];
+      if (rulesFiles.length > 1) {
+        rulesFile = path.join(os.tmpdir(), `nwss-adblock-combined-${Date.now()}.txt`);
+        const combined = rulesFiles.map(f => fs.readFileSync(f, 'utf-8')).join('\n');
+        fs.writeFileSync(rulesFile, combined);
+      }
+      adblockMatcher = engine.parseAdblockRules(rulesFile, { enableLogging: forceDebug });
+    }
+  } catch (err) {
+    console.log(`Error: Failed to load adblock engine '${adblockEngineName}': ${err.message}`);
+    process.exit(1);
+  }
   const stats = adblockMatcher.getStats();
-  if (!silentMode) console.log(messageColors.success(`Adblock enabled: Loaded ${stats.total} blocking rules from ${rulesFiles.length} list${rulesFiles.length > 1 ? 's' : ''}`));
+  const ruleDesc = stats.total != null
+    ? `${stats.total} blocking rules`
+    : `compiled engine (cached)`;
+  if (!silentMode) console.log(messageColors.success(`Adblock enabled (${adblockEngineName}): Loaded ${ruleDesc} from ${rulesFiles.length} list${rulesFiles.length > 1 ? 's' : ''}`));
 }
 
 if (args.includes('--help') || args.includes('-h')) {
@@ -651,6 +681,9 @@ Output Format Options:
 Request Blocking:
   --block-ads=<file>             Block ads/trackers using EasyList format rules (||domain.com^, /ads/*, etc)
                                  Works at request-level for maximum performance
+                                 Supports comma-separated lists: --block-ads=easylist.txt,easyprivacy.txt
+  --adblock-engine=<js|rust>     Matcher backend for --block-ads (default: js)
+                                 'rust' uses Brave's adblock-rs (faster on large lists; needs: npm i adblock-rs)
 
 Per-config settings file (.nwssconfig):
   Place a .nwssconfig file in the project root to define per-config settings.
