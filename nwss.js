@@ -4543,42 +4543,57 @@ function setupFrameHandling(page, forceDebug) {
       console.log(formatLogMessage('debug', `[CONCURRENCY] Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
     }
     
- // Create tasks with timeout protection — skip domains that repeatedly timed out
+ // Create tasks with timeout protection — skip domains that repeatedly timed out.
+ // Wrapped in an outer try/finally so processedUrlCount is incremented exactly
+ // once per URL no matter which return/throw path is taken — that turns HANG
+ // CHECK's signal from "did the batch finish?" into "did any URL finish?",
+ // which is what 30-second tick granularity actually needs.
  const batchTasks = currentBatch.map(task => originalLimit(async () => {
    try {
-     const taskDomain = new URL(task.url).hostname;
-     if ((domainTimeoutCounts.get(taskDomain) || 0) >= DOMAIN_TIMEOUT_THRESHOLD) {
-       if (!silentMode) console.log(formatLogMessage('info', `Skipping ${task.url} — ${taskDomain} timed out ${DOMAIN_TIMEOUT_THRESHOLD} times`));
-       return { url: task.url, rules: [], success: false, error: 'Domain repeatedly timed out', skipped: true };
+     // Short-circuit queued URLs once any URL in this batch has triggered a
+     // restart. Without this, the 80-URL batch in the user's hang trace
+     // would have to fail one-by-one at 120s each (~28 min total) before
+     // the boundary restart could fire. Now: first hang fires the flag,
+     // remaining queued URLs return immediately, batch completes, restart.
+     if (forceRestartFlag) {
+       return { url: task.url, rules: [], success: false, error: 'Browser restart pending', skipped: true };
      }
-   } catch {}
 
-   // Per-URL timeout so a single hung processUrl can't block the batch
-   // forever (and starve HANG CHECK of progress signals — it can't observe
-   // forceRestartFlag while parked at an await). 120s is well past any
-   // legitimate slow page: Cloudflare adaptive max ~25s, nettools overall
-   // ~65s, navigation 15s. On timeout, flag the browser for restart at the
-   // next batch boundary so abandoned pages get reclaimed, and attach a
-   // swallowing handler to the abandoned promise so the eventual
-   // browser-shutdown rejection doesn't surface as unhandled.
-   const processUrlPromise = processUrl(task.url, task.config, browser);
-   let perUrlTimer;
-   try {
-     return await Promise.race([
-       processUrlPromise,
-       new Promise((_, reject) => {
-         perUrlTimer = setTimeout(() => reject(new Error('Per-URL timeout (120s)')), 120000);
-       })
-     ]);
-   } catch (err) {
-     if (err && err.message === 'Per-URL timeout (120s)') {
-       processUrlPromise.catch(() => {});
-       forceRestartFlag = true;
-       return { url: task.url, rules: [], success: false, error: 'Per-URL timeout (120s)', needsImmediateRestart: true };
+     try {
+       const taskDomain = new URL(task.url).hostname;
+       if ((domainTimeoutCounts.get(taskDomain) || 0) >= DOMAIN_TIMEOUT_THRESHOLD) {
+         if (!silentMode) console.log(formatLogMessage('info', `Skipping ${task.url} — ${taskDomain} timed out ${DOMAIN_TIMEOUT_THRESHOLD} times`));
+         return { url: task.url, rules: [], success: false, error: 'Domain repeatedly timed out', skipped: true };
+       }
+     } catch {}
+
+     // Per-URL timeout so a single hung processUrl can't block the batch
+     // forever. 120s is well past any legitimate slow page: Cloudflare
+     // adaptive max ~25s, nettools overall ~65s, navigation 15s.
+     const processUrlPromise = processUrl(task.url, task.config, browser);
+     let perUrlTimer;
+     try {
+       return await Promise.race([
+         processUrlPromise,
+         new Promise((_, reject) => {
+           perUrlTimer = setTimeout(() => reject(new Error('Per-URL timeout (120s)')), 120000);
+         })
+       ]);
+     } catch (err) {
+       if (err && err.message === 'Per-URL timeout (120s)') {
+         processUrlPromise.catch(() => {});
+         forceRestartFlag = true;
+         return { url: task.url, rules: [], success: false, error: 'Per-URL timeout (120s)', needsImmediateRestart: true };
+       }
+       throw err;
+     } finally {
+       if (perUrlTimer) clearTimeout(perUrlTimer);
      }
-     throw err;
    } finally {
-     if (perUrlTimer) clearTimeout(perUrlTimer);
+     // Always count completion — even on unexpected throw — so HANG CHECK's
+     // per-tick progress signal stays accurate. Replaces the old
+     // `processedUrlCount += batchSize` that ran after the whole batch.
+     processedUrlCount++;
    }
  }));
  
@@ -4681,7 +4696,8 @@ function setupFrameHandling(page, forceDebug) {
       }
     }
     
-    processedUrlCount += batchSize;
+    // processedUrlCount is now incremented per-URL inside the batchTasks
+    // wrapper above; no batch-level += batchSize here.
     urlsSinceLastCleanup += batchSize;
 
     // Force browser restart if any URL had critical errors
