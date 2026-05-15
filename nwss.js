@@ -4307,27 +4307,39 @@ function setupFrameHandling(page, forceDebug) {
  let forceRestartFlag = false; // Flag to trigger restart on next iteration
  
  const hangDetectionInterval = setInterval(() => {
+   // Progress check, counter, and forceRestartFlag MUST run regardless of
+   // debug mode — previously the entire body was gated on forceDebug, which
+   // made hang recovery a debug-only feature even though the restart
+   // machinery exists for production scans. Only the verbose diagnostic
+   // logs stay debug-gated; the "no progress" warning and the
+   // "triggering restart" error are user-visible recovery events.
+   if (processedUrlCount === lastProcessedCount) {
+     hangCheckCount++;
+     if (forceDebug) {
+       console.log(formatLogMessage('warn', `[HANG CHECK] No progress for ${hangCheckCount * 30}s`));
+     }
+     if (hangCheckCount >= 5) {
+       console.log(formatLogMessage('error', `[HANG CHECK] Hung for 2.5 minutes. Triggering emergency browser restart.`));
+       forceRestartFlag = true; // Set flag instead of exiting
+       hangCheckCount = 0; // Reset counter for next cycle
+     }
+   } else {
+     hangCheckCount = 0;
+   }
+   lastProcessedCount = processedUrlCount;
+
+   // Debug-only diagnostic snapshot
    if (forceDebug) {
      const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
      const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
      console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
      console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
-     
-     // Check progress and trigger browser restart if hung
-     if (processedUrlCount === lastProcessedCount) {
-       hangCheckCount++;
-       console.log(formatLogMessage('warn', `[HANG CHECK] No progress for ${hangCheckCount * 30}s`));
-       if (hangCheckCount >= 5) {
-         console.log(formatLogMessage('error', `[HANG CHECK] Hung for 2.5 minutes. Triggering emergency browser restart.`));
-         forceRestartFlag = true; // Set flag instead of exiting
-         hangCheckCount = 0; // Reset counter for next cycle
-       }
-     } else {
-       hangCheckCount = 0;
-     }
-     lastProcessedCount = processedUrlCount;
    }
  }, 30000);
+ // Don't keep the event loop alive solely for the hang-check interval — the
+ // clearInterval calls at the normal-exit and error paths already cover the
+ // cleanup, this is belt-and-suspenders in case a future refactor moves them.
+ hangDetectionInterval.unref();
 
  // Process URLs in batches with exception handling
  let siteGroupIndex = 0;
