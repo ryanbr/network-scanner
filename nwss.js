@@ -4623,9 +4623,20 @@ function setupFrameHandling(page, forceDebug) {
            return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
          }
          const dnsLookup = async () => {
-           const timeoutP = new Promise((_, reject) =>
-             setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs));
-           await Promise.race([dnsPromises.lookup(taskDomain), timeoutP]);
+           // Capture the timer ID so it can be cleared if the lookup wins
+           // the race. Otherwise the timer still fires ~2s later, rejects
+           // a promise nobody's awaiting, and surfaces as a noisy
+           // UnhandledPromiseRejection warning. Matches the pattern used
+           // in cloudflare.js / nettools.js elsewhere in the codebase.
+           let timer;
+           try {
+             const timeoutP = new Promise((_, reject) => {
+               timer = setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs);
+             });
+             await Promise.race([dnsPromises.lookup(taskDomain), timeoutP]);
+           } finally {
+             if (timer) clearTimeout(timer);
+           }
          };
          try {
            try {
