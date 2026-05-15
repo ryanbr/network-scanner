@@ -3439,7 +3439,7 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
         
-        const { finalUrl, redirected, redirectChain, originalUrl, redirectDomains } = navigationResult;
+        const { finalUrl, redirected, redirectChain, originalUrl, redirectDomains, httpStatus, cfRay } = navigationResult;
         
         // Check for same-page reload loops BEFORE redirect processing
         const loadCount = pageLoadHistory.get(currentUrl) || 0;
@@ -3548,8 +3548,12 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
 
-        // Handle all Cloudflare protections using the enhanced module
-        const cloudflareResult = await handleCloudflareProtection(page, currentUrl, siteConfig, forceDebug);
+        // Handle all Cloudflare protections using the enhanced module. Pass
+        // httpStatus and cfRay captured at goto time so the outcome log can
+        // surface them — Puppeteer's response object is only available
+        // immediately after page.goto, so handleCloudflareProtection can't
+        // recover them from `page` alone.
+        const cloudflareResult = await handleCloudflareProtection(page, currentUrl, siteConfig, forceDebug, { httpStatus, cfRay });
 
         if (cloudflareResult.cloudflareErrorPage) cloudflareScanStats.errorPages++;
 
