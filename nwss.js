@@ -4407,8 +4407,14 @@ function setupFrameHandling(page, forceDebug) {
       !healthCheck.reason?.includes('Scheduled cleanup') && 
       (healthCheck.reason?.includes('Critical') || healthCheck.reason?.includes('disconnected'));
     
-    // Restart browser if we've processed enough URLs, health check suggests it, hang detected, and this isn't the last site
-    if ((wouldExceedLimit || shouldRestartFromHealth || forceRestartFlag || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8 && isNotLastBatch) {      
+    // Restart conditions split into hang recovery vs proactive triggers.
+    // Hang recovery (forceRestartFlag set by 2.5-min HANG CHECK or a per-URL
+    // timeout) bypasses the urlsSinceLastCleanup > 8 gate — a confirmed hang
+    // needs immediate restart even if we just cleaned up. Proactive triggers
+    // keep the gate to prevent thrashing.
+    const hangRecoveryRestart = forceRestartFlag;
+    const proactiveRestart = (wouldExceedLimit || shouldRestartFromHealth || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8;
+    if ((hangRecoveryRestart || proactiveRestart) && isNotLastBatch) {
       let restartReason = 'Unknown';
       if (forceRestartFlag) {
         restartReason = 'Emergency restart due to 2.5-minute hang detection';
@@ -4538,7 +4544,7 @@ function setupFrameHandling(page, forceDebug) {
     }
     
  // Create tasks with timeout protection — skip domains that repeatedly timed out
- const batchTasks = currentBatch.map(task => originalLimit(() => {
+ const batchTasks = currentBatch.map(task => originalLimit(async () => {
    try {
      const taskDomain = new URL(task.url).hostname;
      if ((domainTimeoutCounts.get(taskDomain) || 0) >= DOMAIN_TIMEOUT_THRESHOLD) {
@@ -4546,7 +4552,34 @@ function setupFrameHandling(page, forceDebug) {
        return { url: task.url, rules: [], success: false, error: 'Domain repeatedly timed out', skipped: true };
      }
    } catch {}
-   return processUrl(task.url, task.config, browser);
+
+   // Per-URL timeout so a single hung processUrl can't block the batch
+   // forever (and starve HANG CHECK of progress signals — it can't observe
+   // forceRestartFlag while parked at an await). 120s is well past any
+   // legitimate slow page: Cloudflare adaptive max ~25s, nettools overall
+   // ~65s, navigation 15s. On timeout, flag the browser for restart at the
+   // next batch boundary so abandoned pages get reclaimed, and attach a
+   // swallowing handler to the abandoned promise so the eventual
+   // browser-shutdown rejection doesn't surface as unhandled.
+   const processUrlPromise = processUrl(task.url, task.config, browser);
+   let perUrlTimer;
+   try {
+     return await Promise.race([
+       processUrlPromise,
+       new Promise((_, reject) => {
+         perUrlTimer = setTimeout(() => reject(new Error('Per-URL timeout (120s)')), 120000);
+       })
+     ]);
+   } catch (err) {
+     if (err && err.message === 'Per-URL timeout (120s)') {
+       processUrlPromise.catch(() => {});
+       forceRestartFlag = true;
+       return { url: task.url, rules: [], success: false, error: 'Per-URL timeout (120s)', needsImmediateRestart: true };
+     }
+     throw err;
+   } finally {
+     if (perUrlTimer) clearTimeout(perUrlTimer);
+   }
  }));
  
  let batchResults;
