@@ -360,6 +360,12 @@ let adblockEnabled = false;
 let adblockMatcher = null;
 let adblockStats = { blocked: 0, allowed: 0 };
 
+// Cloudflare scan-wide stats. errorPages counts URLs where the returned page
+// was a Cloudflare-served 5xx origin error (522/523/etc.) — no bypass
+// possible, useful signal for diagnosing dead-origin scans. Named distinct
+// from the local cloudflareStats = getCacheStats() in the debug stats block.
+let cloudflareScanStats = { errorPages: 0 };
+
 // Validate --adblock-rules usage - ignore if used incorrectly instead of erroring
 if (adblockRulesMode) {
   if (!outputFile) {
@@ -3545,6 +3551,8 @@ function setupFrameHandling(page, forceDebug) {
         // Handle all Cloudflare protections using the enhanced module
         const cloudflareResult = await handleCloudflareProtection(page, currentUrl, siteConfig, forceDebug);
 
+        if (cloudflareResult.cloudflareErrorPage) cloudflareScanStats.errorPages++;
+
         // Check if Cloudflare handling exceeded max retries and should terminate processing
         if (!cloudflareResult.overallSuccess && 
             (cloudflareResult.phishingWarning?.maxRetriesExceeded || 
@@ -4880,6 +4888,9 @@ function setupFrameHandling(page, forceDebug) {
        console.log(formatLogMessage('debug', '=== Cloudflare Cache Statistics ==='));
        console.log(formatLogMessage('debug', `Cache hit rate: ${cloudflareStats.hitRate}, Total hits: ${cloudflareStats.hits}, Misses: ${cloudflareStats.misses}`));
        console.log(formatLogMessage('debug', `Cached detections: ${cloudflareStats.size}`));
+     }
+     if (cloudflareScanStats.errorPages > 0) {
+       console.log(formatLogMessage('debug', `Cloudflare 5xx origin-error pages: ${cloudflareScanStats.errorPages} (no bypass possible — origin unreachable)`));
      }
      // Log smart cache statistics (if cache is enabled)
      // Adblock statistics
