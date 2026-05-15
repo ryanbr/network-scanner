@@ -9,6 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const psl = require('psl');
 const path = require('path');
+const dnsPromises = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./lib/searchstring');
@@ -325,6 +326,20 @@ const ignoreCache = args.includes('--ignore-cache');
 const cacheRequests = args.includes('--cache-requests');
 const dnsCacheMode = args.includes('--dns-cache');
 if (dnsCacheMode) enableDiskCache();
+
+// DNS pre-check before page.goto() — default-on, --no-dns-precheck disables.
+// Filters NXDOMAIN / unresolvable hostnames in <100ms before paying the
+// ~5-15s Puppeteer + Cloudflare detection round-trip on each.
+const dnsPrecheckEnabled = !args.includes('--no-dns-precheck');
+const dnsPrecheckTimeoutMs = 2000;
+
+// Per-scan cache of negative DNS lookups. OS resolvers don't always cache
+// NXDOMAIN responses, and a scan can hit the same dead hostname many times
+// (different URL paths on the same site). Positive results are left to the
+// OS cache; failure-cache avoids repeated lookup latency for known-dead hosts.
+const dnsNegativeCache = new Map(); // hostname -> { error, timestamp }
+const DNS_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+let dnsPrecheckSkips = 0;
 
 let validateRulesFile = null;
 const validateRulesIndex = args.findIndex(arg => arg === '--validate-rules');
@@ -659,6 +674,9 @@ General Options:
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
   --dns-cache                    Persist dig/whois results to disk between runs (3hr/4hr TTL)
+  --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
+                                 By default, URLs whose hostname doesn't resolve are skipped
+                                 immediately (saves ~5-15s of Puppeteer time per dead host).
   --validate-config              Validate config.json file and exit
   --validate-rules [file]        Validate rule file format (uses --output/--compare files if no file specified)
   --clean-rules [file]           Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified)
@@ -4580,6 +4598,31 @@ function setupFrameHandling(page, forceDebug) {
          if (!silentMode) console.log(formatLogMessage('info', `Skipping ${task.url} — ${taskDomain} timed out ${DOMAIN_TIMEOUT_THRESHOLD} times`));
          return { url: task.url, rules: [], success: false, error: 'Domain repeatedly timed out', skipped: true };
        }
+
+       // DNS pre-check — fails fast on NXDOMAIN/unresolvable hosts before
+       // we pay ~5-15s for Puppeteer navigation + Cloudflare detection.
+       // Skips IP literals (dns.lookup handles those but the lookup is
+       // pointless). Respects an in-memory negative cache so a dead host
+       // hit by many URL paths only costs one DNS round-trip per TTL window.
+       if (dnsPrecheckEnabled && taskDomain && !/^[\d.:]+$|^\[/.test(taskDomain)) {
+         const cached = dnsNegativeCache.get(taskDomain);
+         if (cached && Date.now() - cached.timestamp < DNS_NEGATIVE_CACHE_TTL_MS) {
+           dnsPrecheckSkips++;
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check (cached): ${taskDomain} — ${cached.error}`));
+           return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
+         }
+         try {
+           const timeoutP = new Promise((_, reject) =>
+             setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs));
+           await Promise.race([dnsPromises.lookup(taskDomain), timeoutP]);
+         } catch (dnsErr) {
+           const errCode = dnsErr.code || dnsErr.message || 'DNS lookup failed';
+           dnsNegativeCache.set(taskDomain, { error: errCode, timestamp: Date.now() });
+           dnsPrecheckSkips++;
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
+           return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
+         }
+       }
      } catch {}
 
      // Per-URL timeout so a single hung processUrl can't block the batch
@@ -4895,6 +4938,9 @@ function setupFrameHandling(page, forceDebug) {
      }
      if (cloudflareScanStats.errorPages > 0) {
        console.log(formatLogMessage('debug', `Cloudflare 5xx origin-error pages: ${cloudflareScanStats.errorPages} (no bypass possible — origin unreachable)`));
+     }
+     if (dnsPrecheckEnabled && dnsPrecheckSkips > 0) {
+       console.log(formatLogMessage('debug', `DNS pre-check skipped: ${dnsPrecheckSkips} URL(s) via ${dnsNegativeCache.size} unresolvable host(s)`));
      }
      // Log smart cache statistics (if cache is enabled)
      // Adblock statistics
