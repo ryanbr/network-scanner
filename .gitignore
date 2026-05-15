@@ -5,3 +5,7 @@ node_modules/
 .digcache
 .whoiscache
 .nwssconfig
+
+# Local scan-output artifacts (one-off test runs)
+eztvoutput
+eztvoutput-*
