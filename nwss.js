@@ -337,9 +337,20 @@ const dnsPrecheckTimeoutMs = 2000;
 // NXDOMAIN responses, and a scan can hit the same dead hostname many times
 // (different URL paths on the same site). Positive results are left to the
 // OS cache; failure-cache avoids repeated lookup latency for known-dead hosts.
+// FIFO eviction at DNS_NEGATIVE_CACHE_MAX so pathological scans (thousands
+// of unique dead hosts) can't grow the cache unboundedly. Same pattern as
+// the rest of the codebase's in-memory caches.
 const dnsNegativeCache = new Map(); // hostname -> { error, timestamp }
 const DNS_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+const DNS_NEGATIVE_CACHE_MAX = 1000;
 let dnsPrecheckSkips = 0;
+
+function dnsNegativeCacheSet(hostname, error) {
+  if (dnsNegativeCache.size >= DNS_NEGATIVE_CACHE_MAX) {
+    dnsNegativeCache.delete(dnsNegativeCache.keys().next().value);
+  }
+  dnsNegativeCache.set(hostname, { error, timestamp: Date.now() });
+}
 
 let validateRulesFile = null;
 const validateRulesIndex = args.findIndex(arg => arg === '--validate-rules');
@@ -4611,13 +4622,29 @@ function setupFrameHandling(page, forceDebug) {
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check (cached): ${taskDomain} — ${cached.error}`));
            return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
          }
-         try {
+         const dnsLookup = async () => {
            const timeoutP = new Promise((_, reject) =>
              setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs));
            await Promise.race([dnsPromises.lookup(taskDomain), timeoutP]);
+         };
+         try {
+           try {
+             await dnsLookup();
+           } catch (firstErr) {
+             // Retry once on EAI_AGAIN — getaddrinfo's "temporarily
+             // unavailable / try again later" — so a transient resolver
+             // hiccup doesn't poison the negative cache for 5 minutes.
+             // Adopted from RotatingDomainsChecker's same heuristic.
+             if (firstErr && firstErr.code === 'EAI_AGAIN') {
+               if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check EAI_AGAIN for ${taskDomain}, retrying once`));
+               await dnsLookup();
+             } else {
+               throw firstErr;
+             }
+           }
          } catch (dnsErr) {
            const errCode = dnsErr.code || dnsErr.message || 'DNS lookup failed';
-           dnsNegativeCache.set(taskDomain, { error: errCode, timestamp: Date.now() });
+           dnsNegativeCacheSet(taskDomain, errCode);
            dnsPrecheckSkips++;
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
            return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
