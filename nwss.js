@@ -478,78 +478,10 @@ if (testValidation) {
   }
 }
 
-if (validateConfig) {
-  console.log(`\n${messageColors.processing('Validating configuration file...')}`);
-  try {
-    const validation = validateFullConfig(config, { forceDebug, silentMode });
-    
-    // Validate referrer_headers format
-    for (const site of sites) {
-       if (site.referrer_headers && typeof site.referrer_headers === 'object' && !Array.isArray(site.referrer_headers)) {
-         const validation = validateReferrerConfig(site.referrer_headers);
-         if (!validation.isValid) {
-           console.warn(`⚠ Invalid referrer_headers configuration: ${validation.errors.join(', ')}`);
-         }
-         if (validation.warnings.length > 0) {
-           console.warn(`⚠ Referrer warnings: ${validation.warnings.join(', ')}`);
-         }
-       }
-       // Validate referrer_disable format
-       if (site.referrer_disable) {
-         const disableValidation = validateReferrerDisable(site.referrer_disable);
-         if (!disableValidation.isValid) {
-           console.warn(`⚠ Invalid referrer_disable configuration: ${disableValidation.errors.join(', ')}`);
-         }
-         if (disableValidation.warnings.length > 0) {
-           console.warn(`⚠ Referrer disable warnings: ${disableValidation.warnings.join(', ')}`);
-         }
-       }
-    }
-
-    // Validate VPN configurations
-    for (const site of sites) {
-      if (site.vpn) {
-        const vpnNorm = normalizeVpnConfig(site.vpn);
-        const vpnValidation = validateVpnConfig(vpnNorm);
-        if (!vpnValidation.isValid) {
-          console.warn(`⚠ Invalid vpn configuration for ${site.url}: ${vpnValidation.errors.join(', ')}`);
-        }
-        if (vpnValidation.warnings.length > 0) {
-          vpnValidation.warnings.forEach(w => console.warn(`⚠ VPN warning for ${site.url}: ${w}`));
-        }
-      }
-      if (site.openvpn) {
-        const ovpnNorm = normalizeOvpnConfig(site.openvpn);
-        const ovpnValidation = validateOvpnConfig(ovpnNorm);
-        if (!ovpnValidation.isValid) {
-          console.warn(`⚠ Invalid openvpn configuration for ${site.url}: ${ovpnValidation.errors.join(', ')}`);
-        }
-        if (ovpnValidation.warnings.length > 0) {
-          ovpnValidation.warnings.forEach(w => console.warn(`⚠ OpenVPN warning for ${site.url}: ${w}`));
-        }
-      }
-      if (site.vpn && site.openvpn) {
-        console.warn(`⚠ ${site.url} has both vpn and openvpn configured — only one will be used (vpn takes precedence)`);
-      }
-    }
-
-    if (validation.isValid) {
-      console.log(`${messageColors.success('✅ Configuration is valid!')}`);
-      console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
-      if (validation.summary.sitesWithWarnings > 0) {
-        console.log(`${messageColors.warn('⚠ Warnings:')} ${validation.summary.sitesWithWarnings} sites have warnings`);
-      }
-      process.exit(0);
-    } else {
-      console.log(`${messageColors.error('❌ Configuration validation failed!')}`);
-      console.log(`${messageColors.error('Errors:')} ${validation.globalErrors.length} global, ${validation.summary.sitesWithErrors} site-specific`);
-      process.exit(1);
-    }
-  } catch (validationErr) {
-    console.error(`❌ Validation failed: ${validationErr.message}`);
-    process.exit(1);
-  }
-}
+// Note: --validate-config is handled further down, AFTER the config file is
+// loaded and `config`/`sites` are populated. Running it here would fail with
+// "Cannot access 'config' before initialization" since those are declared
+// later in the module.
 
 if (validateRules || validateRulesFile) {
   const filesToValidate = validateRulesFile ? [validateRulesFile] : [outputFile, compareFile].filter(Boolean);
@@ -909,9 +841,85 @@ const {
   disable_ad_tagging = true,
   max_concurrent_sites = 6,
   resource_cleanup_interval = 80,
-  comments: globalComments, 
-  ...otherGlobalConfig 
+  comments: globalComments,
+  ...otherGlobalConfig
 } = config;
+
+// --validate-config runs here, after `config` and `sites` are populated.
+// Previously this block lived above the config load and triggered a TDZ
+// "Cannot access 'config' before initialization" error.
+if (validateConfig) {
+  console.log(`\n${messageColors.processing('Validating configuration file...')}`);
+  try {
+    const validation = validateFullConfig(config, { forceDebug, silentMode });
+
+    // Validate referrer_headers format
+    for (const site of sites) {
+       if (site.referrer_headers && typeof site.referrer_headers === 'object' && !Array.isArray(site.referrer_headers)) {
+         const refValidation = validateReferrerConfig(site.referrer_headers);
+         if (!refValidation.isValid) {
+           console.warn(`⚠ Invalid referrer_headers configuration: ${refValidation.errors.join(', ')}`);
+         }
+         if (refValidation.warnings.length > 0) {
+           console.warn(`⚠ Referrer warnings: ${refValidation.warnings.join(', ')}`);
+         }
+       }
+       // Validate referrer_disable format
+       if (site.referrer_disable) {
+         const disableValidation = validateReferrerDisable(site.referrer_disable);
+         if (!disableValidation.isValid) {
+           console.warn(`⚠ Invalid referrer_disable configuration: ${disableValidation.errors.join(', ')}`);
+         }
+         if (disableValidation.warnings.length > 0) {
+           console.warn(`⚠ Referrer disable warnings: ${disableValidation.warnings.join(', ')}`);
+         }
+       }
+    }
+
+    // Validate VPN configurations
+    for (const site of sites) {
+      if (site.vpn) {
+        const vpnNorm = normalizeVpnConfig(site.vpn);
+        const vpnValidation = validateVpnConfig(vpnNorm);
+        if (!vpnValidation.isValid) {
+          console.warn(`⚠ Invalid vpn configuration for ${site.url}: ${vpnValidation.errors.join(', ')}`);
+        }
+        if (vpnValidation.warnings.length > 0) {
+          vpnValidation.warnings.forEach(w => console.warn(`⚠ VPN warning for ${site.url}: ${w}`));
+        }
+      }
+      if (site.openvpn) {
+        const ovpnNorm = normalizeOvpnConfig(site.openvpn);
+        const ovpnValidation = validateOvpnConfig(ovpnNorm);
+        if (!ovpnValidation.isValid) {
+          console.warn(`⚠ Invalid openvpn configuration for ${site.url}: ${ovpnValidation.errors.join(', ')}`);
+        }
+        if (ovpnValidation.warnings.length > 0) {
+          ovpnValidation.warnings.forEach(w => console.warn(`⚠ OpenVPN warning for ${site.url}: ${w}`));
+        }
+      }
+      if (site.vpn && site.openvpn) {
+        console.warn(`⚠ ${site.url} has both vpn and openvpn configured — only one will be used (vpn takes precedence)`);
+      }
+    }
+
+    if (validation.isValid) {
+      console.log(`${messageColors.success('✅ Configuration is valid!')}`);
+      console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
+      if (validation.summary.sitesWithWarnings > 0) {
+        console.log(`${messageColors.warn('⚠ Warnings:')} ${validation.summary.sitesWithWarnings} sites have warnings`);
+      }
+      process.exit(0);
+    } else {
+      console.log(`${messageColors.error('❌ Configuration validation failed!')}`);
+      console.log(`${messageColors.error('Errors:')} ${validation.globalErrors.length} global, ${validation.summary.sitesWithErrors} site-specific`);
+      process.exit(1);
+    }
+  } catch (validationErr) {
+    console.error(`❌ Validation failed: ${validationErr.message}`);
+    process.exit(1);
+  }
+}
 
 // Pre-compile global blocked regexes ONCE (used in every processUrl call)
 const globalBlockedRegexes = Array.isArray(globalBlocked)
