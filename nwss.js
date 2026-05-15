@@ -4993,8 +4993,17 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
   
+  // Run the same cleanup the SIGINT/SIGTERM emergency handler does, so normal
+  // scan completion isn't left depending on process.exit(0) to override
+  // lingering setInterval handles (the cloudflare detection cache schedules
+  // one that's otherwise only stopped on signal-driven shutdown).
+  try { cleanupCloudflareCache(); } catch (_) {}
+  try { wgDisconnectAll(forceDebug); } catch (_) {}
+  try { ovpnDisconnectAll(forceDebug); } catch (_) {}
+  try { purgeStaleTrackers(); } catch (_) {}
+
   // Clean process termination
   if (forceDebug) console.log(formatLogMessage('debug', `About to exit process...`));
   process.exit(0);
-  
+
 })();
