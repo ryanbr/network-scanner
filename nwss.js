@@ -4823,6 +4823,31 @@ function setupFrameHandling(page, forceDebug) {
        console.log(formatLogMessage('debug', '=== Adblock Statistics ==='));
        const blockRate = ((adblockStats.blocked / (adblockStats.blocked + adblockStats.allowed)) * 100).toFixed(1);
        console.log(formatLogMessage('debug', `Blocked: ${adblockStats.blocked} requests (${blockRate}% block rate), Allowed: ${adblockStats.allowed}`));
+
+       // Engine-specific stats from the matcher itself. Both engines expose
+       // getStats() but with slightly different cache shapes — JS engine
+       // tracks urlCacheSize + resultCacheSize separately, rust wrapper
+       // tracks a single size. Handle both.
+       if (adblockMatcher && typeof adblockMatcher.getStats === 'function') {
+         try {
+           const es = adblockMatcher.getStats();
+           const engine = es.engine || 'js';
+           console.log(formatLogMessage('debug', `Engine: ${engine}${es.fromDiskCache ? ' (loaded from disk cache)' : ''}`));
+           if (es.cache && (es.cache.hits != null || es.cache.misses != null)) {
+             // rust wrapper: single `size`; JS engine: split into urlCacheSize + resultCacheSize
+             const sizeDesc = es.cache.size != null
+               ? `${es.cache.size}/${es.cache.maxSize}`
+               : `url ${es.cache.urlCacheSize}, result ${es.cache.resultCacheSize}, cap ${es.cache.maxSize}`;
+             console.log(formatLogMessage('debug', `Matcher cache: ${es.cache.hits} hits / ${es.cache.misses} misses (${es.cache.hitRate}), ${sizeDesc}`));
+           }
+           if (es.exceptions != null && es.exceptions > 0) {
+             console.log(formatLogMessage('debug', `Whitelist exceptions: ${es.exceptions}`));
+           }
+           if (es.errors != null && es.errors > 0) {
+             console.log(formatLogMessage('debug', `Engine errors: ${es.errors}`));
+           }
+         } catch (_) { /* getStats shape mismatch — don't crash the exit path */ }
+       }
      }
     if (smartCache) {
     const cacheStats = smartCache.getStats();  
