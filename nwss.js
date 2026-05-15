@@ -3576,7 +3576,10 @@ function setupFrameHandling(page, forceDebug) {
             console.warn(`   - ${error}`);
           });
           // Continue with scan despite Cloudflare issues
-        } else if (cloudflareResult.verificationChallenge?.success && forceDebug) {
+        } else if (cloudflareResult.verificationChallenge?.attempted && cloudflareResult.verificationChallenge?.success && forceDebug) {
+          // Require attempted === true so we don't log "Challenge solved using:
+          // undefined" for pages that had no challenge to solve (success: true
+          // is the natural state for that case).
           console.log(formatLogMessage('debug', `[cloudflare] Challenge solved using: ${cloudflareResult.verificationChallenge.method}`));
         }
 
