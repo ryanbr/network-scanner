@@ -51,7 +51,7 @@ const { isGhostCursorAvailable, createGhostCursor, ghostMove, ghostClick, ghostR
 const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
-const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy } = require('./lib/proxy');
+const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy, prepareSocksRelays, closeAllSocksRelays } = require('./lib/proxy');
 // Dry run functionality
 const { initializeDryRunCollections, addDryRunMatch, addDryRunNetTools, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
 // Enhanced site data clearing functionality
@@ -1869,6 +1869,7 @@ function setupFrameHandling(page, forceDebug) {
     ovpnDisconnectAll(forceDebug);
     cleanupCloudflareCache();
     purgeStaleTrackers();
+    try { await closeAllSocksRelays(forceDebug); } catch (_) {}
   }
  
   let siteCounter = 0;
@@ -4361,6 +4362,19 @@ function setupFrameHandling(page, forceDebug) {
   // Sort tasks so proxy groups are contiguous — direct connections first, then each proxy
   allTasks.sort((a, b) => proxyKeyFor(a.config).localeCompare(proxyKeyFor(b.config)));
 
+  // Pre-start local no-auth SOCKS5 relays for any authenticated socks5://
+  // upstreams. Done once here (the only async step) so getProxyArgs stays a
+  // sync lookup in the per-batch browser-launch path. Chromium can't auth
+  // SOCKS5; the relay does the upstream auth transparently.
+  try {
+    const relayCount = await prepareSocksRelays(sites, forceDebug);
+    if (relayCount > 0 && !silentMode) {
+      console.log(messageColors.processing(`Started ${relayCount} SOCKS5 auth relay(s)`));
+    }
+  } catch (relayErr) {
+    console.warn(formatLogMessage('proxy', `SOCKS5 relay setup failed: ${relayErr.message}`));
+  }
+
   let results = [];
   let processedUrlCount = 0;
   let urlsSinceLastCleanup = 0;
@@ -5237,6 +5251,7 @@ function setupFrameHandling(page, forceDebug) {
   try { wgDisconnectAll(forceDebug); } catch (_) {}
   try { ovpnDisconnectAll(forceDebug); } catch (_) {}
   try { purgeStaleTrackers(); } catch (_) {}
+  try { await closeAllSocksRelays(forceDebug); } catch (_) {}
 
   // Clean process termination
   if (forceDebug) console.log(formatLogMessage('debug', `About to exit process...`));
