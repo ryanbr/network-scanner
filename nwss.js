@@ -267,6 +267,13 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
 }
 
 const headfulMode = args.includes('--headful');
+// Sites (esp. video/streaming) call element.requestFullscreen() on load or
+// click. In --headful that hijacks the real Chrome window into true
+// fullscreen, forcing a manual ESC. Neutralize the Fullscreen API by
+// default so it can't. Harmless in headless (no screen — the API is
+// already inert there), so default-on keeps headful consistent with the
+// primary headless path. --allow-fullscreen restores native behavior.
+const allowFullscreen = args.includes('--allow-fullscreen');
 const SOURCES_FOLDER = 'sources';
 
 let outputFile = null;
@@ -669,6 +676,8 @@ General Options:
   --custom-json <file>           Use a custom config JSON file instead of config.json
   --headful                      Launch browser with GUI (not headless)
   --keep-open                    Keep browser open after scan completes (use with --headful)
+  --allow-fullscreen             Allow sites to use the Fullscreen API. By default it is
+                                 neutralized so sites can't hijack the window in --headful
   --use-puppeteer-core           Use puppeteer-core with system Chrome instead of bundled Chromium
   --use-obscura                  Connect to running Obscura CDP server (ws://127.0.0.1:9222 or OBSCURA_WS env)
                                  Skips fingerprint injection — Obscura provides built-in stealth
@@ -2466,6 +2475,29 @@ function setupFrameHandling(page, forceDebug) {
           await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
         } else if (forceDebug) {
           console.log(formatLogMessage('debug', `Skipping fingerprint injection — Obscura provides built-in stealth`));
+        }
+
+        // Neutralize the Fullscreen API before any page script runs so a
+        // site can't force the real browser window fullscreen in --headful
+        // (or trip an anti-bot check that reads document.fullscreenElement).
+        // requestFullscreen is stubbed to a resolved no-op — which is also
+        // how browsers already behave when it's called without a user
+        // gesture, so this looks normal, not automated. fullscreenElement
+        // stays null naturally since we never enter fullscreen.
+        if (!allowFullscreen) {
+          try {
+            await page.evaluateOnNewDocument(() => {
+              const noop = function () { return Promise.resolve(); };
+              const legacyNoop = function () {};
+              try { Element.prototype.requestFullscreen = noop; } catch (_) {}
+              try { Element.prototype.webkitRequestFullscreen = legacyNoop; } catch (_) {}
+              try { Element.prototype.webkitRequestFullScreen = legacyNoop; } catch (_) {}
+              try { Element.prototype.mozRequestFullScreen = legacyNoop; } catch (_) {}
+              try { Element.prototype.msRequestFullscreen = legacyNoop; } catch (_) {}
+            });
+          } catch (fsErr) {
+            if (forceDebug) console.log(formatLogMessage('debug', `Fullscreen neutralization injection failed: ${fsErr.message}`));
+          }
         }
         
         // Client Hints protection for Chrome user agents (skipped under Obscura — it sets its own)
