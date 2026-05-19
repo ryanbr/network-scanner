@@ -4612,9 +4612,15 @@ function setupFrameHandling(page, forceDebug) {
 
        // DNS pre-check — fails fast on NXDOMAIN/unresolvable hosts before
        // we pay ~5-15s for Puppeteer navigation + Cloudflare detection.
-       // Skips IP literals (dns.lookup handles those but the lookup is
-       // pointless). Respects an in-memory negative cache so a dead host
-       // hit by many URL paths only costs one DNS round-trip per TTL window.
+       // Skips IP literals. Respects an in-memory negative cache so a dead
+       // host hit by many URL paths only costs one DNS round-trip per TTL.
+       //
+       // Uses dns.resolve* (c-ares, async network I/O) NOT dns.lookup
+       // (getaddrinfo, libuv threadpool). Under scan concurrency Puppeteer
+       // saturates the default 4-slot threadpool with filesystem I/O, so
+       // dns.lookup calls sit queued and blow the timeout while never
+       // actually starting — wrongly skipping live domains. c-ares isn't
+       // threadpool-bound so it's immune to that contention.
        if (dnsPrecheckEnabled && taskDomain && !/^[\d.:]+$|^\[/.test(taskDomain)) {
          const cached = dnsNegativeCache.get(taskDomain);
          if (cached && Date.now() - cached.timestamp < DNS_NEGATIVE_CACHE_TTL_MS) {
@@ -4622,39 +4628,41 @@ function setupFrameHandling(page, forceDebug) {
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check (cached): ${taskDomain} — ${cached.error}`));
            return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
          }
-         const dnsLookup = async () => {
-           // Capture the timer ID so it can be cleared if the lookup wins
-           // the race. Otherwise the timer still fires ~2s later, rejects
-           // a promise nobody's awaiting, and surfaces as a noisy
-           // UnhandledPromiseRejection warning. Matches the pattern used
-           // in cloudflare.js / nettools.js elsewhere in the codebase.
+         const dnsResolve = async () => {
+           // resolve4 first; on no-IPv4 (ENODATA / ENOTFOUND) fall back to
+           // resolve6 so IPv6-only hosts aren't wrongly skipped. Only a
+           // failure of BOTH means the host is genuinely unresolvable.
+           // 2s timeout kept as a real safety net — with c-ares off the
+           // threadpool it should now rarely fire.
            let timer;
            try {
              const timeoutP = new Promise((_, reject) => {
                timer = setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs);
              });
-             await Promise.race([dnsPromises.lookup(taskDomain), timeoutP]);
+             const resolveChain = dnsPromises.resolve4(taskDomain)
+               .catch(() => dnsPromises.resolve6(taskDomain));
+             await Promise.race([resolveChain, timeoutP]);
            } finally {
              if (timer) clearTimeout(timer);
            }
          };
+         // c-ares transient codes — retry once so a momentary resolver
+         // hiccup doesn't poison the negative cache for 5 minutes.
+         const TRANSIENT = new Set(['ETIMEOUT', 'ESERVFAIL', 'EREFUSED', 'ECONNREFUSED']);
          try {
            try {
-             await dnsLookup();
+             await dnsResolve();
            } catch (firstErr) {
-             // Retry once on EAI_AGAIN — getaddrinfo's "temporarily
-             // unavailable / try again later" — so a transient resolver
-             // hiccup doesn't poison the negative cache for 5 minutes.
-             // Adopted from RotatingDomainsChecker's same heuristic.
-             if (firstErr && firstErr.code === 'EAI_AGAIN') {
-               if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check EAI_AGAIN for ${taskDomain}, retrying once`));
-               await dnsLookup();
+             const code = firstErr && firstErr.code;
+             if (TRANSIENT.has(code) || (firstErr && firstErr.message === 'DNS timeout')) {
+               if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check transient (${code || 'timeout'}) for ${taskDomain}, retrying once`));
+               await dnsResolve();
              } else {
                throw firstErr;
              }
            }
          } catch (dnsErr) {
-           const errCode = dnsErr.code || dnsErr.message || 'DNS lookup failed';
+           const errCode = dnsErr.code || dnsErr.message || 'DNS resolve failed';
            dnsNegativeCacheSet(taskDomain, errCode);
            dnsPrecheckSkips++;
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
