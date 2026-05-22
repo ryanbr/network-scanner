@@ -3877,8 +3877,7 @@ function setupFrameHandling(page, forceDebug) {
                     await performPageInteraction(page, currentUrl, {
                       ...interactionConfig,
                       mouseMovements: 0,
-                      includeElementClicks: false,
-                      includeTyping: false
+                      includeElementClicks: false
                     }, forceDebug);
                   }
                 })(),
