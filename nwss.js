@@ -2101,7 +2101,7 @@ function setupFrameHandling(page, forceDebug) {
       // Aggressive timeouts prevent hanging in Puppeteer 23.x while maintaining speed
       
       page.on('console', (msg) => {
-        if (forceDebug && msg.type() === 'error') console.log(`[debug] Console error: ${msg.text()}`);
+        if (forceDebug && msg.type() === 'error') console.log(formatLogMessage('debug', `Console error: ${msg.text()}`));
       });
       
       // Add page crash handler
