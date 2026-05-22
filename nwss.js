@@ -3297,6 +3297,19 @@ function setupFrameHandling(page, forceDebug) {
           return;
         }
 
+        // Early ignoreDomains gate — skip regex + dig/whois entirely for domains
+        // in the ignoreDomains list (or dynamically-ignored ones populated by
+        // ignoreDomainsByUrl above). Mirrors the popup handler's early gate so
+        // the main path doesn't waste a dig/whois lookup on domains that
+        // post-processing/output filters will strip anyway.
+        if (matchesIgnoreDomain(reqDomain, ignoreDomains)) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `Skipping ignoreDomains match: ${reqDomain}`));
+          }
+          request.continue();
+          return;
+        }
+
         // === ENHANCED REGEX MATCHING WITH AND/OR LOGIC ===
         let regexMatched = false;
         let matchedRegexPattern = null;
