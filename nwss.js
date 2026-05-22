@@ -5034,7 +5034,7 @@ function setupFrameHandling(page, forceDebug) {
     if (requestCacheStats.enabled && requestCacheStats.size > 0) {
       const clearedCount = smartCache.clearRequestCache();
       if (!silentMode && clearedCount > 0) {
-        console.log(`\n🗑️  Cleared request cache: ${clearedCount} entries after JSON processing`);
+        console.log(`\n${messageColors.cleanup(`🗑️  Cleared request cache: ${clearedCount} entries after JSON processing`)}`);
       }
       if (forceDebug) {
         console.log(formatLogMessage('debug', 
