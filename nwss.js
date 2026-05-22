@@ -42,7 +42,7 @@ const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeo
 // Post-processing cleanup
 const { processResults } = require('./lib/post-processing');
 // Colorize various text when used
-const { colorize, colors, messageColors, tags, formatLogMessage } = require('./lib/colorize');
+const { messageColors, formatLogMessage } = require('./lib/colorize');
 // Enhanced mouse interaction and page simulation
 const { performPageInteraction, createInteractionConfig, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
@@ -158,7 +158,10 @@ function detectPuppeteerVersion() {
 // Enhanced redirect handling
 const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/redirect');
 // Ensure web browser is working correctly
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, untrackPage, cleanupPageBeforeReload, purgeStaleTrackers } = require('./lib/browserhealth');
+// purgeStaleTrackers removed from import: browserhealth's pageCreationTracker
+// and pageUsageTracker are now WeakMaps, so GC reclaims dead-page entries
+// automatically — manual purging is no longer needed.
+const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, untrackPage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
 const VERSION = '2.0.33'; // Script version
@@ -1871,7 +1874,6 @@ function setupFrameHandling(page, forceDebug) {
     wgDisconnectAll(forceDebug);
     ovpnDisconnectAll(forceDebug);
     cleanupCloudflareCache();
-    purgeStaleTrackers();
     try { await closeAllSocksRelays(forceDebug); } catch (_) {}
   }
  
@@ -4597,7 +4599,6 @@ function setupFrameHandling(page, forceDebug) {
       
       // Reset cleanup counter and add delay
       urlsSinceLastCleanup = 0;
-      purgeStaleTrackers();
       await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
 
@@ -4648,7 +4649,6 @@ function setupFrameHandling(page, forceDebug) {
       browser = await createBrowser(proxyArgs);
       currentProxyKey = batchProxyKey;
       urlsSinceLastCleanup = 0;
-      purgeStaleTrackers();
       await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
     
@@ -4810,7 +4810,6 @@ function setupFrameHandling(page, forceDebug) {
        const timeoutProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
        browser = await createBrowser(timeoutProxyArgs);
        urlsSinceLastCleanup = 0;
-       purgeStaleTrackers();
      } catch (restartErr) {
        throw restartErr;
      }
@@ -4947,7 +4946,6 @@ function setupFrameHandling(page, forceDebug) {
         // hang-fallback restart below would fire a SECOND back-to-back
         // browser restart on the same batch boundary.
         forceRestartFlag = false;
-        purgeStaleTrackers();
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY); // Give browser time to stabilize
       } catch (emergencyRestartErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency restart failed: ${emergencyRestartErr.message}`));
@@ -4961,7 +4959,6 @@ function setupFrameHandling(page, forceDebug) {
         if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0;
-        purgeStaleTrackers();
         forceRestartFlag = false; // Reset flag
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY);
         if (forceDebug) console.log(formatLogMessage('debug', `Emergency hang detection restart completed`));
@@ -5305,7 +5302,6 @@ function setupFrameHandling(page, forceDebug) {
   try { cleanupCloudflareCache(); } catch (_) {}
   try { wgDisconnectAll(forceDebug); } catch (_) {}
   try { ovpnDisconnectAll(forceDebug); } catch (_) {}
-  try { purgeStaleTrackers(); } catch (_) {}
   try { await closeAllSocksRelays(forceDebug); } catch (_) {}
 
   // Clean process termination
