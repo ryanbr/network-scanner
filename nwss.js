@@ -2046,6 +2046,24 @@ function setupFrameHandling(page, forceDebug) {
       'Browser disconnected'
     ]);
 
+    // Popup-capture cleanup registry — declared outside the try so the
+    // finally block (which is a separate lexical scope from try) can see
+    // it. Populated by the capture_popups setup block if siteConfig
+    // .capture_popups is true; iterated in finally to deregister the
+    // browser 'targetcreated' listener and close any tracked popup pages.
+    const popupCleanups = [];
+    // Race-window guard: 'targetcreated' fires synchronously, but
+    // onTargetCreated does an `await target.page()`. If a popup target
+    // is created right as the per-URL try block winds down, the await
+    // can resolve AFTER finally has already iterated popupCleanups —
+    // leaving the popup unregistered for manual cleanup (it still gets
+    // closed by its own 3s auto-close timer, but in the meantime its
+    // request listener could capture matches into matchedDomains for a
+    // URL that already "finished"). The flag is set in finally and
+    // checked at the start of onTargetCreated to short-circuit late
+    // events cleanly.
+    let urlFinished = false;
+
     try {
 
       // --- Connect VPN if configured for this site ---
@@ -2846,6 +2864,172 @@ function setupFrameHandling(page, forceDebug) {
         } else {
           matchedDomains.add(domain);
         }
+      }
+
+      // === POPUP CAPTURE (opt-in via siteConfig.capture_popups: true) ===
+      // Many ad networks fire popunders / new-tab opens (window.open, target=
+      // "_blank") that navigate to trackers and disappear from view. Those
+      // pages are SEPARATE Puppeteer targets — page.on('request', ...) on the
+      // main page never sees their network traffic.
+      //
+      // IMPORTANT: modern Chromium blocks programmatic window.open() unless
+      // it's triggered by a real user gesture. In practice that means
+      // capture_popups only catches anything when the scanner is actually
+      // clicking on the page — i.e., the site config also has
+      // `interact: true` AND `interact_clicks: true`. Setting capture_popups
+      // alone will register the listener but no popups will fire.
+      //
+      // When capture_popups is true, we attach a browser-level 'targetcreated'
+      // listener for THIS URL only. New page targets whose opener-chain leads
+      // back to our main page (within maxDepth levels) get a stripped-down
+      // request listener — same regex/first-party/ignoreDomains filter as
+      // the main handler, same addMatchedDomain() sink, same domain
+      // detection cache, same nettools/similarity logic (all inherited via
+      // addMatchedDomain). Cloudflare bypass, adblock-rs matching, curl/grep
+      // content download, and request.abort() are intentionally skipped on
+      // popups — they're observation-only.
+      //
+      // Each popup's request listener stays attached across in-window
+      // navigations, so a single popup that redirects A -> B -> C captures
+      // every hop. The capture window (default 5s, configurable per-site
+      // via capture_popups_window_ms) is the wall-clock budget for that
+      // chain — bump it for long redirect chains, lower it for high-popup-
+      // rate sites where memory pressure matters more than chain coverage.
+      const capturePopups = siteConfig.capture_popups === true;
+      // Per-site overrides (with sane defaults). Parsed as numbers so config
+      // values from JSON come through correctly; falsy / non-positive values
+      // fall back to the default rather than silently disabling capture.
+      const POPUP_MAX_DEPTH = (() => {
+        const v = parseInt(siteConfig.capture_popups_max_depth, 10);
+        return Number.isFinite(v) && v > 0 ? v : 2;
+      })();
+      const POPUP_CAPTURE_WINDOW_MS = (() => {
+        const v = parseInt(siteConfig.capture_popups_window_ms, 10);
+        return Number.isFinite(v) && v > 0 ? v : 5000;
+      })();
+
+      if (capturePopups && forceDebug) {
+        // One-time setup-time warning if the click prerequisite isn't met.
+        // Without clicks, capture_popups is a no-op in practice.
+        const hasClicks = siteConfig.interact === true && siteConfig.interact_clicks === true;
+        if (!hasClicks) {
+          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but interact_clicks is not — popups need user-gesture clicks to fire; expect no captures unless the page opens popups via in-page redirects`));
+        }
+        console.log(formatLogMessage('debug', `[popup] capture_popups settings: maxDepth=${POPUP_MAX_DEPTH}, windowMs=${POPUP_CAPTURE_WINDOW_MS}`));
+      }
+
+      if (capturePopups) {
+        const mainTarget = page.target();
+
+        // Walk target.opener() chain to find depth relative to mainTarget.
+        // Returns 0 if the target isn't a descendant of mainTarget at all,
+        // 1 for a direct popup of the main page, 2 for popup-of-popup, etc.
+        const getPopupDepth = (target) => {
+          let depth = 0;
+          let cur = target.opener();
+          while (cur && depth <= POPUP_MAX_DEPTH + 1) {
+            depth++;
+            if (cur === mainTarget) return depth;
+            cur = cur.opener();
+          }
+          return 0;
+        };
+
+        // Attach observation-only request listener to a popup page. No
+        // setRequestInterception(true) — page.on('request') fires for every
+        // request regardless of interception state, and we don't need to
+        // block anything on popups.
+        const attachPopupRequestCapture = (popupPage, depth) => {
+          popupPage.on('request', (request) => {
+            try {
+              const checkedUrl = request.url();
+              let fullSubdomain = '';
+              let checkedRootDomain = '';
+              try {
+                const parsedUrl = new URL(checkedUrl);
+                fullSubdomain = parsedUrl.hostname;
+                const pslResult = psl.parse(fullSubdomain);
+                checkedRootDomain = pslResult.domain || fullSubdomain;
+              } catch (_) { return; }
+              if (!checkedRootDomain) return;
+
+              // ignoreDomains gate (global)
+              if (matchesIgnoreDomain(checkedRootDomain, ignoreDomains)) return;
+
+              // First-party / third-party gate (popup belongs to the main URL's
+              // domain group — its OWN URL doesn't redefine first-party).
+              const isFirstParty = firstPartyDomains.has(checkedRootDomain);
+              if (siteConfig.firstParty === false && isFirstParty) return;
+              if (siteConfig.thirdParty === false && !isFirstParty) return;
+
+              // Regex match against the site's filterRegex list
+              const resourceType = request.resourceType();
+              for (const re of regexes) {
+                if (re.test(checkedUrl)) {
+                  if (forceDebug) {
+                    console.log(formatLogMessage('debug', `[popup depth=${depth}] Matched ${checkedRootDomain} via ${re} (${resourceType})`));
+                  }
+                  // Delegate to addMatchedDomain so the same ignore_similar /
+                  // domain-cache / nettools / matchedDomains-shape logic the
+                  // main handler uses applies here too.
+                  addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
+                  break;
+                }
+              }
+            } catch (_) { /* observation-only — never let a popup error escape */ }
+          });
+        };
+
+        const onTargetCreated = async (target) => {
+          // Short-circuit guard: if finally has already started, don't attach
+          // a request listener whose closure would outlive its meaningful
+          // scope. The race is narrow (a targetcreated firing while we're
+          // mid-await on target.page() across the finally boundary), but
+          // without this guard a late popup could push matches into
+          // matchedDomains for a URL whose processing has already returned.
+          if (urlFinished) return;
+          if (target.type() !== 'page') return;
+          const depth = getPopupDepth(target);
+          if (depth < 1) return; // Not one of ours
+          if (depth > POPUP_MAX_DEPTH) {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `[popup] Skipping depth-${depth} popup (max=${POPUP_MAX_DEPTH}): ${target.url() || 'about:blank'}`));
+            }
+            return;
+          }
+
+          let popupPage;
+          try { popupPage = await target.page(); } catch (_) { return; }
+          if (!popupPage) return;
+          // Re-check after the await — the per-URL finally may have flipped
+          // the flag while target.page() was resolving.
+          if (urlFinished) {
+            try { if (!popupPage.isClosed()) popupPage.close().catch(() => {}); } catch (_) {}
+            return;
+          }
+
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `[popup depth=${depth}] Capturing popup: ${target.url() || 'about:blank'}`));
+          }
+
+          attachPopupRequestCapture(popupPage, depth);
+
+          // Auto-close after the capture window so popups don't pile up.
+          const closeTimer = setTimeout(() => {
+            try { if (!popupPage.isClosed()) popupPage.close().catch(() => {}); } catch (_) {}
+          }, POPUP_CAPTURE_WINDOW_MS);
+          if (typeof closeTimer.unref === 'function') closeTimer.unref();
+
+          popupCleanups.push(() => {
+            clearTimeout(closeTimer);
+            try { if (!popupPage.isClosed()) popupPage.close().catch(() => {}); } catch (_) {}
+          });
+        };
+
+        browser.on('targetcreated', onTargetCreated);
+        popupCleanups.push(() => {
+          try { browser.off('targetcreated', onTargetCreated); } catch (_) {}
+        });
       }
 
       // --- page.on('request', ...) Handler: Core Network Request Logic ---
@@ -4295,7 +4479,23 @@ function setupFrameHandling(page, forceDebug) {
       };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
-    
+
+      // Flip the popup-capture race-window guard first so any in-flight
+      // 'targetcreated' handler that resolves after this point sees the
+      // flag and bails (closing its own popup if it managed to fetch one).
+      urlFinished = true;
+
+      // Popup capture teardown (opt-in via siteConfig.capture_popups). Each
+      // entry is either the browser.off('targetcreated', ...) deregistration
+      // or a per-popup (clearTimeout + popupPage.close) cleanup. Iterate even
+      // if one fails so the rest still run.
+      if (popupCleanups.length) {
+        for (const cleanup of popupCleanups) {
+          try { cleanup(); } catch (_) {}
+        }
+        popupCleanups.length = 0;
+      }
+
       // Disconnect VPN for this site
       if (siteConfig.vpn) {
         const vpnDown = wgDisconnect(siteConfig, forceDebug);
