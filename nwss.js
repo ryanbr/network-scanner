@@ -351,6 +351,9 @@ const dnsNegativeCache = new Map(); // hostname -> { error, timestamp }
 const DNS_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DNS_NEGATIVE_CACHE_MAX = 1000;
 let dnsPrecheckSkips = 0;
+// c-ares transient codes — read-only, hoisted out of the per-task DNS
+// pre-check so we don't allocate a fresh Set per URL.
+const DNS_TRANSIENT_ERRORS = new Set(['ETIMEOUT', 'ESERVFAIL', 'EREFUSED', 'ECONNREFUSED']);
 
 function dnsNegativeCacheSet(hostname, error) {
   if (dnsNegativeCache.size >= DNS_NEGATIVE_CACHE_MAX) {
@@ -4434,21 +4437,31 @@ function setupFrameHandling(page, forceDebug) {
  // Process URLs in batches with exception handling
  let siteGroupIndex = 0;
  let currentProxyKey = '';  // Track active proxy config — '' means direct connection
+ // Map of site-config object -> index in sites[], built once. Per-batch
+ // grouping below uses this for O(1) lookup instead of sites.indexOf which
+ // walked the array per task (batch=80 * sites=20 was ~1600 cmps per batch).
+ const configToIndex = new Map();
+ for (let i = 0; i < sites.length; i++) configToIndex.set(sites[i], i);
  try {
    for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
     const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
     const currentBatch = allTasks.slice(batchStart, batchEnd);
 
-    
-    // Group tasks by their source site configuration for window cleanup
+
+    // Group tasks by their source site configuration for window cleanup.
+    // Single get-or-set replaces has + get + set (one Map lookup not two).
+    // The `?? -1` preserves the old `sites.indexOf` semantics for a task
+    // whose config isn't in sites[] — that case shouldn't happen, but if
+    // it ever does the routing stays identical to the prior code's
+    // 'site_-1' bucket rather than silently shifting to 'site_undefined'.
     const tasksBySite = new Map();
-    currentBatch.forEach(task => {
-      const siteKey = `site_${sites.indexOf(task.config)}`;
-      if (!tasksBySite.has(siteKey)) {
-        tasksBySite.set(siteKey, []);
-      }
-      tasksBySite.get(siteKey).push(task);
-    });
+    for (let i = 0; i < currentBatch.length; i++) {
+      const task = currentBatch[i];
+      const siteKey = `site_${configToIndex.get(task.config) ?? -1}`;
+      let arr = tasksBySite.get(siteKey);
+      if (!arr) tasksBySite.set(siteKey, arr = []);
+      arr.push(task);
+    }
     
     // IMPROVED: Only check health if we have indicators of problems
     let healthCheck = { shouldRestart: false, reason: null };
@@ -4709,13 +4722,13 @@ function setupFrameHandling(page, forceDebug) {
          };
          // c-ares transient codes — retry once so a momentary resolver
          // hiccup doesn't poison the negative cache for 5 minutes.
-         const TRANSIENT = new Set(['ETIMEOUT', 'ESERVFAIL', 'EREFUSED', 'ECONNREFUSED']);
+         // DNS_TRANSIENT_ERRORS is module-level so we don't allocate per task.
          try {
            try {
              await dnsResolve();
            } catch (firstErr) {
              const code = firstErr && firstErr.code;
-             if (TRANSIENT.has(code) || (firstErr && firstErr.message === 'DNS timeout')) {
+             if (DNS_TRANSIENT_ERRORS.has(code) || (firstErr && firstErr.message === 'DNS timeout')) {
                if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check transient (${code || 'timeout'}) for ${taskDomain}, retrying once`));
                await dnsResolve();
              } else {
