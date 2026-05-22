@@ -28,7 +28,7 @@ const {
   cleanup: cleanupCloudflareCache
 } = require('./lib/cloudflare');
 // FP Bypass
-const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowproxy');
+const { handleFlowProxyProtection, getFlowProxyTimeouts, attachFlowProxyHeaderListener } = require('./lib/flowproxy');
 // ignore_similar rules
 const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore_similar');
 // Graceful exit
@@ -2196,6 +2196,11 @@ function setupFrameHandling(page, forceDebug) {
         const flowproxyTimeouts = getFlowProxyTimeouts(siteConfig);
         page.setDefaultTimeout(Math.min(flowproxyTimeouts.pageTimeout, TIMEOUTS.DEFAULT_NAVIGATION));
         page.setDefaultNavigationTimeout(Math.min(flowproxyTimeouts.navigationTimeout, TIMEOUTS.DEFAULT_PAGE));
+        // Attach the response/header listener BEFORE navigation so the
+        // document response's own headers (Server, Set-Cookie, X-FlowProxy-*,
+        // etc.) are observed. The listener accumulates state in a WeakMap
+        // keyed by page; analyzeFlowProxyProtection reads from it later.
+        attachFlowProxyHeaderListener(page);
         if (forceDebug) {
           console.log(formatLogMessage('debug', `Applied flowProxy timeouts - page: ${flowproxyTimeouts.pageTimeout}ms, nav: ${flowproxyTimeouts.navigationTimeout}ms`));
         }
