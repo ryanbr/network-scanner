@@ -32,7 +32,7 @@ const { handleFlowProxyProtection, getFlowProxyTimeouts } = require('./lib/flowp
 // ignore_similar rules
 const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore_similar');
 // Graceful exit
-const { handleBrowserExit, cleanupChromeTempFiles } = require('./lib/browserexit');
+const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
 const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats } = require('./lib/nettools');
 // File compare
@@ -4542,24 +4542,21 @@ function setupFrameHandling(page, forceDebug) {
         });
 
         // Clean up the specific user data directory
-        if (userDataDir && fs.existsSync(userDataDir)) {
-          fs.rmSync(userDataDir, { recursive: true, force: true });
-          if (forceDebug) console.log(formatLogMessage('debug', `Cleaned user data dir: ${userDataDir}`));
-        }
+        if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
 
         // Additional cleanup for any remaining Chrome processes
         if (removeTempFiles) {
-          await cleanupChromeTempFiles({ 
-            includeSnapTemp: true, 
+          await cleanupChromeTempFiles({
+            includeSnapTemp: true,
             forceDebug,
-            comprehensive: true 
+            comprehensive: true
           });
         }
 
       } catch (browserCloseErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Browser cleanup warning: ${browserCloseErr.message}`));
       }
-      
+
       // Create new browser for next batch (preserve current proxy config)
       const restartProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
       browser = await createBrowser(restartProxyArgs);
@@ -4587,9 +4584,7 @@ function setupFrameHandling(page, forceDebug) {
           forceDebug, timeout: 10000, exitOnFailure: false,
           cleanTempFiles: true, comprehensiveCleanup: removeTempFiles
         });
-        if (userDataDir && fs.existsSync(userDataDir)) {
-          fs.rmSync(userDataDir, { recursive: true, force: true });
-        }
+        if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
       } catch (proxyRestartErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Proxy switch browser cleanup: ${proxyRestartErr.message}`));
       }
@@ -4760,6 +4755,7 @@ function setupFrameHandling(page, forceDebug) {
      console.log(formatLogMessage('error', `[TIMEOUT] Batch hung. Restarting browser.`));
      try {
        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false });
+       if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
        const timeoutProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
        browser = await createBrowser(timeoutProxyArgs);
        urlsSinceLastCleanup = 0;
@@ -4883,16 +4879,23 @@ function setupFrameHandling(page, forceDebug) {
         }
 
         await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true, comprehensiveCleanup: removeTempFiles });
+        if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
         // Additional cleanup after emergency restart
         if (removeTempFiles) {
-          await cleanupChromeTempFiles({ 
-            includeSnapTemp: true, 
+          await cleanupChromeTempFiles({
+            includeSnapTemp: true,
             forceDebug,
-            comprehensive: true 
+            comprehensive: true
           });
         }
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0; // Reset counter
+        // Reset the hang-detection flag too: this restart path is triggered
+        // by needsImmediateRestart errors, which the per-URL 120s timeout
+        // sets in lockstep with forceRestartFlag. Without this reset, the
+        // hang-fallback restart below would fire a SECOND back-to-back
+        // browser restart on the same batch boundary.
+        forceRestartFlag = false;
         purgeStaleTrackers();
         await fastTimeout(TIMEOUTS.EMERGENCY_RESTART_DELAY); // Give browser time to stabilize
       } catch (emergencyRestartErr) {
@@ -4904,6 +4907,7 @@ function setupFrameHandling(page, forceDebug) {
       console.log(`\n${messageColors.fileOp('🔄 Emergency hang detection restart:')} Browser appears hung, forcing restart`);
       try {
         await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true });
+        if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0;
         purgeStaleTrackers();
