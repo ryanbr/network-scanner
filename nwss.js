@@ -4515,8 +4515,17 @@ function setupFrameHandling(page, forceDebug) {
     // timeout) bypasses the urlsSinceLastCleanup > 8 gate — a confirmed hang
     // needs immediate restart even if we just cleaned up. Proactive triggers
     // keep the gate to prevent thrashing.
+    //
+    // hasHighFailureRate is computed (and still used for the health-check
+    // gate above) but intentionally NOT folded into proactiveRestart:
+    // wouldExceedLimit is always true at every batch boundary with the
+    // default RESOURCE_CLEANUP_INTERVAL == batch size, so the high-failure-
+    // rate branch was dead code reached only at the same boundary that
+    // wouldExceedLimit already triggers. If failure-rate ever needs to
+    // interrupt mid-cleanup-interval, that requires interrupting the
+    // running Promise.all — a real behavior change, not an OR addition.
     const hangRecoveryRestart = forceRestartFlag;
-    const proactiveRestart = (wouldExceedLimit || shouldRestartFromHealth || (hasHighFailureRate && recentResults.length >= 6)) && urlsSinceLastCleanup > 8;
+    const proactiveRestart = (wouldExceedLimit || shouldRestartFromHealth) && urlsSinceLastCleanup > 8;
     if ((hangRecoveryRestart || proactiveRestart) && isNotLastBatch) {
       let restartReason = 'Unknown';
       if (forceRestartFlag) {
@@ -4524,8 +4533,6 @@ function setupFrameHandling(page, forceDebug) {
         forceRestartFlag = false; // Reset the flag
       } else if (shouldRestartFromHealth) {
         restartReason = healthCheck.reason;
-      } else if (hasHighFailureRate) {
-        restartReason = `High failure rate: ${Math.round(recentFailureRate * 100)}% in recent batch`;
       } else if (wouldExceedLimit) {
         restartReason = `Processed ${urlsSinceLastCleanup} URLs (scheduled maintenance)`;
       }
