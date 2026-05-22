@@ -2734,15 +2734,37 @@ function setupFrameHandling(page, forceDebug) {
         ? siteConfig.blocked.map(pattern => getCompiledRegex(pattern))
         : [];
 
+      // Per-site escape hatch: disable_adblock turns off the two layers of
+      // "global" ad-blocking for this URL — the adblock-rs filter-list engine
+      // and the globalBlockedRegexes pattern list. Per-site siteConfig.blocked
+      // is preserved (it's an explicit per-site choice, not "global" blocking).
+      //
+      // The use case: capture_popups + popunder/redirect chains. The global
+      // adblock often aborts the exact requests that fire the popup or chain
+      // to the tracker, defeating capture. Setting disable_adblock: true for
+      // those specific URLs lets the chain play out naturally so the popup
+      // request listener can observe the full hop sequence.
+      const disableAdblock = siteConfig.disable_adblock === true;
+
       // Pre-build Set for O(1) resourceType lookups (fired per request)
       const allowedResourceTypesSet = Array.isArray(siteConfig.resourceTypes)
         ? new Set(siteConfig.resourceTypes)
         : null;
-		
-      // Combine site-specific with pre-compiled global blocked patterns
-      const allBlockedRegexes = blockedRegexes.length > 0
-        ? [...blockedRegexes, ...globalBlockedRegexes]
-        : globalBlockedRegexes; // Avoid spread when no site-specific patterns
+
+      // Combine site-specific with pre-compiled global blocked patterns.
+      // When disable_adblock is true, globalBlockedRegexes is omitted so
+      // only the per-site list applies.
+      const allBlockedRegexes = disableAdblock
+        ? blockedRegexes
+        : (blockedRegexes.length > 0
+            ? [...blockedRegexes, ...globalBlockedRegexes]
+            : globalBlockedRegexes); // Avoid spread when no site-specific patterns
+
+      if (disableAdblock && forceDebug) {
+        const dropped = globalBlockedRegexes.length;
+        const adblockNote = adblockEnabled && adblockMatcher ? ' + adblock-rs engine' : '';
+        console.log(formatLogMessage('debug', `[adblock] disable_adblock=true for ${currentUrl} — skipping ${dropped} global blocked patterns${adblockNote} (site-level ${blockedRegexes.length} pattern(s) still apply)`));
+      }
 
       /**
        * Helper function to add domain to matched collection
@@ -3124,15 +3146,17 @@ function setupFrameHandling(page, forceDebug) {
           console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: ${isMainFrame ? 'main' : 'iframe'}] ${debugFrameUrl} → ${checkedUrl}`));
         }
 
-        // Apply adblock rules BEFORE expensive regex checks for better performance
-        if (adblockEnabled && adblockMatcher) {
+        // Apply adblock-rs filter-list rules BEFORE expensive regex checks
+        // for better performance. Gated on !disableAdblock so per-URL configs
+        // (e.g. for popup/redirect chain capture) can bypass it.
+        if (!disableAdblock && adblockEnabled && adblockMatcher) {
           try {
             const result = adblockMatcher.shouldBlock(
               checkedUrl,
               currentUrl,
               request.resourceType()
             );
-            
+
             if (result.blocked) {
               adblockStats.blocked++;
               if (forceDebug) {
