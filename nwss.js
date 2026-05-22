@@ -2975,7 +2975,26 @@ function setupFrameHandling(page, forceDebug) {
               } catch (_) { return; }
               if (!checkedRootDomain) return;
 
-              // ignoreDomains gate (global)
+              // ignoreDomainsByUrl — if any pattern matches this popup URL,
+              // mark the root domain as ignored for the rest of the scan
+              // (main page + all popups). Mirrors the main handler so a
+              // tracker URL surfaced via popup chain has the same dampening
+              // effect as one surfaced on the main page.
+              if (_ignoreDomainsByUrlRegexes.length > 0 && !_dynamicallyIgnoredDomains.has(checkedRootDomain)) {
+                for (let i = 0; i < _ignoreDomainsByUrlRegexes.length; i++) {
+                  if (_ignoreDomainsByUrlRegexes[i].test(checkedUrl)) {
+                    _dynamicallyIgnoredDomains.add(checkedRootDomain);
+                    if (forceDebug) {
+                      console.log(formatLogMessage('debug', `${IGNORE_DOMAINS_BY_URL_TAG} ${checkedRootDomain} ignored — matched pattern: ${_ignoreDomainsByUrlRegexes[i].source} (from popup depth=${depth})`));
+                    }
+                    break;
+                  }
+                }
+              }
+
+              // ignoreDomains gate (global; matchesIgnoreDomain also short-
+              // circuits on _dynamicallyIgnoredDomains, so a domain we just
+              // added above will be caught here on the same request).
               if (matchesIgnoreDomain(checkedRootDomain, ignoreDomains)) return;
 
               // First-party / third-party gate (popup belongs to the main URL's
