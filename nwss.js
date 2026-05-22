@@ -43,6 +43,19 @@ const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeo
 const { processResults } = require('./lib/post-processing');
 // Colorize various text when used
 const { messageColors, formatLogMessage } = require('./lib/colorize');
+const TIMEOUT_TAG = messageColors.processing('[TIMEOUT]');
+const INTERACTION_TAG = messageColors.processing('[interaction]');
+const GHOST_CURSOR_TAG = messageColors.processing('[ghost-cursor]');
+const PROXY_TAG = messageColors.processing('[proxy]');
+const GREP_RESPONSE_TAG = messageColors.processing('[grep-response]');
+const IGNORE_DOMAINS_BY_URL_TAG = messageColors.processing('[ignoreDomainsByUrl]');
+const IGNORE_SIMILAR_IGNORED_DOMAINS_TAG = messageColors.processing('[ignore_similar_ignored_domains]');
+const IGNORE_SIMILAR_TAG = messageColors.processing('[ignore_similar]');
+const CLEAR_SITEDATA_TAG = messageColors.processing('[clear_sitedata]');
+const CSS_BLOCKED_TAG = messageColors.processing('[css_blocked]');
+const EVAL_ON_DOC_TAG = messageColors.processing('[evalOnDoc]');
+const REALTIME_CLEANUP_TAG = messageColors.processing('[realtime_cleanup]');
+const VPN_TAG = messageColors.processing('[vpn]');
 // Precomputed colored '[SmartCache]' subsystem prefix — paired with the
 // same constant in lib/smart-cache.js so debug lines from both files
 // produce consistently colored output. formatLogMessage only colors the
@@ -2039,22 +2052,22 @@ function setupFrameHandling(page, forceDebug) {
       if (siteConfig.vpn) {
         const vpnResult = await wgConnect(siteConfig, forceDebug);
         if (!vpnResult.success) {
-          console.warn(formatLogMessage('warn', `[vpn] WireGuard failed for ${currentUrl}: ${vpnResult.error}`));
+          console.warn(formatLogMessage('warn', `${VPN_TAG} WireGuard failed for ${currentUrl}: ${vpnResult.error}`));
           return { url: currentUrl, rules: [], success: false, vpnFailed: true };
         }
         if (!silentMode) {
           const ipInfo = vpnResult.externalIP ? ` (${vpnResult.externalIP})` : '';
-          console.log(formatLogMessage('info', `[vpn] WireGuard connected via ${vpnResult.interface}${ipInfo} for ${currentUrl}`));
+          console.log(formatLogMessage('info', `${VPN_TAG} WireGuard connected via ${vpnResult.interface}${ipInfo} for ${currentUrl}`));
         }
       } else if (siteConfig.openvpn) {
         const ovpnResult = await ovpnConnect(siteConfig, forceDebug);
         if (!ovpnResult.success) {
-          console.warn(formatLogMessage('warn', `[vpn] OpenVPN failed for ${currentUrl}: ${ovpnResult.error}`));
+          console.warn(formatLogMessage('warn', `${VPN_TAG} OpenVPN failed for ${currentUrl}: ${ovpnResult.error}`));
           return { url: currentUrl, rules: [], success: false, vpnFailed: true };
         }
         if (!silentMode) {
           const ipInfo = ovpnResult.externalIP ? ` (${ovpnResult.externalIP})` : '';
-          console.log(formatLogMessage('info', `[vpn] OpenVPN connected via ${ovpnResult.connection}${ipInfo} for ${currentUrl}`));
+          console.log(formatLogMessage('info', `${VPN_TAG} OpenVPN connected via ${ovpnResult.connection}${ipInfo} for ${currentUrl}`));
         }
       }
 
@@ -2088,12 +2101,12 @@ function setupFrameHandling(page, forceDebug) {
         const totalDelay = siteDelay + bufferTime;
         
         if (forceDebug && hasCloudflareConfig) {
-          console.log(formatLogMessage('debug', `[realtime_cleanup] Using extended delay for Cloudflare site: ${totalDelay}ms (${siteDelay}ms + ${bufferTime}ms CF buffer)`));
+          console.log(formatLogMessage('debug', `${REALTIME_CLEANUP_TAG} Using extended delay for Cloudflare site: ${totalDelay}ms (${siteDelay}ms + ${bufferTime}ms CF buffer)`));
         }
         
         const realtimeResult = await performRealtimeWindowCleanup(browserInstance, threshold, forceDebug, totalDelay);
         if (realtimeResult.success && realtimeResult.closedCount > 0 && forceDebug) {
-          console.log(formatLogMessage('debug', `[realtime_cleanup] Cleaned ${realtimeResult.closedCount} old pages, ${realtimeResult.remainingPages} remaining`));
+          console.log(formatLogMessage('debug', `${REALTIME_CLEANUP_TAG} Cleaned ${realtimeResult.closedCount} old pages, ${realtimeResult.remainingPages} remaining`));
         }
       } 
     
@@ -2183,9 +2196,9 @@ function setupFrameHandling(page, forceDebug) {
       if (shouldInjectEvalForPage) {
           if (forceDebug) {
               if (globalEvalOnDoc) {
-                  console.log(formatLogMessage('debug', `[evalOnDoc] Global Fetch/XHR interception enabled, applying to: ${currentUrl}`));
+                  console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Global Fetch/XHR interception enabled, applying to: ${currentUrl}`));
               } else { // siteConfig.evaluateOnNewDocument must be true
-                  console.log(formatLogMessage('debug', `[evalOnDoc] Site-specific Fetch/XHR interception enabled for: ${currentUrl}`));
+                  console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Site-specific Fetch/XHR interception enabled for: ${currentUrl}`));
               }
           }
           
@@ -2206,7 +2219,7 @@ function setupFrameHandling(page, forceDebug) {
               browserResponsive = true;
           } catch (healthErr) {
               if (forceDebug) {
-                  console.log(formatLogMessage('debug', `[evalOnDoc] Browser health check failed: ${healthErr.message}`));
+                  console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Browser health check failed: ${healthErr.message}`));
               }
               browserResponsive = false;
           }
@@ -2305,7 +2318,7 @@ function setupFrameHandling(page, forceDebug) {
                   ]);
                   evalOnDocSuccess = true;
                   if (forceDebug) {
-                      console.log(formatLogMessage('debug', `[evalOnDoc] Full injection successful for ${currentUrl}`));
+                      console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Full injection successful for ${currentUrl}`));
                   }
               } catch (fullInjectionErr) {
                   // Enhanced error detection for CDP issues
@@ -2316,12 +2329,12 @@ function setupFrameHandling(page, forceDebug) {
                   
                   if (forceDebug) {
                       const errorType = isCDPError ? 'CDP/Protocol error' : 'timeout/other';
-                      console.log(formatLogMessage('debug', `[evalOnDoc] Full injection failed (${errorType}): ${fullInjectionErr.message}`));
+                      console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Full injection failed (${errorType}): ${fullInjectionErr.message}`));
                   }
 
                   // Skip fallback for CDP errors - they indicate browser communication issues
                   if (isCDPError) {
-                      console.warn(formatLogMessage('warn', `[evalOnDoc] CDP communication failure - skipping injection for ${currentUrl}`));
+                      console.warn(formatLogMessage('warn', `${EVAL_ON_DOC_TAG} CDP communication failure - skipping injection for ${currentUrl}`));
                       evalOnDocSuccess = false;
                   } else {
                   
@@ -2368,11 +2381,11 @@ function setupFrameHandling(page, forceDebug) {
                       ]);
                       evalOnDocSuccess = true;
                       if (forceDebug) {
-                          console.log(formatLogMessage('debug', `[evalOnDoc] Minimal injection successful for ${currentUrl}`));
+                          console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Minimal injection successful for ${currentUrl}`));
                       }
                   } catch (minimalInjectionErr) {
                       if (forceDebug) {
-                          console.log(formatLogMessage('debug', `[evalOnDoc] Minimal injection also failed: ${minimalInjectionErr.message}`));
+                          console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Minimal injection also failed: ${minimalInjectionErr.message}`));
                       }
                       evalOnDocSuccess = false;
                   }
@@ -2380,14 +2393,14 @@ function setupFrameHandling(page, forceDebug) {
            } 
           } else {
               if (forceDebug) {
-                  console.log(formatLogMessage('debug', `[evalOnDoc] Browser unresponsive, skipping injection for ${currentUrl}`));
+                  console.log(formatLogMessage('debug', `${EVAL_ON_DOC_TAG} Browser unresponsive, skipping injection for ${currentUrl}`));
               }
               evalOnDocSuccess = false;
           }
           
           // Final status logging
           if (!evalOnDocSuccess) {
-              console.warn(formatLogMessage('warn', `[evalOnDoc] All injection strategies failed for ${currentUrl} - continuing with standard request monitoring only`));
+              console.warn(formatLogMessage('warn', `${EVAL_ON_DOC_TAG} All injection strategies failed for ${currentUrl} - continuing with standard request monitoring only`));
           }
       // Allow realtime cleanup to proceed after injection completes
       if (shouldInjectEvalForPage && siteConfig.window_cleanup === "realtime") {
@@ -2416,7 +2429,7 @@ function setupFrameHandling(page, forceDebug) {
             }
           }, { selectors: cssBlockedSelectors });
         } catch (cssErr) {
-          console.warn(formatLogMessage('warn', `[css_blocked] Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`));
+          console.warn(formatLogMessage('warn', `${CSS_BLOCKED_TAG} Failed to set up CSS element blocking for ${currentUrl}: ${cssErr.message}`));
         }
       }
       // --- END: CSS Element Blocking Setup ---
@@ -2473,7 +2486,7 @@ function setupFrameHandling(page, forceDebug) {
           const clearResult = await clearSiteData(page, currentUrl, forceDebug);
           if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data for ${currentUrl}`));
         } catch (clearErr) {
-          if (forceDebug) console.log(formatLogMessage('debug', `[clear_sitedata] Failed for ${currentUrl}: ${clearErr.message}`));
+          if (forceDebug) console.log(formatLogMessage('debug', `${CLEAR_SITEDATA_TAG} Failed for ${currentUrl}: ${clearErr.message}`));
         }
       }
 
@@ -2780,7 +2793,7 @@ function setupFrameHandling(page, forceDebug) {
          
          if (similarCheck.shouldIgnore) {
            if (forceDebug) {
-             console.log(formatLogMessage('debug', `[ignore_similar] Skipping ${domain}: ${similarCheck.reason}`));
+             console.log(formatLogMessage('debug', `${IGNORE_SIMILAR_TAG} Skipping ${domain}: ${similarCheck.reason}`));
            }
            return; // Skip adding this domain
          }
@@ -2796,7 +2809,7 @@ function setupFrameHandling(page, forceDebug) {
         
         if (ignoredSimilarCheck.shouldIgnore) {
           if (forceDebug) {
-            console.log(formatLogMessage('debug', `[ignore_similar_ignored_domains] Skipping ${domain}: ${ignoredSimilarCheck.reason} (similar to ignoreDomains)`));
+            console.log(formatLogMessage('debug', `${IGNORE_SIMILAR_IGNORED_DOMAINS_TAG} Skipping ${domain}: ${ignoredSimilarCheck.reason} (similar to ignoreDomains)`));
           }
           return; // Skip adding this domain
         }
@@ -2937,7 +2950,7 @@ function setupFrameHandling(page, forceDebug) {
             if (_ignoreDomainsByUrlRegexes[i].test(reqUrl)) {
               _dynamicallyIgnoredDomains.add(checkedRootDomain);
               if (forceDebug) {
-                console.log(formatLogMessage('debug', `[ignoreDomainsByUrl] ${checkedRootDomain} ignored — matched pattern: ${_ignoreDomainsByUrlRegexes[i].source}`));
+                console.log(formatLogMessage('debug', `${IGNORE_DOMAINS_BY_URL_TAG} ${checkedRootDomain} ignored — matched pattern: ${_ignoreDomainsByUrlRegexes[i].source}`));
               }
               break;
             }
@@ -3373,7 +3386,7 @@ function setupFrameHandling(page, forceDebug) {
             } else if (useGrep && (hasSearchString || hasSearchStringAnd)) {
              // Use grep with response handler (no curl)
              if (forceDebug) {
-               console.log(formatLogMessage('debug', `[grep-response] Queuing ${reqUrl} for grep analysis via response handler`));
+               console.log(formatLogMessage('debug', `${GREP_RESPONSE_TAG} Queuing ${reqUrl} for grep analysis via response handler`));
              }
              
              // Queue for grep processing via response handler
@@ -3461,7 +3474,7 @@ function setupFrameHandling(page, forceDebug) {
               }
             }, cssBlockedSelectors);
           } catch (cssRuntimeErr) {
-            console.warn(formatLogMessage('warn', `[css_blocked] Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`));
+            console.warn(formatLogMessage('warn', `${CSS_BLOCKED_TAG} Failed to apply runtime CSS blocking for ${currentUrl}: ${cssRuntimeErr.message}`));
           }
         }
       }
@@ -3773,8 +3786,8 @@ function setupFrameHandling(page, forceDebug) {
             const proxyErr = proxyErrors.find(e => err.message.includes(e));
             if (proxyErr) {
               const info = getProxyInfo(siteConfig);
-              console.error(formatLogMessage('error', `[proxy] ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
-              console.error(formatLogMessage('error', `[proxy] Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
+              console.error(formatLogMessage('error', `${PROXY_TAG} ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
+              console.error(formatLogMessage('error', `${PROXY_TAG} Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
             }
           }
           console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
@@ -3826,7 +3839,7 @@ function setupFrameHandling(page, forceDebug) {
         try {
           if (ghostConfig) {
             // Ghost-cursor mode: Bezier-based mouse movements
-            if (forceDebug) console.log(formatLogMessage('debug', `[ghost-cursor] Using ghost-cursor for ${currentUrl}`));
+            if (forceDebug) console.log(formatLogMessage('debug', `${GHOST_CURSOR_TAG} Using ghost-cursor for ${currentUrl}`));
             const cursor = createGhostCursor(page, { forceDebug });
             if (cursor) {
               await Promise.race([
@@ -3886,7 +3899,7 @@ function setupFrameHandling(page, forceDebug) {
             ]);
           }
         } catch (interactTimeoutErr) {
-          if (forceDebug) console.log(formatLogMessage('debug', `[interaction] Aborted after ${INTERACTION_HARD_TIMEOUT}ms: ${interactTimeoutErr.message}`));
+          if (forceDebug) console.log(formatLogMessage('debug', `${INTERACTION_TAG} Aborted after ${INTERACTION_HARD_TIMEOUT}ms: ${interactTimeoutErr.message}`));
         }
       })();
 
@@ -4021,7 +4034,7 @@ function setupFrameHandling(page, forceDebug) {
             const clearResult = await clearSiteData(page, currentUrl, forceDebug, true); // Quick mode for reloads
             if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data before reload #${i} for ${currentUrl}`));
           } catch (reloadClearErr) {
-            if (forceDebug) console.log(formatLogMessage('debug', `[clear_sitedata] Before reload failed for ${currentUrl}`));
+            if (forceDebug) console.log(formatLogMessage('debug', `${CLEAR_SITEDATA_TAG} Before reload failed for ${currentUrl}`));
           }
         }
         
@@ -4215,8 +4228,8 @@ function setupFrameHandling(page, forceDebug) {
         const proxyErr = proxyErrors.find(e => err.message.includes(e));
         if (proxyErr) {
           const info = getProxyInfo(siteConfig);
-          console.error(formatLogMessage('error', `[proxy] ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
-          console.error(formatLogMessage('error', `[proxy] Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
+          console.error(formatLogMessage('error', `${PROXY_TAG} ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
+          console.error(formatLogMessage('error', `${PROXY_TAG} Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
         }
       }
 
@@ -4288,12 +4301,12 @@ function setupFrameHandling(page, forceDebug) {
       if (siteConfig.vpn) {
         const vpnDown = wgDisconnect(siteConfig, forceDebug);
         if (vpnDown.tornDown && forceDebug) {
-          console.log(formatLogMessage('debug', `[vpn] WireGuard interface torn down for ${currentUrl}`));
+          console.log(formatLogMessage('debug', `${VPN_TAG} WireGuard interface torn down for ${currentUrl}`));
         }
       } else if (siteConfig.openvpn) {
         const ovpnDown = ovpnDisconnect(siteConfig, forceDebug);
         if (ovpnDown.tornDown && forceDebug) {
-          console.log(formatLogMessage('debug', `[vpn] OpenVPN connection torn down for ${currentUrl}`));
+          console.log(formatLogMessage('debug', `${VPN_TAG} OpenVPN connection torn down for ${currentUrl}`));
         }
       }
 
@@ -4644,8 +4657,8 @@ function setupFrameHandling(page, forceDebug) {
         const health = await testProxy(currentBatch[0].config, 5000);
         if (!health.reachable) {
           const info = getProxyInfo(currentBatch[0].config);
-          console.error(formatLogMessage('error', `[proxy] Unreachable: ${info} — ${health.error}`));
-          console.error(formatLogMessage('error', `[proxy] Skipping ${currentBatch.length} URL(s) in this batch`));
+          console.error(formatLogMessage('error', `${PROXY_TAG} Unreachable: ${info} — ${health.error}`));
+          console.error(formatLogMessage('error', `${PROXY_TAG} Skipping ${currentBatch.length} URL(s) in this batch`));
           const skipResults = currentBatch.map(task => ({
             success: false, url: task.url, rules: [],
             error: `Proxy unreachable: ${health.error}`
@@ -4817,7 +4830,7 @@ function setupFrameHandling(page, forceDebug) {
    ]);
  } catch (timeoutError) {
    if (timeoutError.message.includes('timeout')) {
-     console.log(formatLogMessage('error', `[TIMEOUT] Batch hung. Restarting browser.`));
+     console.log(formatLogMessage('error', `${TIMEOUT_TAG} Batch hung. Restarting browser.`));
      try {
        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false });
        if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
