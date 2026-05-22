@@ -4989,7 +4989,7 @@ function setupFrameHandling(page, forceDebug) {
    try {
      // Short-circuit queued URLs once any URL in this batch has triggered a
      // restart. Without this, the 80-URL batch in the user's hang trace
-     // would have to fail one-by-one at 120s each (~28 min total) before
+     // would have to fail one-by-one at 75s each (~25 min total) before
      // the boundary restart could fire. Now: first hang fires the flag,
      // remaining queued URLs return immediately, batch completes, restart.
      if (forceRestartFlag) {
@@ -5075,22 +5075,26 @@ function setupFrameHandling(page, forceDebug) {
      } catch {}
 
      // Per-URL timeout so a single hung processUrl can't block the batch
-     // forever. 120s is well past any legitimate slow page: Cloudflare
-     // adaptive max ~25s, nettools overall ~65s, navigation 15s.
+     // forever. 75s sits comfortably above the realistic legit-page ceiling
+     // (nav 35s + Cloudflare adaptive ~25s + interaction ~10s + network-idle
+     // wait ~10s ≈ ~70s), well short of the old 120s safety net. Cuts
+     // hang-recovery time roughly in half when an entire batch's URLs all
+     // hang and we're waiting on this timeout to advance processedUrlCount.
+     const PER_URL_TIMEOUT_MS = 75000;
      const processUrlPromise = processUrl(task.url, task.config, browser);
      let perUrlTimer;
      try {
        return await Promise.race([
          processUrlPromise,
          new Promise((_, reject) => {
-           perUrlTimer = setTimeout(() => reject(new Error('Per-URL timeout (120s)')), 120000);
+           perUrlTimer = setTimeout(() => reject(new Error('Per-URL timeout (75s)')), PER_URL_TIMEOUT_MS);
          })
        ]);
      } catch (err) {
-       if (err && err.message === 'Per-URL timeout (120s)') {
+       if (err && err.message === 'Per-URL timeout (75s)') {
          processUrlPromise.catch(() => {});
          forceRestartFlag = true;
-         return { url: task.url, rules: [], success: false, error: 'Per-URL timeout (120s)', needsImmediateRestart: true };
+         return { url: task.url, rules: [], success: false, error: 'Per-URL timeout (75s)', needsImmediateRestart: true };
        }
        throw err;
      } finally {
@@ -5260,7 +5264,7 @@ function setupFrameHandling(page, forceDebug) {
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
         urlsSinceLastCleanup = 0; // Reset counter
         // Reset the hang-detection flag too: this restart path is triggered
-        // by needsImmediateRestart errors, which the per-URL 120s timeout
+        // by needsImmediateRestart errors, which the per-URL 75s timeout
         // sets in lockstep with forceRestartFlag. Without this reset, the
         // hang-fallback restart below would fire a SECOND back-to-back
         // browser restart on the same batch boundary.
