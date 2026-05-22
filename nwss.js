@@ -4400,7 +4400,13 @@ function setupFrameHandling(page, forceDebug) {
  let lastProcessedCount = 0;
  let hangCheckCount = 0;
  let forceRestartFlag = false; // Flag to trigger restart on next iteration
- 
+
+ // Precomputed colored '[HANG CHECK]' subsystem prefix. formatLogMessage
+ // only colors the [severity] tag; the '[HANG CHECK]' substring was
+ // sitting plain inside the message string. Colored once at function
+ // entry so the interval callback doesn't re-colorize per tick.
+ const HANG_CHECK_TAG = messageColors.processing('[HANG CHECK]');
+
  const hangDetectionInterval = setInterval(() => {
    // Progress check, counter, and forceRestartFlag MUST run regardless of
    // debug mode — previously the entire body was gated on forceDebug, which
@@ -4411,10 +4417,10 @@ function setupFrameHandling(page, forceDebug) {
    if (processedUrlCount === lastProcessedCount) {
      hangCheckCount++;
      if (forceDebug) {
-       console.log(formatLogMessage('warn', `[HANG CHECK] No progress for ${hangCheckCount * 30}s`));
+       console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} No progress for ${hangCheckCount * 30}s`));
      }
      if (hangCheckCount >= 5) {
-       console.log(formatLogMessage('error', `[HANG CHECK] Hung for 2.5 minutes. Triggering emergency browser restart.`));
+       console.log(formatLogMessage('error', `${HANG_CHECK_TAG} Hung for 2.5 minutes. Triggering emergency browser restart.`));
        forceRestartFlag = true; // Set flag instead of exiting
        hangCheckCount = 0; // Reset counter for next cycle
      }
@@ -4427,8 +4433,8 @@ function setupFrameHandling(page, forceDebug) {
    if (forceDebug) {
      const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
      const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
-     console.log(formatLogMessage('debug', `[HANG CHECK] Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
-     console.log(formatLogMessage('debug', `[HANG CHECK] URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
+     console.log(formatLogMessage('debug', `${HANG_CHECK_TAG} Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
+     console.log(formatLogMessage('debug', `${HANG_CHECK_TAG} URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
    }
  }, 30000);
  // Don't keep the event loop alive solely for the hang-check interval — the
