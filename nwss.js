@@ -3042,7 +3042,8 @@ function setupFrameHandling(page, forceDebug) {
                   onDigResult: smartCache ? (domain, result, recordType) => smartCache.cacheNetTools(domain, 'dig', result, recordType) : undefined,
                   cachedWhois: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'whois') : null,
                   cachedDig: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'dig', digRecordType) : null,
-                  currentUrl, getRootDomain, siteConfig, dumpUrls, matchedUrlsLogFile, forceDebug, fs
+                  currentUrl, getRootDomain, siteConfig, dumpUrls, matchedUrlsLogFile, forceDebug, fs,
+                  ignoreDomains, matchesIgnoreDomain
                 });
                 setImmediate(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
               } else {
@@ -3406,9 +3407,11 @@ function setupFrameHandling(page, forceDebug) {
                 dumpUrls,
                 matchedUrlsLogFile,
                 forceDebug,
-                fs
+                fs,
+                ignoreDomains,
+                matchesIgnoreDomain
               });
-              
+
               // Execute nettools check asynchronously
               const originalDomain = fullSubdomain;
               setImmediate(() => netToolsHandler(reqDomain, originalDomain));
@@ -3519,9 +3522,11 @@ function setupFrameHandling(page, forceDebug) {
                dumpUrls,
                matchedUrlsLogFile,
                forceDebug,
-               fs
+               fs,
+               ignoreDomains,
+               matchesIgnoreDomain
              });
-             
+
              // Execute nettools check asynchronously
             const originalDomain = fullSubdomain; // Use full subdomain for nettools
             setImmediate(() => netToolsHandler(reqDomain, originalDomain));
