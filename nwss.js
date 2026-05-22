@@ -43,6 +43,11 @@ const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeo
 const { processResults } = require('./lib/post-processing');
 // Colorize various text when used
 const { messageColors, formatLogMessage } = require('./lib/colorize');
+// Precomputed colored '[SmartCache]' subsystem prefix — paired with the
+// same constant in lib/smart-cache.js so debug lines from both files
+// produce consistently colored output. formatLogMessage only colors the
+// [severity] tag; this constant colors the subsystem prefix.
+const SMART_CACHE_TAG = messageColors.processing('[SmartCache]');
 // Enhanced mouse interaction and page simulation
 const { performPageInteraction, createInteractionConfig, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
@@ -1109,7 +1114,7 @@ function safeMarkDomainProcessed(domain, context, metadata) {
       }
     } catch (cacheErr) {
       if (forceDebug) {
-        console.log(formatLogMessage('debug', `[SmartCache] Error marking domain: ${cacheErr.message}`));
+        console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Error marking domain: ${cacheErr.message}`));
       }
     }
   }
@@ -2730,7 +2735,7 @@ function setupFrameHandling(page, forceDebug) {
            const cachedSimilarity = smartCache.getCachedSimilarity(domain, existingDomain);
            if (cachedSimilarity !== null && cachedSimilarity >= similarityThreshold) {
              if (forceDebug) {
-               console.log(formatLogMessage('debug', `[SmartCache] Used cached similarity: ${domain} ~= ${existingDomain} (${cachedSimilarity}%)`));
+               console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Used cached similarity: ${domain} ~= ${existingDomain} (${cachedSimilarity}%)`));
              }
              return; // Skip adding this domain
            }
@@ -2754,7 +2759,7 @@ function setupFrameHandling(page, forceDebug) {
        
        if (smartCache && smartCache.shouldSkipDomain(domain, context)) {
          if (forceDebug) {
-           console.log(formatLogMessage('debug', `[SmartCache] Skipping cached domain: ${domain}`));
+           console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Skipping cached domain: ${domain}`));
          }
          return; // Skip adding this domain
        }
@@ -2809,7 +2814,7 @@ function setupFrameHandling(page, forceDebug) {
     }
   } catch (cacheErr) {
     if (forceDebug) {
-      console.log(formatLogMessage('debug', `[SmartCache] Error marking domain: ${cacheErr.message}`));
+      console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Error marking domain: ${cacheErr.message}`));
     }
   }
       }
@@ -3189,7 +3194,7 @@ function setupFrameHandling(page, forceDebug) {
              const cachedDig = smartCache ? smartCache.getCachedNetTools(reqDomain, 'dig', digRecordType) : null;
              
              if ((cachedWhois || cachedDig) && forceDebug) {
-               console.log(formatLogMessage('debug', `[SmartCache] Using cached nettools results for ${reqDomain}`));
+               console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Using cached nettools results for ${reqDomain}`));
              }
              
              // Create nettools handler with cache callbacks (if cache is enabled)
@@ -3285,7 +3290,7 @@ function setupFrameHandling(page, forceDebug) {
              }
              
              if (cachedContent && forceDebug) {
-               console.log(formatLogMessage('debug', `[SmartCache] Using cached response content for ${reqUrl.substring(0, 50)}...`));
+               console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Using cached response content for ${reqUrl.substring(0, 50)}...`));
                // Process cached content instead of fetching
              } else {
              try {
@@ -4568,7 +4573,7 @@ function setupFrameHandling(page, forceDebug) {
         if (requestCacheStats.enabled && requestCacheStats.size > 0) {
           const clearedCount = smartCache.clearRequestCache();
           if (forceDebug) {
-            console.log(formatLogMessage('debug', `[SmartCache] Cleared ${clearedCount} request cache entries during browser restart`));
+            console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Cleared ${clearedCount} request cache entries during browser restart`));
           }
         }
       }
@@ -4914,7 +4919,7 @@ function setupFrameHandling(page, forceDebug) {
         if (requestCacheStats.enabled && requestCacheStats.size > 0) {
           const clearedCount = smartCache.clearRequestCache();
           if (forceDebug) {
-            console.log(formatLogMessage('debug', `[SmartCache] Cleared ${clearedCount} request cache entries during emergency restart`));
+            console.log(formatLogMessage('debug', `${SMART_CACHE_TAG} Cleared ${clearedCount} request cache entries during emergency restart`));
           }
         }
       }
@@ -5017,7 +5022,7 @@ function setupFrameHandling(page, forceDebug) {
       }
       if (forceDebug) {
         console.log(formatLogMessage('debug', 
-          `[SmartCache] Request cache cleared after JSON scan completion (hit rate: ${requestCacheStats.hitRate})`
+          `${SMART_CACHE_TAG} Request cache cleared after JSON scan completion (hit rate: ${requestCacheStats.hitRate})`
         ));
       }
     }
