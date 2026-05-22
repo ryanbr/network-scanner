@@ -48,6 +48,9 @@ const { messageColors, formatLogMessage } = require('./lib/colorize');
 // produce consistently colored output. formatLogMessage only colors the
 // [severity] tag; this constant colors the subsystem prefix.
 const SMART_CACHE_TAG = messageColors.processing('[SmartCache]');
+// Precomputed colored '[CONCURRENCY]' subsystem prefix for batch-throughput
+// log lines (start/completed). Same cyan as the other monitoring tags.
+const CONCURRENCY_TAG = messageColors.processing('[CONCURRENCY]');
 // Enhanced mouse interaction and page simulation
 const { performPageInteraction, createInteractionConfig, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
@@ -4669,7 +4672,7 @@ function setupFrameHandling(page, forceDebug) {
     
     // Log start of concurrent processing for hang detection
     if (forceDebug) {
-      console.log(formatLogMessage('debug', `[CONCURRENCY] Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
+      console.log(formatLogMessage('debug', `${CONCURRENCY_TAG} Starting ${batchSize} concurrent tasks with limit ${MAX_CONCURRENT_SITES}`));
     }
     
  // Create tasks with timeout protection — skip domains that repeatedly timed out.
@@ -4857,7 +4860,7 @@ function setupFrameHandling(page, forceDebug) {
     
     // Log completion of concurrent processing
     if (forceDebug) {
-      console.log(formatLogMessage('debug', `[CONCURRENCY] Completed ${batchSize} concurrent tasks, ${batchResults.filter(r => r.success).length} successful`));
+      console.log(formatLogMessage('debug', `${CONCURRENCY_TAG} Completed ${batchSize} concurrent tasks, ${batchResults.filter(r => r.success).length} successful`));
     }
 
     // Enhanced error reporting for Puppeteer 23.x
