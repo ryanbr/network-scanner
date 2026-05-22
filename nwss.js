@@ -4704,8 +4704,13 @@ function setupFrameHandling(page, forceDebug) {
          }
          const dnsResolve = async () => {
            // resolve4 first; on no-IPv4 (ENODATA / ENOTFOUND) fall back to
-           // resolve6 so IPv6-only hosts aren't wrongly skipped. Only a
-           // failure of BOTH means the host is genuinely unresolvable.
+           // resolve6 so IPv6-only hosts aren't wrongly skipped. ANY OTHER
+           // error code (ESERVFAIL, ETIMEOUT, EREFUSED, etc.) propagates
+           // unchanged so the outer transient-retry path sees the real
+           // resolver code and the negative cache records the right reason.
+           // Previously a bare .catch swallowed everything and tried
+           // resolve6, which masked transient v4-side errors behind
+           // whatever resolve6 ended up reporting.
            // 2s timeout kept as a real safety net — with c-ares off the
            // threadpool it should now rarely fire.
            let timer;
@@ -4714,7 +4719,12 @@ function setupFrameHandling(page, forceDebug) {
                timer = setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs);
              });
              const resolveChain = dnsPromises.resolve4(taskDomain)
-               .catch(() => dnsPromises.resolve6(taskDomain));
+               .catch(err => {
+                 if (err && (err.code === 'ENODATA' || err.code === 'ENOTFOUND')) {
+                   return dnsPromises.resolve6(taskDomain);
+                 }
+                 throw err;
+               });
              await Promise.race([resolveChain, timeoutP]);
            } finally {
              if (timer) clearTimeout(timer);
