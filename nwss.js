@@ -4453,10 +4453,17 @@ function setupFrameHandling(page, forceDebug) {
     // IMPROVED: Only check health if we have indicators of problems
     let healthCheck = { shouldRestart: false, reason: null };
     const recentResults = results.slice(-8); // Check more results for better pattern detection
-    const recentFailureRate = recentResults.length > 0 ? 
-      recentResults.filter(r => !r.success).length / recentResults.length : 0;
+    // Single-pass count for both failure rate and critical-error tally —
+    // was two .filter(...).length calls allocating two intermediate arrays.
+    let recentFailures = 0, recentCritical = 0;
+    for (let i = 0; i < recentResults.length; i++) {
+      const r = recentResults[i];
+      if (!r.success) recentFailures++;
+      if (r.needsImmediateRestart) recentCritical++;
+    }
+    const recentFailureRate = recentResults.length > 0 ? recentFailures / recentResults.length : 0;
     const hasHighFailureRate = recentFailureRate > 0.75; // 75% failure threshold (more conservative)
-    const hasCriticalErrors = recentResults.filter(r => r.needsImmediateRestart).length > 2;
+    const hasCriticalErrors = recentCritical > 2;
     
     // Only run health checks when we have STRONG indicators of problems
     if (urlsSinceLastCleanup > 15 && (
@@ -4465,15 +4472,21 @@ function setupFrameHandling(page, forceDebug) {
         urlsSinceLastCleanup > RESOURCE_CLEANUP_INTERVAL * 0.9  // Very close to cleanup limit
     )) {
      try {
+       // Race the health check against a 30s timeout. Attach .catch on the
+       // health promise itself so that if the timeout wins, the still-running
+       // monitorBrowserHealth's eventual rejection doesn't surface as an
+       // unhandledRejection warning.
+       const healthPromise = monitorBrowserHealth(browser, {}, {
+         siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
+         totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
+         urlsSinceCleanup: urlsSinceLastCleanup,
+         cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
+         forceDebug,
+         silentMode
+       });
+       healthPromise.catch(() => {});
        healthCheck = await Promise.race([
-         monitorBrowserHealth(browser, {}, {
-           siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
-           totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
-           urlsSinceCleanup: urlsSinceLastCleanup,
-           cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
-           forceDebug,
-           silentMode
-         }),
+         healthPromise,
          new Promise((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 30000))
        ]);
      } catch (healthError) {
@@ -4744,9 +4757,17 @@ function setupFrameHandling(page, forceDebug) {
  
  let batchResults;
  try {
+   // Same orphan-promise pattern as the health-check race above: if the
+   // 10-min batch timeout wins, the still-running Promise.all keeps going
+   // until every batchTask settles. Each individual task is already wrapped
+   // in p-limit's error handling so unhandled rejections should not surface,
+   // but the .catch is free belt-and-braces against future refactors that
+   // change task internals.
+   const batchPromise = Promise.all(batchTasks);
+   batchPromise.catch(() => {});
    batchResults = await Promise.race([
-     Promise.all(batchTasks),
-     new Promise((_, reject) => 
+     batchPromise,
+     new Promise((_, reject) =>
        setTimeout(() => reject(new Error('Batch timeout')), 600000) // 10 min timeout
      )
    ]);
