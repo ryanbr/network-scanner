@@ -2964,17 +2964,49 @@ function setupFrameHandling(page, forceDebug) {
 
               // Regex match against the site's filterRegex list
               const resourceType = request.resourceType();
+              let regexMatched = false;
               for (const re of regexes) {
                 if (re.test(checkedUrl)) {
+                  regexMatched = true;
                   if (forceDebug) {
                     console.log(formatLogMessage('debug', `[popup depth=${depth}] Matched ${checkedRootDomain} via ${re} (${resourceType})`));
                   }
-                  // Delegate to addMatchedDomain so the same ignore_similar /
-                  // domain-cache / nettools / matchedDomains-shape logic the
-                  // main handler uses applies here too.
-                  addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
                   break;
                 }
+              }
+
+              if (!regexMatched) return;
+
+              // hasNetTools is the same flag the main handler uses (line ~2639).
+              // When the site config carries whois/dig terms, regex match is
+              // not sufficient by itself — the URL must ALSO pass the whois/
+              // dig validation before it counts. Mirrors the main handler's
+              // behavior so 'capture popup domains that match regex/dig/whois'
+              // means the same thing for popups as for the main page.
+              if (hasNetTools) {
+                const popupNetToolsHandler = createNetToolsHandler({
+                  whoisTerms, whoisOrTerms,
+                  processedWhoisDomains: globalProcessedWhoisDomains,
+                  processedDigDomains: globalProcessedDigDomains,
+                  whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
+                  whoisServer,
+                  whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+                  debugLogFile,
+                  digTerms, digOrTerms, digRecordType,
+                  digSubdomain: siteConfig.dig_subdomain === true,
+                  dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
+                  matchedDomains, addMatchedDomain,
+                  isDomainAlreadyDetected: isLocallyDetected,
+                  onWhoisResult: smartCache ? (domain, result) => smartCache.cacheNetTools(domain, 'whois', result) : undefined,
+                  onDigResult: smartCache ? (domain, result, recordType) => smartCache.cacheNetTools(domain, 'dig', result, recordType) : undefined,
+                  cachedWhois: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'whois') : null,
+                  cachedDig: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'dig', digRecordType) : null,
+                  currentUrl, getRootDomain, siteConfig, dumpUrls, matchedUrlsLogFile, forceDebug, fs
+                });
+                setImmediate(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
+              } else {
+                // No nettools required — regex match alone counts.
+                addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
               }
             } catch (_) { /* observation-only — never let a popup error escape */ }
           });
