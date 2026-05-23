@@ -2,6 +2,136 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Added
+- `blockDomainsByUrl` config key (top-level) — regex patterns mirroring `ignoreDomainsByUrl` but for active blocking. A matching request URL triggers Puppeteer `request.abort()` on the triggering request, the request's root domain, and all subsequent requests to that domain or its subdomains for the rest of the scan
+- Cloudflare aggregate stats accessible via `getAggregateStats({reset})` — returns `byOutcome`, `bySolveMethod`, `maxDurationMs`, `avgDurationMs`, `failures`, `timedOut` counts; bumped on every URL regardless of debug mode
+- Cloudflare per-stage timing breakdown in outcome lines: `q=Xms p=Xms c=Xms` (zero-stage suffixes omitted)
+- Production-level Cloudflare outcome logs: `warn` severity for `!overallSuccess || timedOut`, `info` for 5xx origin-error pages, debug-only on success
+- DNS pre-check positive-resolution shortcut — hosts already proven live by dig or whois within the cache TTL skip the c-ares pre-check via a `knownResolvedHostnames` index (also warmed at startup from disk-loaded dig/whois caches)
+- DNS pre-check skip summary now reports both NXDOMAIN-cache and positive-cache savings: `DNS pre-check skipped: N URL(s) via M unresolvable host(s), N URL(s) via M resolved host(s)`
+- `[blocked-stats]` per-pattern hit counters reported at scan end — surfaces which `blocked` patterns are doing work vs. which are stale
+- `disable_adblock` per-site config flag to escape global ad-blocking layers
+- `capture_popups` now runs whois/dig validation on matched popup URLs
+- `lib/spawn-async.js` shared async-spawn helper module — consolidates 4 near-identical Promise wrappers across curl/grep/searchstring
+
+### Fixed
+- **Security**: nettools shell-injection vector closed — `exec(string)` replaced with `execFile(cmd, args)` (no shell); config-supplied `whois_server` and `recordType` values can no longer execute commands via `$()`/backticks/etc.
+- Cloudflare `detectChallengeLoop` off-by-one bug — counted the current URL against itself, tripping `>= 2` threshold one iteration early
+- Cloudflare `detectChallengeLoop` threshold was unreachable with default `cloudflare_max_retries = 2`; new exact-match path catches reload-to-same-URL loops at attempt 2
+- Cloudflare outcome cache namespace collision — now stored in a separate Map (was sharing keys with the detection cache, getting evicted by detection-cache pressure)
+- `ignoreDomains` dynamic Set didn't cascade to subdomains — `ignoreDomainsByUrl` dynamic adds now apply parent-walk just like static config (e.g. dynamically-ignored `example.com` now also catches `cdn.example.com`)
+- `blocked` / `blockDomainsByUrl` / `ignoreDomainsByUrl` regex compile failures unified — was silent-drop for *byUrl and hard-throw for blocked; now all warn loudly with `[config] X pattern dropped (compile error): "..." -- regex msg` and continue
+- adblock pattern-cache key mismatch — anchored patterns (`||example.com`) were missing their own cache because get/set used different keys
+- grep AND-logic silently dropped non-matching rules; ENOBUFS silently truncated output on large pages
+- Cloudflare debug logs rendered literal `"undefined"` when detection short-circuited on non-HTTP pages (popup → about:blank case)
+- Outcome label `no_indicators` was lying when detection short-circuited on non-HTTP page URL; now correctly reports `skipped(non-http)`
+- Cloudflare `handleLegacyCheckbox` selector list aligned with detection — dropped orphan `.cf-turnstile input[type="checkbox"]` selector that had no matching detection entry
+- Cloudflare `safeWaitForNavigation` warn was unconditional; now `forceDebug`-gated (was spamming stderr on phishing-bypass nav failures in production)
+- Cloudflare `enhancedParallelChallengeDetection` had zero callers — deleted
+- `analyzeCloudflareChallenge` ignored managed-challenge signals (`.cf-managed-challenge`, `[data-cf-managed]`); now folded into `isChallengePresent`
+- `isChallengeCompleted` double-queried the same DOM element; cached once
+- Various correctness fixes across compare (inline hosts-comment stripping), curl, dry-run, flowproxy (error-path bug, cookie parsing), referrer, searchstring, validate_rules modules
+- 30+ dead exports trimmed across nettools (11), cloudflare (18 → then re-trimmed after refactor), adblock, adblock-rust, compare, dry-run
+
+### Improved
+- Dig/whois cache TTL 14h → 20h, capacity 1000 → 2000 entries each — covers overnight scan-then-rescan cadence without forcing fresh lookups
+- nettools disk-cache writes now atomic (tmp + rename) — surviving SIGKILL/OOM/power-loss mid-write no longer leaves a truncated file that wipes the cache on next load
+- Corrupt `.digcache`/`.whoiscache` files surface a `[dns-cache] X was unreadable (...); starting fresh` warn instead of silently resetting
+- `dnsCacheStats.freshDig`/`freshWhois` arrays capped at 1000 entries (FIFO) — no more unbounded growth on scans with thousands of unique fresh lookups
+- nettools `enableDiskCache` made idempotent (uses the previously-dead `diskCacheEnabled` flag); also warms the resolved-hostnames index from loaded entries
+- 200+ log sites unified through `formatLogMessage` + subsystem tags across cloudflare, adblock, adblock-rust, compare, ignore_similar, validate_rules, wireguard_vpn, dry-run, smart-cache, flowproxy, browserexit, redirect, post-processing, cdp, output, interaction modules
+- Cloudflare `runWithRetries` helper extracted — verification-challenge and phishing-warning retry harnesses collapsed from ~150 lines of duplication to thin hook-driven wrappers
+- Cloudflare 14-line debug block in `handleVerificationChallenge` collapsed to one structured line: `Challenge detected: turnstile=t js=f ... title="..."`
+- Cloudflare timing constants pruned (4 dead, 1 dead local var); `waitForTimeout(page, ms)` renamed to `fastTimeout(ms)`, unused `page` arg dropped
+- Cloudflare `attemptChallengeSolve` post-failure diagnostic + `JS challenge` body.textContent now capped (2KB) per poll — was materializing MB on content-heavy pages
+- adblock-rust: zero-copy deserialize, eager buffer release, FIFOCache rename for honest naming
+- `interaction.js` performance: ~350ms saved per no-click interaction, ~750ms per with-click
+- nwss per-URL timeout 120s → 75s for faster hang recovery
+- Popup handler honors both `ignoreDomainsByUrl` and `blockDomainsByUrl`
+- Early `ignoreDomains` gate added at main request handler — skips dig/whois/regex cycles on ignored hostnames
+- `--dns-cache` help text refreshed (was stale "3hr/4hr TTL"; now "20h TTL, 2000-entry cap each")
+
+## [2.0.66] - 2026-05-20
+
+### Added
+- DNS pre-check before `page.goto()` to skip unresolvable hosts fast — `--no-dns-precheck` to disable
+- In-process SOCKS5 auth relay so `socks5://user:pass@host` URLs work end-to-end
+- socks-relay handshake-phase watchdog so stalled clients can't sit forever
+- DNS pre-check EAI_AGAIN retry-once + FIFO cap on negative cache
+
+### Fixed
+- proxy.js: SOCKS auth false-success + SOCKS4 remote-DNS footgun
+- DNS pre-check was starving under scan load (`dns.lookup` queued behind Puppeteer's libuv threadpool); switched to `dns.resolve` (c-ares, no threadpool contention)
+- DNS pre-check: clear the timeout timer when lookup wins the race
+- Bumped `ws` override to >=8.20.1 (CVE-2026-45736, GHSA-58qx-3vcg-4xpx)
+
+### Improved
+- Neutralize Fullscreen API so sites can't hijack the window in `--headful` mode
+- socks-relay: disable Nagle + reject unoffered no-auth selection
+
+## [2.0.65] - 2026-05-15
+
+### Added
+- Cloudflare 5xx origin-error page detection — recognizes `<domain> | 5xx: <reason>` titles, marks as `error_page(522)` etc. instead of treating as a bypass target
+- Per-URL Cloudflare outcome summary log with cookie state + error-code signal
+- HTTP status + cf-ray captured at `page.goto()` time and threaded through to the Cloudflare outcome line
+- Surface Cloudflare 5xx origin-error page count in scan stats
+- HANG CHECK: per-URL progress counter + per-URL timeout + short-circuit queued URLs on restart flag
+- Surface adblock-rust engine stats in debug exit output
+
+### Fixed
+- HANG CHECK detection logic was debug-gated and never fired in production
+- `--validate-config` TDZ crash by moving block below config load
+- Scan-exit hang: cleanups now run on normal completion (was relying on `process.exit(0)` to skip them)
+- nettools: pending-lookup leak + signal-handler conflict with nwss.js cleanup
+- cloudflare: null-safe error categorization, unref'd cache timer, body.textContent reuse
+- Suppressed contradictory "no indicators / error page detected" log pair
+
+### Improved
+- cloudflare: precompile skip-proto regex, combine within-category selectors, rename outcome key
+- redirect.js: skip `detectCommonJSRedirects` in production, cap `outerHTML`, filter `chrome-error://`
+- Cloudflare module banner + "no indicators" log deduped (was firing once per URL)
+- npm update: adblock-rs, lru-cache, puppeteer patch bumps
+- Removed dead `scanner-script-org.js` prototype
+
+## [2.0.64] - 2026-05-02
+
+### Added
+- `--adblock-engine=rust` option using Brave's adblock-rs (faster on large filter lists; requires `npm install adblock-rs`)
+- Cache hygiene: atomic write, version key, 30-day prune, JSDoc
+
+### Fixed
+- adblock-rs always returning `no_match` (4th arg to `engine.check` was missing — caused silent total-block-failure)
+- Drop existsSync before readFileSync in cache load path (avoids redundant stat + TOCTOU)
+
+### Improved
+- Reduce wrapper memory: zero-copy deserialize, eager buffer release
+- Bumped `engines.node` floor to >=22
+- npm update: `p-limit` 4.0 → 7.x (ESM API unchanged), `lru-cache` 10.4 → 11.3 (drop-in), `globals` 16.5 → 17.6 (dev-dep), `eslint` patch bump
+- V8 micro-opts in adblock-rs hot path (null-proto resource-type map, bound engine.check)
+
+## [2.0.63] - 2026-04-25
+
+### Added
+- `ignoreDomainsByUrl` config (top-level) — regex patterns; if any request URL matches, the request's root domain is dynamically ignored for the rest of the scan
+- Redirect source and matching regex now included in `adblock_rules` log titles
+
+### Fixed
+- Positional `.json` arg was ignored by config loader (always defaulted to `config.json`)
+- ReferenceError on `allowedResourceTypes` in debug log
+- ReferenceError on `matchedRegexPattern` in even_blocked path
+
+### Improved
+- Convert resourceTypes filter to Set for O(1) lookups in hot path
+- Sample `config.json` filterRegex values updated
+
+## [2.0.62] - 2026-04-25
+
+### Fixed
+- TypeError in `SmartCache.getStats` when `requestCache` fails to initialize
+
 ## [2.0.61] - 2026-03-17
 
 ### Added
