@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [3.0.0] - 2026-05-23
 
 ### Changed
 - **Engines floor bumped**: `engines.node` from `>=22.0.0` to `>=22.12.0` to match Puppeteer 25's stable `require()`-of-ESM requirement. Anyone running on Node 22.0–22.11 will see an npm engine warning and should upgrade.
