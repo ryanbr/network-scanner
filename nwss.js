@@ -34,7 +34,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve } = require('./lib/nettools');
 // File compare
 const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // CDP functionality
@@ -5031,6 +5031,15 @@ function setupFrameHandling(page, forceDebug) {
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check (cached): ${taskDomain} — ${cached.error}`));
            return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
          }
+         // Positive-resolution shortcut: dig or whois has already proven this
+         // hostname live within their 14h cache TTL (populated either by an
+         // earlier URL this run or by --dns-cache disk-load from a prior run).
+         // Order matters -- negative cache (5min TTL, fresher data) wins
+         // first, then this 14h-TTL positive index, then the actual resolve.
+         if (domainKnownToResolve(taskDomain)) {
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check skipped (dig/whois cache confirms resolution): ${taskDomain}`));
+           // Fall through to navigation -- pre-check "passed" by proxy.
+         } else {
          const dnsResolve = async () => {
            // resolve4 first; on no-IPv4 (ENODATA / ENOTFOUND) fall back to
            // resolve6 so IPv6-only hosts aren't wrongly skipped. ANY OTHER
@@ -5081,6 +5090,7 @@ function setupFrameHandling(page, forceDebug) {
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
            return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
          }
+         } // close `else` from domainKnownToResolve shortcut above
        }
      } catch {}
 
