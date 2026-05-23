@@ -4,7 +4,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
 
 ## Project Structure
 
-- `nwss.js` — Main entry point (~5,600 lines). CLI args, URL processing, orchestration.
+- `nwss.js` — Main entry point (~5,800 lines). CLI args, URL processing, orchestration.
 - `config.json` — Default scan configuration (sites, filters, options).
 - `lib/` — 32 focused, single-purpose modules:
   - `fingerprint.js` — Bot detection evasion (device/GPU/timezone spoofing)
@@ -31,8 +31,8 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
 
 ## Tech Stack
 
-- **Node.js** >=22.0.0
-- **puppeteer** >=20.0.0 — Headless browser automation
+- **Node.js** >=22.12.0 (required for stable `require()` of ESM-only puppeteer 25)
+- **puppeteer** >=24.0.0 — Headless browser automation. Range permits both v24 and v25; dev lockfile is on v25.
 - **psl** — Public Suffix List for domain parsing (prefer this over hand-curated TLD lists)
 - **lru-cache** — LRU cache implementation
 - **p-limit** — Concurrency limiting (dynamically imported)
@@ -50,7 +50,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
 - Validate all external tool availability before use (grep, curl, whois, dig)
 - Use `forceDebug` flag for detailed logging, `silentMode` for minimal output
 - Use `Object.freeze` for constant configuration objects (TIMEOUTS, CACHE_LIMITS, CONCURRENCY_LIMITS)
-- Use `fastTimeout(ms)` helper instead of `node:timers/promises` for Puppeteer 22.x compatibility
+- Use `fastTimeout(ms)` helper instead of `node:timers/promises` for delays — project convention since the Puppeteer 22.x `page.waitForTimeout` removal, retained as the standard for all Promise-based sleeps
 - Prefer `runProcess` from `./lib/spawn-async` over bare `child_process.spawn`/`spawnSync` for new external-tool calls. It resolves (never rejects), enforces a SIGKILL timeout + stdout cap, and returns a uniform result object. `lib/wireguard_vpn.js` intentionally stays on `spawnSync` — startup-only validation paths where sync is simpler. Don't follow that exception unless you have the same justification.
 - Prefer `net.isIP()` over hand-rolled IPv4/IPv6 regexes for IP validation
 - For disk-cache writes use the atomic `tmpPath = path + '.' + pid + '.tmp'` + `fs.renameSync` pattern (see `lib/adblock-rust.js`) so a killed process never leaves a half-written cache file
