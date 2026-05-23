@@ -997,10 +997,11 @@ if (validateConfig) {
   }
 }
 
-// Pre-compile global blocked regexes ONCE (used in every processUrl call)
-const globalBlockedRegexes = Array.isArray(globalBlocked)
-  ? globalBlocked.map(pattern => new RegExp(pattern))
-  : [];
+// Pre-compile global blocked regexes ONCE (used in every processUrl call).
+// Was: bare `.map(pattern => new RegExp(pattern))` which hard-threw at
+// module load on a single bad pattern, killing scan startup. Helper now
+// warns + skips so the rest of the config can still run.
+const globalBlockedRegexes = compilePatternList('blocked (global)', globalBlocked);
 
 // Cache compiled regexes by pattern string — avoids recompiling same patterns across URLs
 const _compiledRegexCache = new Map();
@@ -1019,6 +1020,44 @@ function getCompiledRegexes(patterns) {
   return arr.map(p => getCompiledRegex(p));
 }
 
+/**
+ * Compile a list of regex pattern strings, WARNING loudly on any that fail
+ * compilation instead of:
+ *   (a) silently dropping them (old ignoreDomainsByUrl/blockDomainsByUrl
+ *       behavior) -- made debugging "why isn't my pattern matching?"
+ *       miserable, and
+ *   (b) hard-throwing at module load (old `blocked` behavior) -- one bad
+ *       pattern would kill the whole scan startup.
+ *
+ * Returns the array of successfully compiled regexes. Failed patterns are
+ * skipped with a single warn line per failure naming the config key + the
+ * source string + the regex error -- enough to find and fix without
+ * grepping through diff history.
+ *
+ * @param {string} configKey - name of the config key, for warn context
+ * @param {string[]} patterns - raw regex source strings
+ * @param {(p:string)=>RegExp} [compile] - compile fn (defaults to new RegExp)
+ * @returns {RegExp[]}
+ */
+function compilePatternList(configKey, patterns, compile = (p) => new RegExp(p)) {
+  if (!Array.isArray(patterns)) return [];
+  const out = [];
+  for (const p of patterns) {
+    try {
+      out.push(compile(p));
+    } catch (err) {
+      console.warn(formatLogMessage('warn', `[config] ${configKey} pattern dropped (compile error): ${JSON.stringify(p)} -- ${err.message}`));
+    }
+  }
+  return out;
+}
+
+// Per-pattern match counters for the `blocked` regex (site + global,
+// combined). Keyed by RegExp.source so the same pattern appearing in both
+// site and global lists rolls up into one row. Reported at scan end so
+// stale patterns that match zero requests are easy to spot and prune.
+const _blockedPatternHits = new Map();
+
 // Pre-split ignoreDomains into exact Set (O(1) lookup) and wildcard array
 const _ignoreDomainsExact = new Set();
 const _ignoreDomainsWildcard = [];
@@ -1030,12 +1069,9 @@ for (const pattern of ignoreDomains) {
   }
 }
 
-// Compile ignoreDomainsByUrl patterns once — match request URLs to dynamically ignore domains
-const _ignoreDomainsByUrlRegexes = Array.isArray(ignoreDomainsByUrl)
-  ? ignoreDomainsByUrl.map(p => {
-      try { return getCompiledRegex(p); } catch { return null; }
-    }).filter(r => r)
-  : [];
+// Compile ignoreDomainsByUrl patterns once — match request URLs to dynamically ignore domains.
+// Bad patterns warn (via compilePatternList) instead of silently dropping.
+const _ignoreDomainsByUrlRegexes = compilePatternList('ignoreDomainsByUrl', ignoreDomainsByUrl, getCompiledRegex);
 // Runtime Set of domains marked ignored by URL pattern matches — shared across all sites in this scan
 const _dynamicallyIgnoredDomains = new Set();
 
@@ -1047,11 +1083,7 @@ const _dynamicallyIgnoredDomains = new Set();
 // before reaching the network. The triggering request itself is also
 // aborted -- same "gate fires immediately after trigger" semantic the
 // ignoreDomainsByUrl path uses for the dynamic Set short-circuit.
-const _blockDomainsByUrlRegexes = Array.isArray(blockDomainsByUrl)
-  ? blockDomainsByUrl.map(p => {
-      try { return getCompiledRegex(p); } catch { return null; }
-    }).filter(r => r)
-  : [];
+const _blockDomainsByUrlRegexes = compilePatternList('blockDomainsByUrl', blockDomainsByUrl, getCompiledRegex);
 const _dynamicallyBlockedDomains = new Set();
 
 // Apply global configuration overrides with validation
@@ -2797,9 +2829,9 @@ function setupFrameHandling(page, forceDebug) {
     });
   }
 
-      const blockedRegexes = Array.isArray(siteConfig.blocked)
-        ? siteConfig.blocked.map(pattern => getCompiledRegex(pattern))
-        : [];
+      // Per-site blocked compile -- helper warns on bad patterns instead of
+      // throwing out of processUrl and breaking that site's scan.
+      const blockedRegexes = compilePatternList(`blocked (site: ${siteConfig.url || 'unknown'})`, siteConfig.blocked, getCompiledRegex);
 
       // Per-site escape hatch: disable_adblock turns off the two layers of
       // "global" ad-blocking for this URL — the adblock-rs filter-list engine
@@ -3344,8 +3376,16 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
         if (blockedMatchIndex !== -1) {
+          // Always track the hit (zero-cost on the un-debug path) so the
+          // scan-end summary can show which patterns are doing work vs.
+          // which are stale and ready to prune. Keyed by pattern.source --
+          // identical patterns from site + global lists roll up together,
+          // which matches how users think about them.
+          const matchedPatternSrc = allBlockedRegexes[blockedMatchIndex].source;
+          _blockedPatternHits.set(matchedPatternSrc, (_blockedPatternHits.get(matchedPatternSrc) || 0) + 1);
+
           if (forceDebug) {
-            const matchedPattern = allBlockedRegexes[blockedMatchIndex].source;
+            const matchedPattern = matchedPatternSrc;
             const patternSource = blockedMatchIndex < blockedRegexes.length ? 'site' : 'global';
             console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked]')}[${simplifiedCurrentUrl}] ${reqUrl} blocked by ${patternSource} pattern: ${matchedPattern}`));
             
@@ -5559,6 +5599,25 @@ function setupFrameHandling(page, forceDebug) {
          parts.push(`${dnsPositiveSkips} URL(s) via ${dnsPositiveSkippedHosts.size} resolved host(s)`);
        }
        console.log(formatLogMessage('debug', `DNS pre-check skipped: ${parts.join(', ')}`));
+     }
+     // Blocked-pattern hit stats. Surfaces which patterns are actually
+     // doing work this scan and (by absence) which are stale enough to
+     // prune from config. Top 10 by hit count to keep the log scannable
+     // on configs with dozens of patterns; full counts available via
+     // _blockedPatternHits if needed for tooling. Fires only when at
+     // least one pattern matched -- silent on scans with no blocks.
+     if (_blockedPatternHits.size > 0) {
+       let totalBlocks = 0;
+       for (const n of _blockedPatternHits.values()) totalBlocks += n;
+       console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked-stats]')} ${_blockedPatternHits.size} pattern(s) hit ${totalBlocks} time(s) total`));
+       const sorted = [..._blockedPatternHits.entries()].sort((a, b) => b[1] - a[1]);
+       const top = sorted.slice(0, 10);
+       for (const [pattern, hits] of top) {
+         console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked-stats]')}   ${hits.toString().padStart(6)} × ${pattern}`));
+       }
+       if (sorted.length > top.length) {
+         console.log(formatLogMessage('debug', `${messageColors.blocked('[blocked-stats]')}   ... and ${sorted.length - top.length} more pattern(s)`));
+       }
      }
      // Log smart cache statistics (if cache is enabled)
      // Adblock statistics
