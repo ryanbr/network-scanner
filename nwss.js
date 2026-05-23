@@ -3618,7 +3618,12 @@ function setupFrameHandling(page, forceDebug) {
                    forceDebug,
                    userAgent: curlUserAgent,
                    resourceType,
-                   hasSearchString: hasSearchString || hasSearchStringAnd,
+                   // Pass both flags separately — createGrepHandler now
+                   // applies AND logic when hasSearchStringAnd is set.
+                   // Previously OR'd into hasSearchString and the AND
+                   // patterns were silently dropped.
+                   hasSearchString,
+                   hasSearchStringAnd,
                    grepOptions: {
                      ignoreCase: true,
                      wholeWord: false,
