@@ -722,7 +722,7 @@ General Options:
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
-  --dns-cache                    Persist dig/whois results to disk between runs (3hr/4hr TTL)
+  --dns-cache                    Persist dig/whois results to disk between runs (14h TTL, 2000-entry cap each)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
                                  immediately (saves ~5-15s of Puppeteer time per dead host).
