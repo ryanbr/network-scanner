@@ -374,7 +374,9 @@ const dnsPrecheckTimeoutMs = 2000;
 const dnsNegativeCache = new Map(); // hostname -> { error, timestamp }
 const DNS_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DNS_NEGATIVE_CACHE_MAX = 1000;
-let dnsPrecheckSkips = 0;
+let dnsPrecheckSkips = 0;          // URLs skipped because hostname is NXDOMAIN-cached
+let dnsPositiveSkips = 0;          // URLs skipped because dig/whois cache proves resolution
+const dnsPositiveSkippedHosts = new Set(); // unique hostnames that triggered the positive skip path
 // c-ares transient codes — read-only, hoisted out of the per-task DNS
 // pre-check so we don't allocate a fresh Set per URL.
 const DNS_TRANSIENT_ERRORS = new Set(['ETIMEOUT', 'ESERVFAIL', 'EREFUSED', 'ECONNREFUSED']);
@@ -5037,6 +5039,8 @@ function setupFrameHandling(page, forceDebug) {
          // Order matters -- negative cache (5min TTL, fresher data) wins
          // first, then this 14h-TTL positive index, then the actual resolve.
          if (domainKnownToResolve(taskDomain)) {
+           dnsPositiveSkips++;
+           dnsPositiveSkippedHosts.add(taskDomain);
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check skipped (dig/whois cache confirms resolution): ${taskDomain}`));
            // Fall through to navigation -- pre-check "passed" by proxy.
          } else {
@@ -5426,8 +5430,23 @@ function setupFrameHandling(page, forceDebug) {
      if (cloudflareScanStats.errorPages > 0) {
        console.log(formatLogMessage('debug', `Cloudflare 5xx origin-error pages: ${cloudflareScanStats.errorPages} (no bypass possible — origin unreachable)`));
      }
-     if (dnsPrecheckEnabled && dnsPrecheckSkips > 0) {
-       console.log(formatLogMessage('debug', `DNS pre-check skipped: ${dnsPrecheckSkips} URL(s) via ${dnsNegativeCache.size} unresolvable host(s)`));
+     if (dnsPrecheckEnabled && (dnsPrecheckSkips > 0 || dnsPositiveSkips > 0)) {
+       // Two skip mechanisms, each with its own counter + unique-host count:
+       //   - dnsPrecheckSkips:  URLs short-circuited via the NXDOMAIN-cache
+       //     (dnsNegativeCache). Unique-host count = dnsNegativeCache.size.
+       //   - dnsPositiveSkips:  URLs short-circuited via dig/whois cache
+       //     proof of resolution (knownResolvedHostnames index in nettools).
+       //     Unique-host count = dnsPositiveSkippedHosts.size (this Set is
+       //     populated only on actual skip events, not on every Set add in
+       //     nettools, so it's a true per-scan visibility metric).
+       const parts = [];
+       if (dnsPrecheckSkips > 0) {
+         parts.push(`${dnsPrecheckSkips} URL(s) via ${dnsNegativeCache.size} unresolvable host(s)`);
+       }
+       if (dnsPositiveSkips > 0) {
+         parts.push(`${dnsPositiveSkips} URL(s) via ${dnsPositiveSkippedHosts.size} resolved host(s)`);
+       }
+       console.log(formatLogMessage('debug', `DNS pre-check skipped: ${parts.join(', ')}`));
      }
      // Log smart cache statistics (if cache is enabled)
      // Adblock statistics
