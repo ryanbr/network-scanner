@@ -722,7 +722,7 @@ General Options:
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
-  --dns-cache                    Persist dig/whois results to disk between runs (14h TTL, 2000-entry cap each)
+  --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
                                  immediately (saves ~5-15s of Puppeteer time per dead host).
@@ -5034,10 +5034,10 @@ function setupFrameHandling(page, forceDebug) {
            return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
          }
          // Positive-resolution shortcut: dig or whois has already proven this
-         // hostname live within their 14h cache TTL (populated either by an
+         // hostname live within their 20h cache TTL (populated either by an
          // earlier URL this run or by --dns-cache disk-load from a prior run).
          // Order matters -- negative cache (5min TTL, fresher data) wins
-         // first, then this 14h-TTL positive index, then the actual resolve.
+         // first, then this 20h-TTL positive index, then the actual resolve.
          if (domainKnownToResolve(taskDomain)) {
            dnsPositiveSkips++;
            dnsPositiveSkippedHosts.add(taskDomain);
