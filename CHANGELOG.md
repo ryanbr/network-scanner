@@ -4,6 +4,11 @@ All notable changes to the Network Scanner (nwss.js) project.
 
 ## [Unreleased]
 
+### Changed
+- **Engines floor bumped**: `engines.node` from `>=22.0.0` to `>=22.12.0` to match Puppeteer 25's stable `require()`-of-ESM requirement. Anyone running on Node 22.0–22.11 will see an npm engine warning and should upgrade.
+- **Puppeteer dependency floor bumped**: `puppeteer` and `puppeteer-core` from `>=20.0.0` to `>=24.0.0`. Range still permits both v24 and v25 — pick via `npm install puppeteer@24` or `npm install puppeteer@25` according to taste. Dev lockfile moved to `puppeteer@25.0.4`.
+- Audit confirms no breaking-change impact from Puppeteer 25's `executablePath`/`defaultArgs` Promise return — neither is called in this codebase. `require('puppeteer')` continues to work on the now-ESM-only package thanks to Node 22.12+'s stable require-of-ESM.
+
 ### Added
 - `blockDomainsByUrl` config key (top-level) — regex patterns mirroring `ignoreDomainsByUrl` but for active blocking. A matching request URL triggers Puppeteer `request.abort()` on the triggering request, the request's root domain, and all subsequent requests to that domain or its subdomains for the rest of the scan
 - Cloudflare aggregate stats accessible via `getAggregateStats({reset})` — returns `byOutcome`, `bySolveMethod`, `maxDurationMs`, `avgDurationMs`, `failures`, `timedOut` counts; bumped on every URL regardless of debug mode
