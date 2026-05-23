@@ -2323,7 +2323,7 @@ function setupFrameHandling(page, forceDebug) {
           let browserResponsive = false;
           try {
               // Check if browser is still connected before attempting health check
-              if (!browserInstance.isConnected()) {
+              if (!browserInstance.connected) {
                   throw new Error('Browser not connected');
               }
 
@@ -5713,7 +5713,7 @@ function setupFrameHandling(page, forceDebug) {
     console.log(messageColors.info('Browser kept open.') + ' Close the browser window or press Ctrl+C to exit.');
     const cleanup = async () => {
       try {
-        if (browser.isConnected()) await browser.close();
+        if (browser.connected) await browser.close();
       } catch {}
       process.exit(0);
     };
@@ -5731,7 +5731,7 @@ function setupFrameHandling(page, forceDebug) {
 
   // Enhanced final validation for Puppeteer 23.x
   try {
-    const isStillConnected = browser.isConnected();
+    const isStillConnected = browser.connected;
     if (forceDebug) console.log(formatLogMessage('debug', `Browser connection status before cleanup: ${isStillConnected}`));
   } catch (connErr) {
     if (forceDebug) console.log(formatLogMessage('debug', `Browser connection check failed: ${connErr.message}`));
