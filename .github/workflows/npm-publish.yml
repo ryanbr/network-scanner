@@ -48,9 +48,14 @@ jobs:
           fetch-depth: 0
 
       - name: Setup Node.js
+        # Must be >=22.12.0 to satisfy package.json engines.node and to
+        # support require()-of-ESM for puppeteer 25 (the project's
+        # current floor). Bumping below this re-introduces the EBADENGINE
+        # warnings seen on 20.x runners and will fail npm publish for
+        # consumers on the same Node version.
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
