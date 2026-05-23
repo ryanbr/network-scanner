@@ -1447,15 +1447,28 @@ function shouldBypassCacheForUrl(url, siteConfig) {
 // Cache compiled wildcard regexes to avoid recompilation on every request
 const _wildcardRegexCache = new Map();
 function matchesIgnoreDomain(domain, ignorePatterns) {
-  // Dynamically ignored domains (from URL pattern matches via ignoreDomainsByUrl)
-  if (_dynamicallyIgnoredDomains.has(domain)) return true;
-  // Fast path: exact match or suffix match against Set (O(n) for parts, but no regex)
-  if (_ignoreDomainsExact.size > 0) {
-    if (_ignoreDomainsExact.has(domain)) return true;
-    // Check parent domains: sub.ads.example.com → ads.example.com → example.com
+  // Both dynamic and static ignore lists are walked parent-by-parent so a
+  // subdomain of an ignored root inherits the ignore. Previously the
+  // dynamic check was exact-only, creating an asymmetry: a static-config
+  // `example.com` ignored cdn.example.com transitively, but a runtime
+  // ignoreDomainsByUrl match for the same root (stored as root via
+  // checkedRootDomain at line ~2993) did NOT cascade -- subdomains slipped
+  // through to dig/whois/regex despite the root being ignored. Now
+  // unified: parts split once, shared between both Set probes.
+  const hasDynamic = _dynamicallyIgnoredDomains.size > 0;
+  const hasExact   = _ignoreDomainsExact.size > 0;
+
+  if (hasDynamic || hasExact) {
+    // Exact-domain hit on either set wins early.
+    if (hasDynamic && _dynamicallyIgnoredDomains.has(domain)) return true;
+    if (hasExact   && _ignoreDomainsExact.has(domain))         return true;
+
+    // Parent-walk: sub.ads.example.com → ads.example.com → example.com
     const parts = domain.split('.');
     for (let i = 1; i < parts.length; i++) {
-      if (_ignoreDomainsExact.has(parts.slice(i).join('.'))) return true;
+      const parent = parts.slice(i).join('.');
+      if (hasDynamic && _dynamicallyIgnoredDomains.has(parent)) return true;
+      if (hasExact   && _ignoreDomainsExact.has(parent))         return true;
     }
   }
 
