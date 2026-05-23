@@ -49,6 +49,7 @@ const GHOST_CURSOR_TAG = messageColors.processing('[ghost-cursor]');
 const PROXY_TAG = messageColors.processing('[proxy]');
 const GREP_RESPONSE_TAG = messageColors.processing('[grep-response]');
 const IGNORE_DOMAINS_BY_URL_TAG = messageColors.processing('[ignoreDomainsByUrl]');
+const BLOCK_DOMAINS_BY_URL_TAG = messageColors.processing('[blockDomainsByUrl]');
 const IGNORE_SIMILAR_IGNORED_DOMAINS_TAG = messageColors.processing('[ignore_similar_ignored_domains]');
 const IGNORE_SIMILAR_TAG = messageColors.processing('[ignore_similar]');
 const CLEAR_SITEDATA_TAG = messageColors.processing('[clear_sitedata]');
@@ -736,6 +737,7 @@ Validation Options:
 Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
   ignoreDomainsByUrl: ["regex1", "regex2"]       Regex patterns; if any request URL matches, the request's root domain is ignored for the rest of the scan
+  blockDomainsByUrl: ["regex1", "regex2"]        Regex patterns; if any request URL matches, ALL subsequent requests on that root domain (and subdomains) are aborted via Puppeteer for the rest of the scan
   blocked: ["regex1", "regex2"]                   Global regex patterns to block requests (combined with per-site blocked)
   whois_server_mode: "random" or "cycle"      Default server selection mode for all sites (default: random)
   ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
@@ -905,6 +907,7 @@ const {
   sites = [], 
   ignoreDomains = [],
   ignoreDomainsByUrl = [],
+  blockDomainsByUrl = [],
   blocked: globalBlocked = [],
   whois_delay = 3000, 
   whois_server_mode = 'random', 
@@ -1035,6 +1038,21 @@ const _ignoreDomainsByUrlRegexes = Array.isArray(ignoreDomainsByUrl)
   : [];
 // Runtime Set of domains marked ignored by URL pattern matches — shared across all sites in this scan
 const _dynamicallyIgnoredDomains = new Set();
+
+// blockDomainsByUrl: symmetric to ignoreDomainsByUrl but for active
+// blocking via Puppeteer's request.abort(). When a request URL matches
+// one of these regex patterns, the request's root domain is added to
+// _dynamicallyBlockedDomains; subsequent requests on that domain (and
+// its subdomains, via parent-walk in matchesDynamicBlock) get aborted
+// before reaching the network. The triggering request itself is also
+// aborted -- same "gate fires immediately after trigger" semantic the
+// ignoreDomainsByUrl path uses for the dynamic Set short-circuit.
+const _blockDomainsByUrlRegexes = Array.isArray(blockDomainsByUrl)
+  ? blockDomainsByUrl.map(p => {
+      try { return getCompiledRegex(p); } catch { return null; }
+    }).filter(r => r)
+  : [];
+const _dynamicallyBlockedDomains = new Set();
 
 // Apply global configuration overrides with validation
 // Priority: Command line args > config.json > defaults
@@ -1446,6 +1464,35 @@ function shouldBypassCacheForUrl(url, siteConfig) {
 // ability to use wildcards in ignoreDomains
 // Cache compiled wildcard regexes to avoid recompilation on every request
 const _wildcardRegexCache = new Map();
+
+// Generic parent-walk helper: returns true if `domain` or any of its
+// parents (one label at a time, up to the TLD) is present in `set`.
+// Mirrors the static/dynamic parent-walk inside matchesIgnoreDomain but
+// usable against an arbitrary single Set -- consumed by
+// matchesDynamicBlock below. matchesIgnoreDomain keeps its inline
+// dual-Set probe so the hot path stays single-split, but new single-Set
+// consumers (block, future similar features) share this helper.
+function _domainOrParentInSet(set, domain) {
+  if (set.size === 0) return false;
+  if (set.has(domain)) return true;
+  const parts = domain.split('.');
+  for (let i = 1; i < parts.length; i++) {
+    if (set.has(parts.slice(i).join('.'))) return true;
+  }
+  return false;
+}
+
+/**
+ * Block-side counterpart to the ignore gate. Returns true if `domain`
+ * (or any of its parents) has been added to _dynamicallyBlockedDomains
+ * by an earlier blockDomainsByUrl pattern match. Called per-request to
+ * decide whether to request.abort() before the static blocked-regex
+ * check fires.
+ */
+function matchesDynamicBlock(domain) {
+  return _domainOrParentInSet(_dynamicallyBlockedDomains, domain);
+}
+
 function matchesIgnoreDomain(domain, ignorePatterns) {
   // Both dynamic and static ignore lists are walked parent-by-parent so a
   // subdomain of an ignored root inherits the ignore. Previously the
@@ -3012,10 +3059,33 @@ function setupFrameHandling(page, forceDebug) {
                 }
               }
 
+              // blockDomainsByUrl trigger — symmetric to ignoreDomainsByUrl
+              // above; populating the dynamic block Set from popup URLs lets
+              // tracker URLs surfaced via popup chains poison their root
+              // domain for the rest of the scan just like main-page hits do.
+              if (_blockDomainsByUrlRegexes.length > 0 && !_dynamicallyBlockedDomains.has(checkedRootDomain)) {
+                for (let i = 0; i < _blockDomainsByUrlRegexes.length; i++) {
+                  if (_blockDomainsByUrlRegexes[i].test(checkedUrl)) {
+                    _dynamicallyBlockedDomains.add(checkedRootDomain);
+                    if (forceDebug) {
+                      console.log(formatLogMessage('debug', `${BLOCK_DOMAINS_BY_URL_TAG} ${checkedRootDomain} blocked — matched pattern: ${_blockDomainsByUrlRegexes[i].source} (from popup depth=${depth})`));
+                    }
+                    break;
+                  }
+                }
+              }
+
               // ignoreDomains gate (global; matchesIgnoreDomain also short-
               // circuits on _dynamicallyIgnoredDomains, so a domain we just
               // added above will be caught here on the same request).
               if (matchesIgnoreDomain(checkedRootDomain, ignoreDomains)) return;
+
+              // Dynamic-block gate for popup requests — early return on
+              // matched root or any parent (parent-walk in
+              // matchesDynamicBlock). Popups don't have a request object
+              // available here, so we just return rather than abort; the
+              // popup-request observer treats this as "don't process".
+              if (matchesDynamicBlock(checkedRootDomain)) return;
 
               // First-party / third-party gate (popup belongs to the main URL's
               // domain group — its OWN URL doesn't redefine first-party).
@@ -3235,6 +3305,35 @@ function setupFrameHandling(page, forceDebug) {
               break;
             }
           }
+        }
+
+        // blockDomainsByUrl trigger — symmetric to ignoreDomainsByUrl above.
+        // If any pattern matches this URL, mark the root domain as blocked
+        // for the rest of the scan. The gate immediately below catches the
+        // triggering request itself + any future request on this domain or
+        // its subdomains (parent-walk via matchesDynamicBlock).
+        if (_blockDomainsByUrlRegexes.length > 0 && checkedRootDomain && !_dynamicallyBlockedDomains.has(checkedRootDomain)) {
+          for (let i = 0; i < _blockDomainsByUrlRegexes.length; i++) {
+            if (_blockDomainsByUrlRegexes[i].test(reqUrl)) {
+              _dynamicallyBlockedDomains.add(checkedRootDomain);
+              if (forceDebug) {
+                console.log(formatLogMessage('debug', `${BLOCK_DOMAINS_BY_URL_TAG} ${checkedRootDomain} blocked — matched pattern: ${_blockDomainsByUrlRegexes[i].source}`));
+              }
+              break;
+            }
+          }
+        }
+        // blockDomainsByUrl gate — abort if reqDomain (or a parent) is in
+        // the dynamic block Set. Fires BEFORE the static blocked-regex
+        // check so domain-based blocks short-circuit without paying the
+        // per-URL regex scan. Same abort reason as the static path so
+        // request.failure() observers see consistent metadata.
+        if (reqDomain && _dynamicallyBlockedDomains.size > 0 && matchesDynamicBlock(reqDomain)) {
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `${BLOCK_DOMAINS_BY_URL_TAG} aborting ${reqUrl} (domain ${reqDomain} dynamically blocked)`));
+          }
+          request.abort('blockedbyclient');
+          return;
         }
 
         let blockedMatchIndex = -1;
