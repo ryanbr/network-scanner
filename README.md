@@ -66,7 +66,8 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--use-puppeteer-core`      | Use `puppeteer-core` with system Chrome instead of bundled Chromium |
 | `--use-obscura`             | Connect to running Obscura CDP server (`ws://127.0.0.1:9222` or `OBSCURA_WS` env). Skips fingerprint injection — Obscura provides built-in stealth |
 | `--load-extension <path>`   | Load unpacked Chrome extension from directory (can be used multiple times) |
-| `--dns-cache`               | Persist dig/whois results to disk between runs (14hr TTL, `.digcache`/`.whoiscache`) |
+| `--dns-cache`               | Persist dig/whois results to disk between runs (20hr TTL, 2000-entry cap each, `.digcache`/`.whoiscache`). Disk writes are atomic (tmp + rename); corrupt cache files are detected on load with a `[dns-cache]` warn line and reset cleanly. |
+| `--no-dns-precheck`         | Disable per-URL DNS resolution check before page navigation. By default, hosts that dig/whois have already proven live (within the 20hr cache TTL) skip their c-ares pre-check via a positive-resolution index. |
 | `--block-ads=<files>`       | Block ads using EasyList format rules (comma-separated: `easylist.txt,easyprivacy.txt`) |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
 | `--remove-dupes`            | Remove duplicate domains from output (only with `-o`) |
@@ -100,6 +101,12 @@ Example:
   "ignoreDomains": [
     "googleapis.com",
     "googletagmanager.com"
+  ],
+  "ignoreDomainsByUrl": [
+    "\\/jwplayer\\/"
+  ],
+  "blockDomainsByUrl": [
+    "\\/tracker\\/"
   ],
   "sites": [
     {
@@ -461,9 +468,10 @@ These options go at the root level of your config.json:
 
 | Field                | Values | Default | Description |
 |:---------------------|:-------|:-------:|:------------|
-| `ignoreDomains`      | Array | - | Domains to completely ignore (supports wildcards like `*.ads.com`) |
-| `ignoreDomainsByUrl` | Array | - | Regex patterns; if a request URL matches, the request's root domain is dynamically ignored for the rest of the scan (e.g. `["\\/jwplayer\\/", "\\/build\\/assets\\/"]`) |
-| `blocked`            | Array | - | Global regex patterns to block requests (combined with per-site blocked) |
+| `ignoreDomains`      | Array | - | Domains to completely ignore (supports wildcards like `*.ads.com`). Subdomains of any listed entry are also ignored via parent-walk (e.g. `example.com` ignores `cdn.example.com` and `a.b.example.com`). |
+| `ignoreDomainsByUrl` | Array | - | Regex patterns; if a request URL matches, the request's root domain is dynamically ignored for the rest of the scan AND any subsequent request to its subdomains (cascade matches the static `ignoreDomains` semantic). Example: `["\\/jwplayer\\/", "\\/build\\/assets\\/"]` |
+| `blockDomainsByUrl` | Array | - | Symmetric to `ignoreDomainsByUrl` but for active blocking. Regex patterns; if a request URL matches, the request's root domain is added to a dynamic block set and ALL subsequent requests on that root (and subdomains) are aborted via Puppeteer for the rest of the scan. The triggering request itself is also aborted. Use when seeing a trigger URL is sufficient evidence the whole host is hostile. |
+| `blocked`            | Array | - | Global regex patterns to block requests (combined with per-site blocked). Patterns that fail to compile are warned about at scan start (`[config] blocked (global) pattern dropped (compile error): ...`) instead of crashing startup or silently disappearing. Per-pattern hit counts are reported at scan end via `[blocked-stats]` lines so stale patterns are easy to spot. |
 | `whois_server_mode`  | String | `"random"` | Default server selection mode for all sites |
 | `ignore_similar`     | Boolean | `true` | Ignore domains similar to already found domains |
 | `ignore_similar_threshold` | Integer | `80` | Similarity threshold percentage for ignore_similar |
