@@ -1,41 +1,165 @@
 name: Publish to NPM
+
 on:
   workflow_dispatch:
+    inputs:
+      version_bump:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - explicit
+      explicit_version:
+        description: 'Explicit version (required if version_bump = explicit, e.g. 3.0.0)'
+        required: false
+        default: ''
+      release_notes_source:
+        description: 'GitHub Release body source'
+        required: true
+        default: 'changelog'
+        type: choice
+        options:
+          - changelog
+          - manual
+      manual_release_notes:
+        description: 'Manual release notes (used if release_notes_source = manual; supports markdown)'
+        required: false
+        default: ''
+      prerelease:
+        description: 'Mark GitHub Release as pre-release'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      
+
     steps:
       - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
-          
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-          
+
       - run: npm ci
       - run: npm run lint
-      
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-      - name: Version and publish
+
+      - name: Validate explicit-version input
+        if: inputs.version_bump == 'explicit'
         run: |
-          npm version patch
-          npm publish
+          if [ -z "${{ inputs.explicit_version }}" ]; then
+            echo "::error::version_bump=explicit but explicit_version is empty"
+            exit 1
+          fi
+          # Loose semver shape check -- npm version will do the strict validation
+          if ! echo "${{ inputs.explicit_version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([+-].+)?$'; then
+            echo "::error::explicit_version '${{ inputs.explicit_version }}' does not look like semver (e.g. 3.0.0)"
+            exit 1
+          fi
+
+      - name: Bump version + promote CHANGELOG Unreleased
+        id: version
+        run: |
+          # Use --no-git-tag-version so we can fold the CHANGELOG promotion
+          # into the same commit + tag. Otherwise the auto-commit npm creates
+          # would not include the changelog edit (and amending afterwards
+          # would orphan the tag).
+          if [ "${{ inputs.version_bump }}" = "explicit" ]; then
+            npm version "${{ inputs.explicit_version }}" --no-git-tag-version
+          else
+            npm version "${{ inputs.version_bump }}" --no-git-tag-version
+          fi
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          DATE=$(date -u +%Y-%m-%d)
+          echo "date=$DATE" >> "$GITHUB_OUTPUT"
+
+          # If CHANGELOG has an [Unreleased] section, rename its header to
+          # the new version + today's date. Idempotent: skips if the header
+          # is already a versioned one (e.g. for re-runs after a failure).
+          if grep -q '^## \[Unreleased\]$' CHANGELOG.md; then
+            sed -i "s/^## \[Unreleased\]\$/## [$NEW_VERSION] - $DATE/" CHANGELOG.md
+            echo "Promoted [Unreleased] -> [$NEW_VERSION] - $DATE"
+          else
+            echo "::warning::No [Unreleased] section in CHANGELOG.md; skipping promotion. Release notes will use whatever already exists at [$NEW_VERSION]."
+          fi
+
+          # Single combined commit + tag so the tag points at HEAD containing
+          # BOTH the package.json bump AND the changelog promotion.
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "$NEW_VERSION"
+          git tag "v$NEW_VERSION"
+
+      - name: Extract release notes from CHANGELOG
+        id: changelog_notes
+        if: inputs.release_notes_source == 'changelog'
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.version }}"
+          # Pull every line between `## [VERSION]` and the next `## [` header.
+          # awk: flag=1 after the start line; flag=0 at the next ## [ header.
+          NOTES=$(awk -v v="$NEW_VERSION" '
+            $0 ~ "^## \\[" v "\\]" { flag = 1; next }
+            $0 ~ "^## \\["          { flag = 0 }
+            flag                    { print }
+          ' CHANGELOG.md)
+
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            echo "::warning::No CHANGELOG section found for $NEW_VERSION -- release body will be empty"
+          fi
+
+          # Multi-line GITHUB_OUTPUT requires a delimited heredoc
+          {
+            echo "notes<<NOTES_EOF"
+            echo "$NOTES"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Use manual release notes
+        id: manual_notes
+        if: inputs.release_notes_source == 'manual'
+        run: |
+          {
+            echo "notes<<NOTES_EOF"
+            echo "${{ inputs.manual_release_notes }}"
+            echo "NOTES_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        # Publish BEFORE pushing to GitHub: if npm rejects (auth/network/
+        # name-collision), nothing reaches GitHub and a re-run is clean.
+        run: npm publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          
-      - name: Push changes
+
+      - name: Push commits and tag
         run: git push --follow-tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          name: v${{ steps.version.outputs.version }}
+          body: ${{ inputs.release_notes_source == 'changelog' && steps.changelog_notes.outputs.notes || steps.manual_notes.outputs.notes }}
+          draft: false
+          prerelease: ${{ inputs.prerelease }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
