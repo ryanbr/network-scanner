@@ -790,4 +790,21 @@ your_username ALL=(root) NOPASSWD: /usr/bin/wg-quick, /usr/bin/wg
 - Ghost-cursor (`cursor_mode: "ghost"`) is optional — install with `npm i ghost-cursor`. Falls back to built-in mouse if not installed
 - Ghost-cursor duration defaults to `interact_duration` (or 2000ms), capped by the 15s hard timeout
 
+## Stealth Testing
+
+`scripts/test-stealth.js` is a developer-facing smoke test for the fingerprint spoofing stack in `lib/fingerprint.js`. It launches Puppeteer with the same `applyAllFingerprintSpoofing` call that `nwss.js` uses, navigates to public bot-detection pages, and reports what they concluded — pass/warn/fail counts from sannysoft, trust score from creepjs, raw navigator values from browserleaks.
+
+Use it to A/B a stealth change: run before the edit, run after, diff the output. Not a unit test — it doesn't assert; it reports.
+
+```bash
+node scripts/test-stealth.js                  # all targets, human-readable
+node scripts/test-stealth.js sannysoft        # one target only
+node scripts/test-stealth.js --no-spoof       # baseline (spoof disabled)
+node scripts/test-stealth.js --ua=firefox     # spoof a different UA family
+node scripts/test-stealth.js --format=json    # machine-readable for diff/jq
+node scripts/test-stealth.js --help           # full flag list
+```
+
+Set `PUPPETEER_NO_SANDBOX=1` when running as root (CI containers, some Docker setups). Off by default so local dev doesn't silently drop the Chromium sandbox.
+
 ---

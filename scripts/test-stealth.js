@@ -11,20 +11,29 @@
  * change. Run before and after a stealth-related commit to A/B the impact.
  *
  * Usage:
- *   node scripts/test-stealth.js                  # all targets
+ *   node scripts/test-stealth.js                  # all targets, human-readable
  *   node scripts/test-stealth.js sannysoft        # one target
  *   node scripts/test-stealth.js --headful        # show browser GUI
  *   node scripts/test-stealth.js --no-spoof       # baseline (no fingerprint protection)
  *   node scripts/test-stealth.js --ua=firefox     # change UA family
+ *   node scripts/test-stealth.js --format=json    # machine-readable output
+ *   node scripts/test-stealth.js --help           # show usage
+ *
+ * Environment:
+ *   PUPPETEER_NO_SANDBOX=1   pass --no-sandbox --disable-setuid-sandbox to
+ *                            Chromium. Required when running as root (CI
+ *                            containers, some Docker setups). Off by default
+ *                            so local dev doesn't silently drop the sandbox.
  *
  * Targets (extend by adding to TARGETS below):
- *   sannysoft     https://bot.sannysoft.com/         — classic fingerprint tests
- *   creepjs       https://abrahamjuliot.github.io/creepjs/  — modern fingerprint suite
- *   browserleaks  https://browserleaks.com/javascript        — JS env probe
+ *   sannysoft     https://bot.sannysoft.com/                  — classic fingerprint tests
+ *   creepjs       https://abrahamjuliot.github.io/creepjs/    — modern fingerprint suite
+ *   browserleaks  https://browserleaks.com/javascript         — JS env probe
  *
  * Output: one line per target with PASS / WARN / FAIL counts (where parseable),
  * plus a short summary of any explicit detection markers ("Bot detected",
- * "Headless", etc.) found in the page text.
+ * "Headless", etc.) found in the page text. With --format=json, emits a single
+ * JSON object suitable for piping to diff/jq for before/after comparison.
  *
  * This is a SMOKE test, not a unit test. It doesn't make assertions; it
  * reports what the page reports. Use the output to decide if a stealth
@@ -35,13 +44,23 @@
 
 const puppeteer = require('puppeteer');
 const path = require('path');
-const { applyAllFingerprintSpoofing } = require(path.resolve(__dirname, '..', 'lib', 'fingerprint'));
+const {
+  applyAllFingerprintSpoofing,
+  USER_AGENT_COLLECTIONS
+} = require(path.resolve(__dirname, '..', 'lib', 'fingerprint'));
 
 const args = process.argv.slice(2);
+const HELP = args.includes('--help') || args.includes('-h');
 const HEADFUL = args.includes('--headful');
 const NO_SPOOF = args.includes('--no-spoof');
 const UA_FLAG = (args.find(a => a.startsWith('--ua=')) || '').slice(5) || 'chrome';
-const filterTargets = args.filter(a => !a.startsWith('--'));
+const FORMAT = (args.find(a => a.startsWith('--format=')) || '').slice(9) || 'text';
+const filterTargets = args.filter(a => !a.startsWith('-'));
+// Anything starting with '-' is a flag claim; we validate the known set
+// below so typos like "-headful" or "--no_spoof" don't silently no-op.
+const flagArgs = args.filter(a => a.startsWith('-'));
+const KNOWN_FLAGS = new Set(['--headful', '--no-spoof', '--help', '-h']);
+const KNOWN_FLAG_PREFIXES = ['--ua=', '--format='];
 
 const TARGETS = [
   {
@@ -122,6 +141,23 @@ const TARGETS = [
   }
 ];
 
+function printHelp() {
+  console.log(`Usage: node scripts/test-stealth.js [options] [target...]
+
+Options:
+  --headful           launch with browser GUI visible
+  --no-spoof          baseline run — skip applyAllFingerprintSpoofing
+  --ua=<family>       UA family to spoof (default: chrome)
+                      valid: ${Array.from(USER_AGENT_COLLECTIONS.keys()).join(', ')}
+  --format=<fmt>      output format: text (default) | json
+  --help, -h          show this message
+
+Environment:
+  PUPPETEER_NO_SANDBOX=1   pass --no-sandbox to Chromium (required in some CI)
+
+Targets: ${TARGETS.map(t => t.name).join(', ')} (default: all)`);
+}
+
 function formatResult(target, result) {
   const lines = [`\n=== ${target.name} (${target.url}) ===`];
   if (target.name === 'sannysoft') {
@@ -143,6 +179,32 @@ function formatResult(target, result) {
 }
 
 (async () => {
+  if (HELP) { printHelp(); process.exit(0); }
+
+  // Validate --ua= against the canonical UA list. Previously a typo like
+  // --ua=opera silently fell through to applyUserAgentSpoofing's "unknown UA,
+  // no-op" path, producing run results that looked spoofed but weren't.
+  if (!USER_AGENT_COLLECTIONS.has(UA_FLAG)) {
+    console.error(`Invalid --ua=${UA_FLAG}. Valid: ${Array.from(USER_AGENT_COLLECTIONS.keys()).join(', ')}`);
+    process.exit(2);
+  }
+
+  if (!['text', 'json'].includes(FORMAT)) {
+    console.error(`Invalid --format=${FORMAT}. Valid: text, json`);
+    process.exit(2);
+  }
+
+  // Reject unrecognised flags before we launch a browser. Typos like
+  // "-headful" or "--no_spoof" used to silently no-op and produce a
+  // misleading "spoof on" run that wasn't actually spoofed.
+  const badFlags = flagArgs.filter(f =>
+    !KNOWN_FLAGS.has(f) && !KNOWN_FLAG_PREFIXES.some(p => f.startsWith(p))
+  );
+  if (badFlags.length) {
+    console.error(`Unrecognised flag(s): ${badFlags.join(', ')}. See --help.`);
+    process.exit(2);
+  }
+
   const targetsToRun = filterTargets.length
     ? TARGETS.filter(t => filterTargets.includes(t.name))
     : TARGETS;
@@ -152,21 +214,32 @@ function formatResult(target, result) {
     process.exit(2);
   }
 
-  console.log(`Stealth test config: spoof=${!NO_SPOOF}, ua=${UA_FLAG}, headful=${HEADFUL}`);
-  console.log(`Targets: ${targetsToRun.map(t => t.name).join(', ')}`);
+  if (FORMAT === 'text') {
+    console.log(`Stealth test config: spoof=${!NO_SPOOF}, ua=${UA_FLAG}, headful=${HEADFUL}`);
+    console.log(`Targets: ${targetsToRun.map(t => t.name).join(', ')}`);
+  }
+
+  // Sandbox is on by default; opt out via env var rather than baking
+  // --no-sandbox into the launch line. CI-as-root needs it; local dev should
+  // not silently drop the sandbox just because the test happens to start it.
+  const launchArgs = ['--disable-blink-features=AutomationControlled'];
+  if (process.env.PUPPETEER_NO_SANDBOX === '1') {
+    launchArgs.push('--no-sandbox', '--disable-setuid-sandbox');
+  }
 
   const browser = await puppeteer.launch({
     headless: !HEADFUL,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled'
-    ]
+    args: launchArgs
   });
+
+  // Collected for JSON output (and to support a future --fail-on-detection
+  // exit code without restructuring the loop).
+  const collected = [];
 
   try {
     for (const target of targetsToRun) {
       const page = await browser.newPage();
+      const started = Date.now();
       try {
         if (!NO_SPOOF) {
           // Apply the same spoofing stack nwss.js uses for real scans.
@@ -178,16 +251,29 @@ function formatResult(target, result) {
         }
         await page.goto(target.url, { waitUntil: 'networkidle2', timeout: 60000 });
         const result = await target.extract(page);
-        console.log(formatResult(target, result));
+        collected.push({ name: target.name, url: target.url, ok: true, durationMs: Date.now() - started, result });
+        if (FORMAT === 'text') console.log(formatResult(target, result));
       } catch (err) {
-        console.error(`\n=== ${target.name} (${target.url}) ===`);
-        console.error(`  ERROR: ${err.message}`);
+        collected.push({ name: target.name, url: target.url, ok: false, durationMs: Date.now() - started, error: err.message });
+        if (FORMAT === 'text') {
+          console.error(`\n=== ${target.name} (${target.url}) ===`);
+          console.error(`  ERROR: ${err.message}`);
+        }
       } finally {
         await page.close().catch(() => {});
       }
     }
   } finally {
     await browser.close().catch(() => {});
+  }
+
+  if (FORMAT === 'json') {
+    // Single object, not NDJSON — easier to diff with `jq` or `diff` between
+    // before/after runs. Schema is stable: top-level config + targets[].
+    process.stdout.write(JSON.stringify({
+      config: { spoof: !NO_SPOOF, ua: UA_FLAG, headful: HEADFUL, noSandbox: process.env.PUPPETEER_NO_SANDBOX === '1' },
+      targets: collected
+    }, null, 2) + '\n');
   }
 })().catch(err => {
   console.error('test-stealth fatal:', err);

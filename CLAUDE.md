@@ -66,6 +66,28 @@ node nwss.js --dry-run                # Preview without network calls
 node nwss.js --headful                # Launch with browser GUI
 ```
 
+## Stealth Testing
+
+`scripts/test-stealth.js` is a smoke-test harness for the fingerprint spoofing
+stack. Launches Puppeteer with `applyAllFingerprintSpoofing` applied (same
+call shape nwss.js uses), navigates to public bot-detection pages, and
+reports what they concluded. Use it to A/B a stealth change — run before the
+edit, run after, diff. Found 3 real bugs that 5 rounds of static review
+missed (PHANTOM/SELENIUM own-goal, PluginArray instanceof, Plugin toString).
+
+```bash
+node scripts/test-stealth.js                  # all targets, human-readable
+node scripts/test-stealth.js sannysoft        # one target
+node scripts/test-stealth.js --no-spoof       # baseline (spoof disabled)
+node scripts/test-stealth.js --format=json    # machine-readable for diff/jq
+node scripts/test-stealth.js --help           # full flag list
+```
+
+Set `PUPPETEER_NO_SANDBOX=1` when running as root (CI containers). Off by
+default so local dev doesn't silently drop the sandbox. The harness depends
+on `USER_AGENT_COLLECTIONS` exported from `lib/fingerprint.js` — keep that
+export in sync if the UA list changes.
+
 ## Files to Ignore
 
 - `node_modules/**`
