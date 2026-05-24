@@ -2,6 +2,35 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Security
+- **Proxy credentials redacted in debug logs** — `lib/proxy.js` `getProxyInfo()` now replaces the `username:password@` segment with `[redacted]@` before logging; `lib/socks-relay.js` strips the username from both the relay-startup log (`auth: [redacted]` / `no auth`) and the close log (regex-trims the `:username` suffix from the relay key, IPv6-safe). Prior output exposed SOCKS5 credentials to anyone the user shared a debug dump, screenshot, or support ticket with.
+
+### Added
+- `scripts/test-stealth.js` — stealth smoke-test harness. Launches Puppeteer with `applyAllFingerprintSpoofing` applied and reports what bot.sannysoft.com / creepjs / browserleaks.com/javascript concluded. Flags: `--headful`, `--no-spoof` (baseline), `--ua=<family>` (validated against `USER_AGENT_COLLECTIONS`), `--format=json` (stable schema for diff/jq A/B), `--help`, positional target filtering. `PUPPETEER_NO_SANDBOX=1` env-var opt-in for CI/root containers (sandbox is on by default). Caught 3 real bugs that 5 rounds of static review missed.
+- `USER_AGENT_COLLECTIONS` exported from `lib/fingerprint.js` — single source of truth for valid UA families, consumed by the test harness so the list isn't duplicated.
+
+### Fixed
+- **Puppeteer 25 compatibility** — `browser.isConnected()` (removed in Puppeteer 25 per [puppeteer#14910](https://github.com/puppeteer/puppeteer/pull/14910)) replaced with the `browser.connected` property at 14 call sites across 6 files. Compatible with both Puppeteer 24 and 25.
+- **Fingerprint own-goal — PHANTOM_PROPERTIES + SELENIUM_DRIVER** — spoofing did `delete window[prop]` followed by `defineProperty(prop, { get: () => undefined })`. The undefined-returning getters left the properties detectable via the `in` operator, defeating the delete. Now only deletes. (caught by `scripts/test-stealth.js` sannysoft)
+- **`navigator.plugins instanceof PluginArray` failed** — the spoof returned a plain array. Now `Object.setPrototypeOf(pluginsArray, PluginArray.prototype)` with fallback to `Object.getPrototypeOf(navigator.plugins)` for environments where `PluginArray` isn't a global.
+- **`navigator.plugins[0].toString() === '[object Plugin]'` failed** — plain plugin objects returned `[object Object]`. Each plugin now wraps via `Object.create(Plugin.prototype)` with `Symbol.toStringTag` fallback.
+- **`window.chrome` descriptor was a fingerprinting tell** — had `writable: false, enumerable: false`; real Chrome has both `true`. Aligned.
+- **`_fingerprintCache` cross-UA poisoning** — was keyed by domain only, so the same domain visited under a different UA returned cached values from the wrong OS. Now keyed by `${domain}|${userAgent}`.
+- **7 broken regex patterns** in the fingerprint error-suppression list — double backslashes (`\\.X`) parsed as literal-backslash + wildcard and never matched real errors. All 7 repaired.
+- Constructor `.name` / `.length` preserved through 5 wrapper sites (Error, Image, RTCPeerConnection, PointerEvent, WheelEvent) — wrapped ctors had `.name = ''` and `.length = 0`, a fingerprinting tell.
+- `Error` static properties (`stackTraceLimit`, `captureStackTrace`, `prepareStackTrace`) forward to the OriginalError via live getter/setter instead of snapshot-copy (snapshot diverged once any caller mutated the wrapped Error).
+- `navigator.connection` fallback returns a closure-captured stable object — was re-allocating per call, so object identity changed every access.
+- `chrome.runtime.getManifest()` derives version from the spoofed UA instead of returning a hardcoded older version.
+
+### Improved
+- `isBrowserDead` helper extracted — deduped 3 spoof sites that hand-rolled the same `isConnected`/`closed` check.
+- `preserveCtorIdentity` helper added — applied at the 5 wrapper sites above.
+- GPU pool seeded by `domain + ':gpu'` (was just `domain`) — keeps per-domain GPU stable while decoupling it from any other per-domain seed we might add.
+- 10 dead module-level exports trimmed from `lib/fingerprint.js`.
+- `safeDefinePropertyLocal` forces `configurable: true` instead of merging it from the caller's descriptor (caller-side opt-in was unreliable).
+
 ## [3.0.0] - 2026-05-23
 
 ### Changed
