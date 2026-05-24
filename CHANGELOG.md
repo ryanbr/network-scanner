@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [3.0.1] - 2026-05-24
 
 ### Security
 - **Proxy credentials redacted in debug logs** — `lib/proxy.js` `getProxyInfo()` now replaces the `username:password@` segment with `[redacted]@` before logging; `lib/socks-relay.js` strips the username from both the relay-startup log (`auth: [redacted]` / `no auth`) and the close log (regex-trims the `:username` suffix from the relay key, IPv6-safe). Prior output exposed SOCKS5 credentials to anyone the user shared a debug dump, screenshot, or support ticket with.
