@@ -162,7 +162,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
+          # Date suffix matches the convention used by the backfilled
+          # historical releases (v2.0.10..v2.0.66) so the Releases page
+          # shows the release date inline without a click-through.
+          name: v${{ steps.version.outputs.version }} (${{ steps.version.outputs.date }})
           body: ${{ inputs.release_notes_source == 'changelog' && steps.changelog_notes.outputs.notes || steps.manual_notes.outputs.notes }}
           draft: false
           prerelease: ${{ inputs.prerelease }}
