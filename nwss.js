@@ -1866,7 +1866,13 @@ function setupFrameHandling(page, forceDebug) {
         '--disable-domain-reliability', // No reliability monitor disk writes
         // PERFORMANCE: Disable non-essential Chrome features in a single flag
         // IMPORTANT: Chrome only reads the LAST --disable-features flag, so combine all into one
-        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding${disable_ad_tagging ? ',AdTagging' : ''}`,
+        // AccountConsistencyMirror + AccountConsistencyDice prevent the
+        // Chrome sign-in subsystem from initialising at startup. Combined
+        // with --disable-sync + --allow-browser-signin=false below, this
+        // suppresses the "Something went wrong when opening your profile"
+        // popup that fires in headful + --keep-open mode (temp userDataDir
+        // has no real profile, so the sync init errors out and pops up).
+        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding,AccountConsistencyMirror,AccountConsistencyDice${disable_ad_tagging ? ',AdTagging' : ''}`,
         '--disable-ipc-flooding-protection',
         '--aggressive-cache-discard',
         '--memory-pressure-off',
@@ -1876,7 +1882,16 @@ function setupFrameHandling(page, forceDebug) {
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        ...(keepBrowserOpen ? [] : ['--disable-sync']),
+        // --disable-sync is always-on (was previously dropped in --keep-open
+        // mode, which let the sync subsystem init against our temp
+        // userDataDir and pop the "Something went wrong when opening your
+        // profile" dialog). Inspection during --keep-open doesn't need
+        // sync; nothing in the scanner flow does.
+        '--disable-sync',
+        // Prevent the sign-in promo / account banner from appearing in
+        // headful sessions. Same family of fixes as --disable-sync and the
+        // AccountConsistency* features disabled above.
+        '--allow-browser-signin=false',
         '--mute-audio',
         '--disable-translate',
         '--window-size=1920,1080',
