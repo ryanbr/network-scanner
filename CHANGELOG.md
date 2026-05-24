@@ -2,6 +2,36 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Security
+- **Credentials redacted in `lib/proxy.js` 'Invalid proxy URL' warn** — `getProxyArgs` echoed the raw user-configured `proxyUrl` when parseProxyUrl returned null. For a URL like `socks5://user:pass@host:port` that fails parse (mistyped protocol, port out of range, etc.) this emitted the full credentials to stderr. Regex-strips the `user:pass@` segment (handles both scheme-prefixed and bare host:port forms) before logging. Same redaction policy as `getProxyInfo()` and the socks-relay logs already fixed in 3.0.1. The new port-range validation in this release expanded the trigger surface (one more parse-failure path) which made me find the leak.
+- **`applyProxyAuth` debug log redacted** — the `Auth set for USER@host:port` debug-only log line emitted the raw username. Now `[redacted]@host:port`. Same leak class as above, third site of the same kind.
+
+### Added
+- **`scripts/test-stealth.js --format=json`** (already shipped in 3.0.1, listed here only because the harness gained a real consumer via the next item) — `getRelayStats()` exposed from `lib/socks-relay.js`, returning `[{key, port, activeConnections, errors}]` per active relay (`key` with the username segment stripped for safety, IPv6-aware). Diagnostic surface for answering "is the proxy slow because the upstream is saturated or because the scan is opening too many parallel tunnels?" without enabling `forceDebug`.
+- **`delay_uncapped: true` site-config flag** — lifts the 2s post-networkidle delay cap; honors the configured `delay` up to half the per-URL timeout. Targets sites with setTimeout-deferred lazy ad/tracker loaders (weather.com / cbssports.com class) where late requests fire well past the standard window. Default behavior unchanged (still 2s) so fast sites stay fast.
+
+### Fixed
+- **Race: late-completing dig/whois validations were orphaned.** Per-URL async nettools handlers were scheduled via fire-and-forget `setImmediate(() => netToolsHandler(...))`; if the handler's full async chain (dig spawn + match check + addMatchedDomain) resolved AFTER the result snapshot ran, the addMatchedDomain call landed in a Set that was no longer referenced by any in-flight result. Most visible symptom: domains appearing in the end-of-scan "Fresh dig:" list with no corresponding rule in the output. Now tracked via `trackNetToolsHandler` (closure over per-URL `pendingNetTools[]`) and drained via `drainPendingNetTools()` with a 3s hard cap (`TIMEOUTS.NETTOOLS_DRAIN_TIMEOUT`), called BEFORE `formatRules` at all three snapshot sites (dry-run, success, partial-success/catch path). All three setImmediate call sites (popup observer, main request handler, secondary request handler) migrated.
+- **Race: scan-exit hang up to ~70s when a dig/whois lookup hung.** Two `setTimeout`s in `lib/nettools.js` (outer exec timer at line 405, overall 65s timer at 1234) were not `unref`'d, so a genuinely-hung lookup that survived the new 3s drain could hold the Node event loop alive for the remaining ~62s. Now both `unref`'d with defensive `typeof timer.unref === 'function'` guards. Natural-completion paths still `clearTimeout` on resolution, so this only affects the hung-process case.
+- **`parseProxyUrl` accepted ports > 65535.** Now rejects ports outside 1-65535 at parse time, surfacing misconfiguration immediately instead of passing an invalid value to Chromium and getting an opaque downstream error.
+- **`@version 1.1.0` JSDoc** in `lib/proxy.js` was stale (const said `1.2.0`). Aligned to 1.2.0; the const + export then went away in the export trim — see Improved.
+- **Site-config `delay` field was a no-op.** `nwss.js` per-URL handler hardcoded `const delayMs = DEFAULT_DELAY` regardless of `siteConfig.delay`. Now reads `siteConfig.delay || DEFAULT_DELAY`. Visible only with the new `delay_uncapped: true` flag (without it, the configured value is still capped at 2s as before).
+
+### Improved
+- **socks-relay handshake buffer cap** (`MAX_HANDSHAKE_BYTES = 4096`) on pre-piping growth. Prior code absorbed arbitrary bytes for the full 10s handshake watchdog window, letting a hostile/buggy local process pin memory by drip-feeding garbage. Sends a protocol-appropriate failure reply per phase before closing.
+- **socks-relay TCP keep-alive on upstream socket** (`setKeepAlive(true, 60000)`). Catches silently-dead upstreams (NAT timeout, mobile-tower drop, proxy crash without FIN/RST) in ~12 minutes (60s idle + kernel-default 9 × 75s probes) instead of the Linux default ~2 hours. Comment is honest about the kernel-default probe math — `60000` is `TCP_KEEPIDLE` only, not the full detection time.
+- **socks-relay auth-misconfig warn** — `ensureRelay` warns once per unique upstream when `username && !password`, since RFC 1929 auth will almost certainly fail. Surfaces the misconfiguration at relay start instead of as opaque per-request failures inside `forceDebug`-gated logs.
+- **socks-relay `server.maxConnections = 256` cap** per relay. Sheds excess Chromium connections at the TCP-accept layer (where HTTP retry handles them cleanly) instead of letting all N tunnels open to the upstream and have the provider silently drop past-quota ones — which looks to the scan like random missed requests.
+- **socks-relay per-relay error counter** tracked in `relayEntry.errors`, bumped on `SocksClient.createConnection` failures, surfaced via `getRelayStats()` as the `errors` field. Lets a post-scan reader see "X of N upstream connects failed" without re-running with forceDebug.
+- **socks-relay graceful drain on `closeAllRelays`** — `DRAIN_TIMEOUT_MS = 2000` window via `Promise.race(closePromise, drainTimeout)` for in-flight tunnels to flush their last response bytes into Chromium / Puppeteer. Stragglers past 2s get force-destroyed (server.close callback then fires immediately). SIGINT mid-scan no longer amputates in-flight responses, but a hung tunnel can't block exit beyond 2s. Drain timer `unref`'d so it doesn't hold the event loop open when the close-promise wins the race.
+- **`lib/proxy.js` exports trimmed 12 → 8** — removed `getModuleInfo`, `PROXY_MODULE_VERSION`, `SUPPORTED_PROTOCOLS`, `getConfiguredProxy` (zero external callers in each case, grep-verified). Mirrors the same trim already done in `lib/cloudflare.js`. `SUPPORTED_PROTOCOLS` and `getConfiguredProxy` stay as module-local since they're used internally.
+- **`lib/proxy.js` code cleanup** — two `require('./socks-relay')` calls consolidated into one destructured import (with `closeAllRelays` renamed inline), `net` module require hoisted from `testProxy()` body to top of file, `applyProxyAuth` JSDoc enumerates the 5 distinct `false` return scenarios (caller treating false as "auth failed" would incorrectly retry on the SOCKS5 → relay handles it case).
+
+### CI
+- **GitHub Release names now include date suffix** (`v3.0.2 (YYYY-MM-DD)`), matching the convention used by the backfilled v2.0.10 through v2.0.66 releases. Auto-applied via the already-computed `steps.version.outputs.date` in `softprops/action-gh-release`.
+
 ## [3.0.1] - 2026-05-24
 
 ### Security
