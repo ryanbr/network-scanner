@@ -109,6 +109,7 @@ const TIMEOUTS = Object.freeze({
   EMERGENCY_RESTART_DELAY: 2000,      // Delay after emergency browser restart
   BROWSER_STABILIZE_DELAY: 1000,      // Browser stabilization after restart
   CURL_HANDLER_DELAY: 3000,           // Wait for async curl operations
+  NETTOOLS_DRAIN_TIMEOUT: 3000,       // Hard cap for awaiting in-flight nettools (dig/whois) handlers before snapshot. Drains immediately if all complete; bounded so a hung dig can't block exit. Mirrors CURL_HANDLER_DELAY's role for curl/searchstring.
   PROTOCOL_TIMEOUT: 180000,           // Chrome DevTools Protocol timeout
   REDIRECT_JS_TIMEOUT: 5000           // JavaScript redirect detection timeout
 });
@@ -777,7 +778,8 @@ Redirect Handling Options:
   isBrave: true/false                          Spoof Brave browser detection
   userAgent: "chrome"|"chrome_mac"|"chrome_linux"|"firefox"|"firefox_mac"|"firefox_linux"|"safari"  Custom desktop User-Agent
   interact_intensity: "low"|"medium"|"high"     Interaction simulation intensity (default: medium)
-  delay: <milliseconds>                        Delay after load (default: 4000)
+  delay: <milliseconds>                        Delay after load (default: 6000, capped at 2000ms unless delay_uncapped: true)
+  delay_uncapped: true/false                   Honor 'delay' up to half the per-URL timeout instead of the 2s default cap. Use for sites with setTimeout-deferred lazy ad/tracker loaders that fire well past the standard post-networkidle window
   reload: <number>                             Reload page n times after load (default: 1)
   forcereload: true/false or ["domain1.com", "domain2.com"]  Force cache-clearing reload for all URLs or specific domains
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
@@ -2100,6 +2102,30 @@ function setupFrameHandling(page, forceDebug) {
     // Use Map to track domains and their resource types for --adblock-rules or --dry-run
     const matchedDomains = (adblockRulesMode || siteConfig.adblock_rules || dryRunMode) ? new Map() : new Set();
 
+    // Per-URL tracking of in-flight async nettools (dig/whois) handlers so we
+    // can drain them BEFORE snapshotting matchedDomains into the result. The
+    // previous fire-and-forget setImmediate pattern dropped late-completing
+    // matches (handler resolved after formatRules had already run). Each
+    // setImmediate-scheduled handler now registers a promise via
+    // trackNetToolsHandler; drainPendingNetTools() awaits all of them with a
+    // hard cap (TIMEOUTS.NETTOOLS_DRAIN_TIMEOUT) so a hung dig can't block.
+    const pendingNetTools = [];
+    const trackNetToolsHandler = (handlerFn) => {
+      pendingNetTools.push(new Promise((resolve) => {
+        setImmediate(async () => {
+          try { await handlerFn(); } catch (_) { /* handler logs its own errors */ }
+          finally { resolve(); }
+        });
+      }));
+    };
+    const drainPendingNetTools = async () => {
+      if (pendingNetTools.length === 0) return;
+      await Promise.race([
+        Promise.all(pendingNetTools),
+        fastTimeout(TIMEOUTS.NETTOOLS_DRAIN_TIMEOUT)
+      ]);
+    };
+
     // Local domain dedup scoped to THIS processUrl call only
     // Prevents cross-config contamination from the global domain cache
     const localDetectedDomains = new Set();
@@ -3167,7 +3193,7 @@ function setupFrameHandling(page, forceDebug) {
                   currentUrl, getRootDomain, siteConfig, dumpUrls, matchedUrlsLogFile, forceDebug, fs,
                   ignoreDomains, matchesIgnoreDomain
                 });
-                setImmediate(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
+                trackNetToolsHandler(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
               } else {
                 // No nettools required — regex match alone counts.
                 addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
@@ -3573,7 +3599,7 @@ function setupFrameHandling(page, forceDebug) {
 
               // Execute nettools check asynchronously
               const originalDomain = fullSubdomain;
-              setImmediate(() => netToolsHandler(reqDomain, originalDomain));
+              trackNetToolsHandler(() => netToolsHandler(reqDomain, originalDomain));
             }
             if (forceDebug) {
               console.log(formatLogMessage('debug', `${reqUrl} has nettools validation required - skipping immediate add`));
@@ -3688,7 +3714,7 @@ function setupFrameHandling(page, forceDebug) {
 
              // Execute nettools check asynchronously
             const originalDomain = fullSubdomain; // Use full subdomain for nettools
-            setImmediate(() => netToolsHandler(reqDomain, originalDomain));
+            trackNetToolsHandler(() => netToolsHandler(reqDomain, originalDomain));
 
              // Do NOT continue processing this request for immediate domain addition
              // The nettools handler is responsible for adding the domain if validation passes
@@ -4237,13 +4263,22 @@ function setupFrameHandling(page, forceDebug) {
       }
       }
 
-      const delayMs = DEFAULT_DELAY;
+      const delayMs = siteConfig.delay || DEFAULT_DELAY;
 
       // Optimized delays for Puppeteer 23.x performance
       const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
       const networkIdleTime = TIMEOUTS.NETWORK_IDLE;  // Balanced: 2s for reliable network detection
       const networkIdleTimeout = Math.min(timeout / 2, TIMEOUTS.NETWORK_IDLE_MAX);  // Balanced: 10s timeout
-      const actualDelay = Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);  // Balanced: 2s delay for stability
+      // Post-networkidle delay cap. Default (2s) keeps fast sites fast. Opt
+      // in with `delay_uncapped: true` to honor the configured `delay` up to
+      // half the per-URL timeout — useful for sites with setTimeout-deferred
+      // lazy ad/tracker loaders (weather.com, cbssports.com class) where
+      // late requests fire well past the 2s window. See also the per-URL
+      // drainPendingNetTools() which awaits in-flight dig/whois handlers
+      // before the matchedDomains snapshot regardless of this flag.
+      const actualDelay = siteConfig.delay_uncapped === true
+        ? Math.min(delayMs, Math.floor(timeout / 2))
+        : Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);
 
       // Build delay promise (networkIdle + delay + optional flowProxy delay)
       const delayPromise = (async () => {
@@ -4625,7 +4660,8 @@ function setupFrameHandling(page, forceDebug) {
         // Wait a moment for async nettools/searchstring operations to complete
         // Use fast timeout helper for Puppeteer 22.x compatibility
         await fastTimeout(TIMEOUTS.CURL_HANDLER_DELAY); // Wait for async operations
-        
+        await drainPendingNetTools(); // Bounded wait for in-flight dig/whois (race fix)
+
         return { url: currentUrl, rules: [], success: true, dryRun: true, matchCount: dryRunResult.matchCount };
       } else {
         // Format rules using the output module
@@ -4639,6 +4675,12 @@ function setupFrameHandling(page, forceDebug) {
         privoxyMode,
         piholeMode
       };
+        // Drain pending dig/whois handlers BEFORE snapshotting matchedDomains.
+        // Without this, late-completing async validations (request fired near
+        // end of the delay window, dig still in flight) get orphaned — their
+        // addMatchedDomain calls happen but the result has already been
+        // returned. Bounded by TIMEOUTS.NETTOOLS_DRAIN_TIMEOUT.
+        await drainPendingNetTools();
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         
         return {
@@ -4690,7 +4732,11 @@ function setupFrameHandling(page, forceDebug) {
       };
     }
          
-      // For other errors, preserve any matches we found before the error
+      // For other errors, preserve any matches we found before the error.
+      // Drain pending nettools first so dig/whois handlers scheduled DURING
+      // the failed navigation get a chance to add to matchedDomains before
+      // the partial-success snapshot — same race as the success path.
+      await drainPendingNetTools();
       if (matchedDomains && (matchedDomains.size > 0 || (matchedDomains instanceof Map && matchedDomains.size > 0))) {
         const globalOptions = {
           localhostIP,
