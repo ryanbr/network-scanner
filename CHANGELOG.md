@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [3.0.2] - 2026-05-25
 
 ### Security
 - **Credentials redacted in `lib/proxy.js` 'Invalid proxy URL' warn** — `getProxyArgs` echoed the raw user-configured `proxyUrl` when parseProxyUrl returned null. For a URL like `socks5://user:pass@host:port` that fails parse (mistyped protocol, port out of range, etc.) this emitted the full credentials to stderr. Regex-strips the `user:pass@` segment (handles both scheme-prefixed and bare host:port forms) before logging. Same redaction policy as `getProxyInfo()` and the socks-relay logs already fixed in 3.0.1. The new port-range validation in this release expanded the trigger surface (one more parse-failure path) which made me find the leak.
