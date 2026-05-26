@@ -28,6 +28,7 @@ All notable changes to the Network Scanner (nwss.js) project.
 ### Stealth hardening (toString masking)
 - **Added 8 session-introduced spoofs to `Function.prototype.toString` bulk masking** (`matchMedia`, `hasStorageAccess`, `getInstalledRelatedApps`, `userActivation` getter, `Notification.permission` getter, `screen.orientation` getter, `screenLeft`/`screenTop` getters). Without this, each new spoof was detectable via `.toString()` returning the override source instead of `[native code]`.
 - **Masked per-instance WebRTC `onicecandidate` getter/setter + `addEventListener` wrap.** The bulk-mask block only runs once at injection; per-RTCPeerConnection closures created inside the factory weren't covered. A site doing `Object.getOwnPropertyDescriptor(pc, 'onicecandidate').get.toString()` could see the spoof.
+- **Spoofed `navigator.productSub` + `vendorSub`** (UA-aware: `'20030107'` for Chrome/Safari/etc., `'20100101'` for Firefox; `vendorSub` always `''`). Companion legacy properties to the already-spoofed `vendor`/`product`. Common bot-detection signal since anti-detection libraries often spoof UA but forget these. `vendor`/`product` getters also added to the maskAsNative list (pre-existing oversight folded in).
 
 ### Fixed
 - **`validatePageForInjection`'s 1.5s race timer is now `unref`'d.** Last remaining Node-side `setTimeout` that wasn't unref'd; could hold the event loop alive for up to 1.5s past scan completion. All Node-side timers in `lib/fingerprint.js`, `lib/nettools.js`, and `lib/socks-relay.js` are now unref'd.
