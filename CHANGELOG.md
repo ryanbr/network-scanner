@@ -25,6 +25,16 @@ All notable changes to the Network Scanner (nwss.js) project.
 ### Security
 - **WebRTC public-IP leak closed** in `lib/fingerprint.js` (`applyFingerprintProtection`). The previous local-IP filter only stripped RFC1918 private ranges (`10.x / 172.16-31.x / 192.168.x`), missing `srflx` (STUN-discovered PUBLIC IP), `prflx`, `relay`, and host candidates with non-RFC1918 addresses (CGNAT 100.64.0.0/10, link-local IPv6, real public IPs on bare-metal hosts). STUN traffic is UDP and **bypasses the SOCKS5 proxy entirely**, so the leaked IP was the real host IP regardless of proxy config — visible to any page that listened on `icecandidate` events. Caught by `test-stealth.js creepjs` which surfaced the candidate string `122.252.155.250 typ srflx` and the corresponding `ip:` field in its WebRTC panel. Fix: strip EVERY ICE candidate; deliver only the null-candidate sentinel (end-of-gathering signal). Side note: the property-based `pc.onicecandidate = fn` setter was also broken (stored handler but never wired it up); now mirrors the same filter as the addEventListener path. Side effect: any site that REQUIRES functional WebRTC peer connections sees ICE gathering produce zero candidates. For nwss.js's scanning use case this is correct.
 
+### Stealth hardening (toString masking)
+- **Added 8 session-introduced spoofs to `Function.prototype.toString` bulk masking** (`matchMedia`, `hasStorageAccess`, `getInstalledRelatedApps`, `userActivation` getter, `Notification.permission` getter, `screen.orientation` getter, `screenLeft`/`screenTop` getters). Without this, each new spoof was detectable via `.toString()` returning the override source instead of `[native code]`.
+- **Masked per-instance WebRTC `onicecandidate` getter/setter + `addEventListener` wrap.** The bulk-mask block only runs once at injection; per-RTCPeerConnection closures created inside the factory weren't covered. A site doing `Object.getOwnPropertyDescriptor(pc, 'onicecandidate').get.toString()` could see the spoof.
+
+### Fixed
+- **`validatePageForInjection`'s 1.5s race timer is now `unref`'d.** Last remaining Node-side `setTimeout` that wasn't unref'd; could hold the event loop alive for up to 1.5s past scan completion. All Node-side timers in `lib/fingerprint.js`, `lib/nettools.js`, and `lib/socks-relay.js` are now unref'd.
+
+### Performance
+- **Canvas noise application now cached per `HTMLCanvasElement`** via WeakMap. `toDataURL` and `toBlob` previously did a `getImageData` + `putImageData` round-trip on every call (~500k iterations for size-capped canvases) to bake noise into the export. Now the round-trip runs once per canvas; subsequent exports skip it (the canvas backing store still has the noised pixels from the first call). Trade-off: animated canvases that redraw between exports won't have new content re-noised — acceptable for the common fingerprinter pattern (single probe → single toDataURL).
+
 ## [3.0.2] - 2026-05-25
 
 ### Security
