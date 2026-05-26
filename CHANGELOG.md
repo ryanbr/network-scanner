@@ -2,6 +2,16 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Improved
+- **3 DataDome-targeted gaps closed in `lib/fingerprint.js`** (inside `applyFingerprintProtection`, so gated on `siteConfig.fingerprint_protection` like every other spoof in that function):
+  - **`Notification.permission` static property** now returns `'default'` (real Chrome's no-granted-permission state). Previously only `Notification.requestPermission()` (the method) was patched; the static property still returned the headless default `'denied'` — a live tell for DataDome and similar detectors that read it directly.
+  - **`screen.orientation` interface** is now provided as a stable `{type: 'landscape-primary', angle: 0, addEventListener, lock, unlock, ...}` object when missing. Modern browsers always expose ScreenOrientation; absence is a "real browser?" check signal.
+  - **`<html>` `webdriver` DOM attribute** stripped if present. Defensive — modern Puppeteer with `ignoreDefaultArgs: ['--enable-automation']` doesn't emit this, but older driver setups do, and detectors check both `navigator.webdriver` AND `documentElement.getAttribute('webdriver')`. Appended to the existing `'webdriver removal'` safeExecute block so all webdriver cleanup lives together.
+
+  Targeted at sites running DataDome's `ct.captcha-delivery.com/i.js` (and similar fingerprint suites: PerimeterX, DataDome, Akamai Bot Manager). Most other surfaces these detectors probe were already covered (chrome.app/csi/loadTimes, userAgentData, maxTouchPoints, permissions.query, WebGL UNMASKED_VENDOR/RENDERER, etc.). Note: `scripts/test-stealth.js sannysoft` regression smoke shows one test cell moved from `passed` to `warn` after these additions (still 0 hard failures) — likely the new `screen.orientation` shape doesn't exactly match what sannysoft's specific orientation test expects, but the addition is net-positive for the targeted detectors. JS-only spoofing can't address TLS fingerprint, HTTP/2 fingerprint, IP reputation, or behavioural analysis — those still depend on proxy choice and `interact` / `ghost-cursor` config.
+
 ## [3.0.2] - 2026-05-25
 
 ### Security
