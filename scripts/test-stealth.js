@@ -194,7 +194,7 @@ function formatResult(target, result) {
     lines.push(`  engine chromium: ${result.isChromium ?? 'n/a'}`);
     lines.push(`  headless score: ${result.headlessPct ?? 'n/a'}%  (lower = better; 0% = real browser)`);
     lines.push(`  like-headless: ${result.likeHeadlessPct ?? 'n/a'}%  (lower = better; soft headless signals)`);
-    lines.push(`  stealth score: ${result.stealthPct ?? 'n/a'}%  (higher = better; spoof detection probes)`);
+    lines.push(`  stealth score: ${result.stealthPct ?? 'n/a'}%  (lower = better; % likely to be using anti-detection tooling)`);
     if (result.excerpt) lines.push(`  excerpt:\n    ${result.excerpt.split('\n').join('\n    ')}`);
   } else if (target.name === 'browserleaks') {
     for (const [k, v] of Object.entries(result)) {
