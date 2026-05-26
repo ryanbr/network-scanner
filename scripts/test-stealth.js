@@ -70,7 +70,7 @@ const TARGETS = [
     extract: async (page) => {
       return await page.evaluate(() => {
         const cells = Array.from(document.querySelectorAll('td'));
-        const out = { passed: 0, failed: 0, warn: 0, total: 0, failures: [] };
+        const out = { passed: 0, failed: 0, warn: 0, total: 0, failures: [], warnings: [] };
         for (const c of cells) {
           const cls = c.className || '';
           if (cls.includes('passed')) { out.passed++; out.total++; }
@@ -81,7 +81,14 @@ const TARGETS = [
             const label = row?.querySelector('td')?.textContent?.trim() || '?';
             out.failures.push(label);
           }
-          else if (cls.includes('warn')) { out.warn++; out.total++; }
+          else if (cls.includes('warn')) {
+            out.warn++; out.total++;
+            // Capture warn-row labels too so a soft regression (cell moving
+            // passed -> warn) is debuggable without --headful.
+            const row = c.closest('tr');
+            const label = row?.querySelector('td')?.textContent?.trim() || '?';
+            out.warnings.push(label);
+          }
         }
         return out;
       });
@@ -164,6 +171,9 @@ function formatResult(target, result) {
     lines.push(`  passed: ${result.passed} | warn: ${result.warn} | failed: ${result.failed} | total: ${result.total}`);
     if (result.failures.length) {
       lines.push(`  failure rows: ${result.failures.slice(0, 10).join(', ')}${result.failures.length > 10 ? ` ... +${result.failures.length - 10} more` : ''}`);
+    }
+    if (result.warnings && result.warnings.length) {
+      lines.push(`  warn rows: ${result.warnings.slice(0, 10).join(', ')}${result.warnings.length > 10 ? ` ... +${result.warnings.length - 10} more` : ''}`);
     }
   } else if (target.name === 'creepjs') {
     lines.push(`  trust score: ${result.trustScore ?? 'n/a'}%`);
