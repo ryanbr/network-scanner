@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [3.0.3] - 2026-05-26
 
 ### Improved
 - **3 DataDome-targeted gaps closed in `lib/fingerprint.js`** (inside `applyFingerprintProtection`, so gated on `siteConfig.fingerprint_protection` like every other spoof in that function):
