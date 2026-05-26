@@ -104,15 +104,29 @@ const TARGETS = [
       await new Promise(r => setTimeout(r, 8000)); // give async tests time
       return await page.evaluate(() => {
         const text = document.body.innerText || '';
-        // CreepJS reports a "Trust Score" percentage and individual signal entries.
-        const trustMatch = text.match(/Trust Score[:\s]+(\d+(?:\.\d+)?)\s*%/i);
-        const lieMatch = text.match(/lies[:\s]+(\d+)/i);
-        const botMatch = text.match(/bot[:\s]+(true|false)/i);
+        // CreepJS's actual stealth-relevant outputs are in a "Headless"
+        // section as percentages (e.g. "67% headless", "40% stealth",
+        // "44% like headless"), not the "Trust Score" label the old
+        // regex expected. Engine identification comes from "chromium:
+        // true/false" in the same block. Lower headless % and higher
+        // stealth % are better for evasion.
+        const headlessMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s+headless\b/i);
+        const likeHeadlessMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s+like\s+headless/i);
+        const stealthMatch = text.match(/(\d+(?:\.\d+)?)\s*%\s+stealth\b/i);
+        const chromiumMatch = text.match(/chromium\s*:\s*(true|false)/i);
+        // FP ID is CreepJS's stable fingerprint hash — same value across
+        // reloads if the fingerprint is unchanged; lets you A/B before
+        // and after a spoof change.
+        const fpIdMatch = text.match(/FP\s*ID\s*:?\s*([0-9a-f]{16,})/i);
         return {
-          trustScore: trustMatch ? parseFloat(trustMatch[1]) : null,
-          lies: lieMatch ? parseInt(lieMatch[1], 10) : null,
-          botDetected: botMatch ? botMatch[1] === 'true' : null,
-          excerpt: text.split('\n').slice(0, 15).join('\n').slice(0, 400)
+          headlessPct: headlessMatch ? parseFloat(headlessMatch[1]) : null,
+          likeHeadlessPct: likeHeadlessMatch ? parseFloat(likeHeadlessMatch[1]) : null,
+          stealthPct: stealthMatch ? parseFloat(stealthMatch[1]) : null,
+          isChromium: chromiumMatch ? chromiumMatch[1] === 'true' : null,
+          fpId: fpIdMatch ? fpIdMatch[1].slice(0, 16) : null,
+          // Larger excerpt (40 lines, up to 2KB) so a future UI rotation
+          // is debuggable from the output without --headful.
+          excerpt: text.split('\n').slice(0, 40).join('\n').slice(0, 2000)
         };
       });
     }
@@ -176,9 +190,11 @@ function formatResult(target, result) {
       lines.push(`  warn rows: ${result.warnings.slice(0, 10).join(', ')}${result.warnings.length > 10 ? ` ... +${result.warnings.length - 10} more` : ''}`);
     }
   } else if (target.name === 'creepjs') {
-    lines.push(`  trust score: ${result.trustScore ?? 'n/a'}%`);
-    lines.push(`  lies detected: ${result.lies ?? 'n/a'}`);
-    lines.push(`  bot flagged: ${result.botDetected ?? 'n/a'}`);
+    lines.push(`  FP ID: ${result.fpId ?? 'n/a'}  (stable across reloads if fingerprint unchanged)`);
+    lines.push(`  engine chromium: ${result.isChromium ?? 'n/a'}`);
+    lines.push(`  headless score: ${result.headlessPct ?? 'n/a'}%  (lower = better; 0% = real browser)`);
+    lines.push(`  like-headless: ${result.likeHeadlessPct ?? 'n/a'}%  (lower = better; soft headless signals)`);
+    lines.push(`  stealth score: ${result.stealthPct ?? 'n/a'}%  (higher = better; spoof detection probes)`);
     if (result.excerpt) lines.push(`  excerpt:\n    ${result.excerpt.split('\n').join('\n    ')}`);
   } else if (target.name === 'browserleaks') {
     for (const [k, v] of Object.entries(result)) {
