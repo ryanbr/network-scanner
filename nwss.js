@@ -4706,20 +4706,26 @@ function setupFrameHandling(page, forceDebug) {
       if (useForceReload && !reloadSuccess && !skipForceReload) {
         // Attempt force reload: disable cache, reload, re-enable cache
           try {
+          // Local race-with-timer helper — capture-and-clear pattern from
+          // cdp.js / interact (6ad36e7). Without this, every successful
+          // setCacheEnabled() left an 8s setTimeout running with closure
+          // on `reject` (2 leaks per reload cycle × N reload cycles).
+          const raceWithTimer = (promise, msg, ms) => {
+            let t;
+            return Promise.race([
+              promise,
+              new Promise((_, reject) => { t = setTimeout(() => reject(new Error(msg)), ms); })
+            ]).finally(() => clearTimeout(t));
+          };
+
           // Timeout-protected cache disable
-          await Promise.race([
-            page.setCacheEnabled(false),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache disable timeout')), 8000))
-          ]);
-          
+          await raceWithTimer(page.setCacheEnabled(false), 'Cache disable timeout', 8000);
+
             // Use networkidle2 for force reload to better detect when page is actually loaded
             await page.reload({ waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) });
-          
+
           // Timeout-protected cache enable
-          await Promise.race([
-            page.setCacheEnabled(true),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Cache enable timeout')), 8000))
-          ]);
+          await raceWithTimer(page.setCacheEnabled(true), 'Cache enable timeout', 8000);
          
           reloadSuccess = true;
             if (forceDebug) console.log(formatLogMessage('debug', `Force reload #${i} completed for ${currentUrl}`));
@@ -5239,10 +5245,18 @@ function setupFrameHandling(page, forceDebug) {
          silentMode
        });
        healthPromise.catch(() => {});
-       healthCheck = await Promise.race([
-         healthPromise,
-         new Promise((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 30000))
-       ]);
+       // Capture-and-clear timer pattern (cdp.js 0772ccd, interact 6ad36e7) —
+       // when healthPromise wins the race, the inline setTimeout would
+       // otherwise hold reject's closure for the full 30s grace window.
+       let healthTimer;
+       try {
+         healthCheck = await Promise.race([
+           healthPromise,
+           new Promise((_, reject) => { healthTimer = setTimeout(() => reject(new Error('Health check timeout')), 30000); })
+         ]);
+       } finally {
+         if (healthTimer) clearTimeout(healthTimer);
+       }
      } catch (healthError) {
        console.log(formatLogMessage('warn', `[HEALTH CHECK] Timeout, assuming restart needed`));
        healthCheck = { shouldRestart: true, reason: 'Health check timeout' };
