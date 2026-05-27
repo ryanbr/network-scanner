@@ -4649,7 +4649,14 @@ function setupFrameHandling(page, forceDebug) {
           // get the same click volume on every reload, not just the initial load.
           // Omit `clicks` when no override is set so performContentClicks uses
           // its CONTENT_CLICK.CLICK_COUNT default (single source of truth).
-          const postReloadClickOpts = { preDelay: 200, forceDebug };
+          // realistic forwards siteConfig.realistic_click; always passed
+          // (defaults to false) so realistic mode applies to every reload's
+          // clicks, not just the initial pass.
+          const postReloadClickOpts = {
+            preDelay: 200,
+            forceDebug,
+            realistic: !!interactionConfig.realistic
+          };
           if (interactionConfig.clickCount) postReloadClickOpts.clicks = interactionConfig.clickCount;
           await performContentClicks(page, postReloadClickOpts);
           if (forceDebug) console.log(formatLogMessage('debug', `Post-reload interaction completed for reload #${i}`));
