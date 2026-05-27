@@ -4480,6 +4480,21 @@ function setupFrameHandling(page, forceDebug) {
         updatePageUsage(page, true);
         const INTERACTION_HARD_TIMEOUT = 15000;
 
+        // Capture-and-clear timer wrapper — same fix as cdp.js (0772ccd) and
+        // the per-URL grace (577ad66). The 3 inline Promise.race patterns
+        // below previously used `new Promise((_, reject) => setTimeout(...))`
+        // without capturing the timer ID, leaking the 15s timer + closure on
+        // reject every time interaction completed inside the cap (the common
+        // case). Centralizing avoids the same mistake recurring across the
+        // ghost-cursor / fallback / standard branches.
+        const raceWithTimer = (promise, msg) => {
+          let t;
+          return Promise.race([
+            promise,
+            new Promise((_, reject) => { t = setTimeout(() => reject(new Error(msg)), INTERACTION_HARD_TIMEOUT); })
+          ]).finally(() => clearTimeout(t));
+        };
+
         // Check if ghost-cursor mode is enabled for this site
         const ghostConfig = resolveGhostCursorConfig(siteConfig, globalGhostCursor, forceDebug);
 
@@ -4489,60 +4504,51 @@ function setupFrameHandling(page, forceDebug) {
             if (forceDebug) console.log(formatLogMessage('debug', `${GHOST_CURSOR_TAG} Using ghost-cursor for ${currentUrl}`));
             const cursor = createGhostCursor(page, { forceDebug });
             if (cursor) {
-              await Promise.race([
-                (async () => {
-                  const viewport = page.viewport() || { width: 1200, height: 800 };
-                  const ghostDuration = ghostConfig.duration || 2000;
-                  const ghostStart = Date.now();
-                  const ghostTimeLeft = () => ghostDuration - (Date.now() - ghostStart);
+              await raceWithTimer((async () => {
+                const viewport = page.viewport() || { width: 1200, height: 800 };
+                const ghostDuration = ghostConfig.duration || 2000;
+                const ghostStart = Date.now();
+                const ghostTimeLeft = () => ghostDuration - (Date.now() - ghostStart);
 
-                  // Time-based Bezier mouse movements — runs for ghostDuration ms
-                  while (ghostTimeLeft() > 200) {
-                    const toX = Math.floor(Math.random() * (viewport.width - 100)) + 50;
-                    const toY = Math.floor(Math.random() * (viewport.height - 100)) + 50;
-                    await ghostMove(cursor, toX, toY, {
-                      moveSpeed: ghostConfig.moveSpeed,
-                      overshootThreshold: ghostConfig.overshootThreshold,
-                      forceDebug
-                    });
-                    if (ghostTimeLeft() > 100) {
-                      await new Promise(r => setTimeout(r, 25 + Math.random() * 75));
-                    }
+                // Time-based Bezier mouse movements — runs for ghostDuration ms
+                while (ghostTimeLeft() > 200) {
+                  const toX = Math.floor(Math.random() * (viewport.width - 100)) + 50;
+                  const toY = Math.floor(Math.random() * (viewport.height - 100)) + 50;
+                  await ghostMove(cursor, toX, toY, {
+                    moveSpeed: ghostConfig.moveSpeed,
+                    overshootThreshold: ghostConfig.overshootThreshold,
+                    forceDebug
+                  });
+                  if (ghostTimeLeft() > 100) {
+                    await new Promise(r => setTimeout(r, 25 + Math.random() * 75));
                   }
-                  if (ghostTimeLeft() > 100 && Math.random() < 0.3) {
-                    await ghostRandomMove(cursor, { forceDebug });
-                  }
-                  if (interactionConfig.includeElementClicks && ghostTimeLeft() > 100) {
-                    const clickX = Math.floor(viewport.width * 0.2 + Math.random() * viewport.width * 0.6);
-                    const clickY = Math.floor(viewport.height * 0.2 + Math.random() * viewport.height * 0.6);
-                    await ghostClick(cursor, { x: clickX, y: clickY }, {
-                      hesitate: ghostConfig.hesitate,
-                      forceDebug
-                    });
-                  }
-                  if (interactionConfig.includeScrolling) {
-                    await performPageInteraction(page, currentUrl, {
-                      ...interactionConfig,
-                      mouseMovements: 0,
-                      includeElementClicks: false
-                    }, forceDebug);
-                  }
-                })(),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('ghost-cursor interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
-              ]);
+                }
+                if (ghostTimeLeft() > 100 && Math.random() < 0.3) {
+                  await ghostRandomMove(cursor, { forceDebug });
+                }
+                if (interactionConfig.includeElementClicks && ghostTimeLeft() > 100) {
+                  const clickX = Math.floor(viewport.width * 0.2 + Math.random() * viewport.width * 0.6);
+                  const clickY = Math.floor(viewport.height * 0.2 + Math.random() * viewport.height * 0.6);
+                  await ghostClick(cursor, { x: clickX, y: clickY }, {
+                    hesitate: ghostConfig.hesitate,
+                    forceDebug
+                  });
+                }
+                if (interactionConfig.includeScrolling) {
+                  await performPageInteraction(page, currentUrl, {
+                    ...interactionConfig,
+                    mouseMovements: 0,
+                    includeElementClicks: false
+                  }, forceDebug);
+                }
+              })(), 'ghost-cursor interaction hard timeout');
             } else {
               if (forceDebug) console.log(formatLogMessage('debug', '[ghost-cursor] Falling back to built-in mouse'));
-              await Promise.race([
-                performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
-              ]);
+              await raceWithTimer(performPageInteraction(page, currentUrl, interactionConfig, forceDebug), 'interaction hard timeout');
             }
           } else {
             // Standard built-in mouse interaction
-            await Promise.race([
-              performPageInteraction(page, currentUrl, interactionConfig, forceDebug),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('interaction hard timeout')), INTERACTION_HARD_TIMEOUT))
-            ]);
+            await raceWithTimer(performPageInteraction(page, currentUrl, interactionConfig, forceDebug), 'interaction hard timeout');
           }
         } catch (interactTimeoutErr) {
           if (forceDebug) console.log(formatLogMessage('debug', `${INTERACTION_TAG} Aborted after ${INTERACTION_HARD_TIMEOUT}ms: ${interactTimeoutErr.message}`));
