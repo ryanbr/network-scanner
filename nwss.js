@@ -5501,26 +5501,57 @@ function setupFrameHandling(page, forceDebug) {
      } catch {}
 
      // Per-URL timeout so a single hung processUrl can't block the batch
-     // forever. 75s sits comfortably above the realistic legit-page ceiling
-     // (nav 35s + Cloudflare adaptive ~25s + interaction ~10s + network-idle
-     // wait ~10s ≈ ~70s), well short of the old 120s safety net. Cuts
-     // hang-recovery time roughly in half when an entire batch's URLs all
-     // hang and we're waiting on this timeout to advance processedUrlCount.
-     const PER_URL_TIMEOUT_MS = 75000;
+     // forever. Scaled from siteConfig.timeout + siteConfig.delay + 30s
+     // headroom (cloudflare / interaction / network-idle / drain), with a
+     // 75s floor for default-config sites (nav 35s + ~30s legit overhead).
+     // Hardcoded 75s previously fired DURING legitimate work for any config
+     // with custom timeout or large delay (e.g. popunder discovery configs
+     // with delay: 84000 blew past 75s and lost partial matches when the
+     // safety net aborted the orphan processUrl before its partial-match
+     // recovery branch ran).
+     const PER_URL_TIMEOUT_MS = Math.max(
+       75000,
+       (task.config.timeout || 35000) + (task.config.delay || 0) + 30000
+     );
+     // Grace period after primary timeout — gives the orphan a chance to
+     // finish drainPendingNetTools() and emit "Saving N rules despite page
+     // load failure" before we abandon its result. Drain typically completes
+     // in <1s with cached nettools; 8s is the safety ceiling.
+     const PER_URL_GRACE_MS = 8000;
+     const PER_URL_TIMEOUT_MARKER = 'PER_URL_TIMEOUT_FIRED';
+
      const processUrlPromise = processUrl(task.url, task.config, browser);
      let perUrlTimer;
      try {
        return await Promise.race([
          processUrlPromise,
          new Promise((_, reject) => {
-           perUrlTimer = setTimeout(() => reject(new Error('Per-URL timeout (75s)')), PER_URL_TIMEOUT_MS);
+           perUrlTimer = setTimeout(() => {
+             const e = new Error(`Per-URL timeout (${Math.round(PER_URL_TIMEOUT_MS / 1000)}s)`);
+             e.code = PER_URL_TIMEOUT_MARKER;
+             reject(e);
+           }, PER_URL_TIMEOUT_MS);
          })
        ]);
      } catch (err) {
-       if (err && err.message === 'Per-URL timeout (75s)') {
-         processUrlPromise.catch(() => {});
+       if (err && err.code === PER_URL_TIMEOUT_MARKER) {
          forceRestartFlag = true;
-         return { url: task.url, rules: [], success: false, error: 'Per-URL timeout (75s)', needsImmediateRestart: true };
+         // Grace period — wait briefly for the orphan to drain + recover
+         // partial matches. Browser is still in a bad state (we hit the
+         // primary ceiling) so the restart still fires either way; only the
+         // rules payload differs.
+         try {
+           const graceResult = await Promise.race([
+             processUrlPromise,
+             new Promise((_, reject) =>
+               setTimeout(() => reject(new Error('Grace timeout')), PER_URL_GRACE_MS)
+             )
+           ]);
+           return { ...graceResult, needsImmediateRestart: true };
+         } catch (_) {
+           processUrlPromise.catch(() => {});
+           return { url: task.url, rules: [], success: false, error: err.message, needsImmediateRestart: true };
+         }
        }
        throw err;
      } finally {
