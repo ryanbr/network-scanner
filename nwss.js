@@ -5540,17 +5540,26 @@ function setupFrameHandling(page, forceDebug) {
          // partial matches. Browser is still in a bad state (we hit the
          // primary ceiling) so the restart still fires either way; only the
          // rules payload differs.
+         let graceTimer;
          try {
            const graceResult = await Promise.race([
              processUrlPromise,
-             new Promise((_, reject) =>
-               setTimeout(() => reject(new Error('Grace timeout')), PER_URL_GRACE_MS)
-             )
+             new Promise((_, reject) => {
+               // Capture the timer ID so the finally can clear it when the
+               // orphan wins the race — otherwise the setTimeout keeps the
+               // event loop ref + closure on `reject` alive for the full
+               // grace window, even though the race already settled.
+               // Same leak pattern fixed in cdp.js (0772ccd) and
+               // clear_sitedata (780b443).
+               graceTimer = setTimeout(() => reject(new Error('Grace timeout')), PER_URL_GRACE_MS);
+             })
            ]);
            return { ...graceResult, needsImmediateRestart: true };
          } catch (_) {
            processUrlPromise.catch(() => {});
            return { url: task.url, rules: [], success: false, error: err.message, needsImmediateRestart: true };
+         } finally {
+           if (graceTimer) clearTimeout(graceTimer);
          }
        }
        throw err;
