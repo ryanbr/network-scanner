@@ -5567,8 +5567,14 @@ function setupFrameHandling(page, forceDebug) {
                graceTimer = setTimeout(() => reject(new Error('Grace timeout')), PER_URL_GRACE_MS);
              })
            ]);
+           if (forceDebug) {
+             console.log(formatLogMessage('debug', `Grace recovered ${(graceResult && graceResult.rules ? graceResult.rules.length : 0)} rules for ${task.url}`));
+           }
            return { ...graceResult, needsImmediateRestart: true };
          } catch (_) {
+           if (forceDebug) {
+             console.log(formatLogMessage('warn', `Grace timed out for ${task.url} — discarding orphan`));
+           }
            processUrlPromise.catch(() => {});
            return { url: task.url, rules: [], success: false, error: err.message, needsImmediateRestart: true };
          } finally {
