@@ -783,6 +783,7 @@ Redirect Handling Options:
   reload: <number>                             Reload page n times after load (default: 1)
   forcereload: true/false or ["domain1.com", "domain2.com"]  Force cache-clearing reload for all URLs or specific domains
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
+  clear_sitedata_full_on_reload: true/false    With clear_sitedata: true, also clear heavy storage (IndexedDB, WebSQL, service workers) between reloads — quick mode (cookies+cache+local/session storage) is the default for reloads; this flag promotes them to full clears at ~100-500ms latency cost per reload. Use for sites with IndexedDB/service-worker-backed session caps. Off by default.
   subDomains: 1/0                              Output full subdomains (default: 0)
   localhost: true/false                        Force localhost output (127.0.0.1)
   localhost_0_0_0_0: true/false                Force localhost output (0.0.0.0)
@@ -4626,8 +4627,16 @@ function setupFrameHandling(page, forceDebug) {
 
         if (siteConfig.clear_sitedata === true) {
           try {
-            const clearResult = await clearSiteData(page, currentUrl, forceDebug, true); // Quick mode for reloads
-            if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data before reload #${i} for ${currentUrl}`));
+            // Default reload clear is quick mode (cookies + cache +
+            // localStorage + sessionStorage — the storage layers where
+            // session-cap tracking typically lives). Sites that put their
+            // session cap in IndexedDB / WebSQL / service workers can opt
+            // into a full clear-per-reload via clear_sitedata_full_on_reload.
+            // Costs ~100-500ms extra per reload and may unregister a
+            // service worker the page depends on; off by default.
+            const fullOnReload = siteConfig.clear_sitedata_full_on_reload === true;
+            const clearResult = await clearSiteData(page, currentUrl, forceDebug, !fullOnReload);
+            if (forceDebug) console.log(formatLogMessage('debug', `Cleared site data (${fullOnReload ? 'full' : 'quick'}) before reload #${i} for ${currentUrl}`));
           } catch (reloadClearErr) {
             if (forceDebug) console.log(formatLogMessage('debug', `${CLEAR_SITEDATA_TAG} Before reload failed for ${currentUrl}`));
           }
