@@ -1865,6 +1865,22 @@ function setupFrameHandling(page, forceDebug) {
         '--log-level=3',               // Fatal errors only (suppresses verbose disk logging)
         '--no-service-autorun',        // No background service disk activity
         '--disable-domain-reliability', // No reliability monitor disk writes
+        // Suppress Chrome's auto-update subsystem entirely in headful runs.
+        // --disable-component-update + --disable-background-networking above
+        // stop the network-level check, but Chrome's UI can still show the
+        // "update available" toolbar dot / banner / "relaunch to update"
+        // modal if Chrome has cached state from a prior check by the same
+        // installed chrome binary. These two flags neutralize that:
+        //   simulate-outdated-no-au=DATE — the no-auto-update simulation
+        //     date is treated as DATE. Far-future date = never shows the
+        //     'outdated' UI. Quotes around the date required by Chrome.
+        //   check-for-update-interval=N — seconds between update checks.
+        //     31536000 = 1 year. Even if the above somehow gets bypassed,
+        //     the check itself won't fire within any reasonable scan.
+        // Both are no-ops in pure headless modes but matter in --headful
+        // and headless='new' (which can render UI in some cases).
+        '--simulate-outdated-no-au="Tue, 31 Dec 2099 23:59:59 GMT"',
+        '--check-for-update-interval=31536000',
         // PERFORMANCE: Disable non-essential Chrome features in a single flag
         // IMPORTANT: Chrome only reads the LAST --disable-features flag, so combine all into one
         // AccountConsistencyMirror + AccountConsistencyDice prevent the
@@ -1873,7 +1889,10 @@ function setupFrameHandling(page, forceDebug) {
         // suppresses the "Something went wrong when opening your profile"
         // popup that fires in headful + --keep-open mode (temp userDataDir
         // has no real profile, so the sync init errors out and pops up).
-        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding,AccountConsistencyMirror,AccountConsistencyDice${disable_ad_tagging ? ',AdTagging' : ''}`,
+        // ChromeWhatsNewUI suppresses the post-update "What's New" page
+        // that auto-opens in a new tab after Chrome installs an update —
+        // not popunder-relevant but visually noisy in headful sessions.
+        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding,AccountConsistencyMirror,AccountConsistencyDice,ChromeWhatsNewUI${disable_ad_tagging ? ',AdTagging' : ''}`,
         '--disable-ipc-flooding-protection',
         '--aggressive-cache-discard',
         '--memory-pressure-off',
