@@ -18,7 +18,7 @@ const { formatRules, handleOutput, getFormatDescription } = require('./lib/outpu
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
 // Rule validation
-const { validateRulesetFile, validateFullConfig, testDomainValidation, cleanRulesetFile } = require('./lib/validate_rules');
+const { validateRulesetFile, validateFullConfig, testDomainValidation, cleanRulesetFile, normalizeSiteConfig } = require('./lib/validate_rules');
 // CF Bypass
 const { 
   handleCloudflareProtection,
@@ -3072,10 +3072,22 @@ function setupFrameHandling(page, forceDebug) {
 
       if (capturePopups && forceDebug) {
         // One-time setup-time warning if the click prerequisite isn't met.
-        // Without clicks, capture_popups is a no-op in practice.
-        const hasClicks = siteConfig.interact === true && siteConfig.interact_clicks === true;
-        if (!hasClicks) {
-          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but interact_clicks is not — popups need user-gesture clicks to fire; expect no captures unless the page opens popups via in-page redirects`));
+        // Without clicks, capture_popups is a no-op in practice. Previous
+        // version blamed `interact_clicks` for both missing-piece cases — but
+        // when the actual culprit is `interact: 1` (number, silently disabled
+        // by strict `=== true`), the message misled users into debugging
+        // interact_clicks while the real problem was interact itself.
+        // (normalizeSiteConfig now coerces interact: 1 → true with a warning,
+        // so by the time we get here both should be booleans — but keep the
+        // diagnostic accurate for the truly-missing case.)
+        const interactOn = siteConfig.interact === true;
+        const clicksOn = siteConfig.interact_clicks === true;
+        if (!interactOn && !clicksOn) {
+          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but neither 'interact' nor 'interact_clicks' is — set BOTH to true to fire user-gesture clicks; without them, only popups opened via in-page redirects will capture`));
+        } else if (!interactOn) {
+          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but 'interact' is not — set interact: true to enable the interaction loop (interact_clicks is already set); without it, no fake clicks fire`));
+        } else if (!clicksOn) {
+          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but 'interact_clicks' is not — set interact_clicks: true to enable element-targeted clicks; without it, only random content-zone clicks fire and may miss overlay-based popunders`));
         }
         console.log(formatLogMessage('debug', `[popup] capture_popups settings: maxDepth=${POPUP_MAX_DEPTH}, windowMs=${POPUP_CAPTURE_WINDOW_MS}`));
       }
@@ -4914,8 +4926,20 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
-// Temporarily store the pLimit function  
+// Temporarily store the pLimit function
   const originalLimit = limit;
+
+  // Per-site config normalization (always runs, not gated on --validate-config).
+  // Catches typo'd keys (whois_terms vs whois) with "did you mean" suggestions
+  // and coerces boolean-like values (interact: 1 → interact: true) before any
+  // downstream strict-equality check silently treats them as disabled. Mutates
+  // each site in place so the rest of the scan sees normalized values.
+  // Reports via console.warn so messages surface even when --silent is set.
+  for (let i = 0; i < sites.length; i++) {
+    const { warnings, errors } = normalizeSiteConfig(sites[i], i);
+    for (const e of errors) console.warn(messageColors.error('⚠ ' + e));
+    for (const w of warnings) console.warn(messageColors.warn('⚠ [config] ' + w));
+  }
 
   // V8 Optimization: Calculate total URLs first to pre-allocate array
   let totalUrls = 0;
