@@ -3240,23 +3240,73 @@ function setupFrameHandling(page, forceDebug) {
         };
 
         // Thin wrapper around evaluatePopupUrl for the per-request listener.
+        // Under forceDebug also attach framenavigated + close listeners so
+        // the popup's full lifecycle (initial nav URL, mid-popup navigations,
+        // close) is visible in logs. Useful when investigating "I saw a
+        // Chrome window flash on screen" — the framenavigated transitions
+        // tell you what URL the window was showing and for how long.
         const attachPopupRequestCapture = (popupPage, depth) => {
           popupPage.on('request', (request) => {
             evaluatePopupUrl(request.url(), depth, request.resourceType());
           });
+          if (forceDebug) {
+            try {
+              popupPage.on('framenavigated', (frame) => {
+                try {
+                  if (frame !== popupPage.mainFrame()) return; // main frame only
+                  console.log(formatLogMessage('debug', `[popup depth=${depth}] framenavigated → ${frame.url() || 'about:blank'}`));
+                } catch (_) {}
+              });
+              popupPage.on('close', () => {
+                try {
+                  const lastUrl = popupPage.url ? popupPage.url() : '(unknown)';
+                  console.log(formatLogMessage('debug', `[popup depth=${depth}] close (last URL: ${lastUrl})`));
+                } catch (_) {}
+              });
+              popupPage.on('pageerror', (err) => {
+                try { console.log(formatLogMessage('debug', `[popup depth=${depth}] pageerror: ${err.message}`)); } catch (_) {}
+              });
+            } catch (_) { /* listener attach errors aren't fatal */ }
+          }
         };
 
         const onTargetCreated = async (target) => {
+          // Log EVERY targetcreated event under forceDebug so callers can see
+          // the full set of targets Chromium creates during the scan — not
+          // just the ones we capture. Useful when investigating "is that
+          // Chrome window I saw from a popup or from somewhere else?" — if
+          // a window opens but no targetcreated fires, it's not ours. If a
+          // targetcreated fires for type=page but we skip-and-explain below,
+          // the user knows why we ignored it. Captures the FULL diagnostic
+          // surface, no behavior change.
+          let _tType, _tUrl;
+          if (forceDebug) {
+            try {
+              _tType = target.type();
+              _tUrl = target.url() || 'about:blank';
+              console.log(formatLogMessage('debug', `[popup] targetcreated: type=${_tType} url=${_tUrl}`));
+            } catch (_) {}
+          }
+
           // Short-circuit guard: if finally has already started, don't attach
           // a request listener whose closure would outlive its meaningful
           // scope. The race is narrow (a targetcreated firing while we're
           // mid-await on target.page() across the finally boundary), but
           // without this guard a late popup could push matches into
           // matchedDomains for a URL whose processing has already returned.
-          if (urlFinished) return;
-          if (target.type() !== 'page') return;
+          if (urlFinished) {
+            if (forceDebug) console.log(formatLogMessage('debug', `[popup] skipping: urlFinished=true (scan teardown in progress)`));
+            return;
+          }
+          if (target.type() !== 'page') {
+            if (forceDebug) console.log(formatLogMessage('debug', `[popup] skipping: non-page target type=${target.type()} (workers/service-workers/etc are not popunder candidates)`));
+            return;
+          }
           const depth = getPopupDepth(target);
-          if (depth < 1) return; // Not one of ours
+          if (depth < 1) {
+            if (forceDebug) console.log(formatLogMessage('debug', `[popup] skipping: depth=0 — target not in opener chain of main page (likely a new browser tab opened independently, not a popunder from our scan)`));
+            return; // Not one of ours
+          }
           if (depth > POPUP_MAX_DEPTH) {
             if (forceDebug) {
               console.log(formatLogMessage('debug', `[popup] Skipping depth-${depth} popup (max=${POPUP_MAX_DEPTH}): ${target.url() || 'about:blank'}`));
@@ -3266,7 +3316,10 @@ function setupFrameHandling(page, forceDebug) {
 
           let popupPage;
           try { popupPage = await target.page(); } catch (_) { return; }
-          if (!popupPage) return;
+          if (!popupPage) {
+            if (forceDebug) console.log(formatLogMessage('debug', `[popup depth=${depth}] target.page() returned null — popup not accessible as a Page object`));
+            return;
+          }
           // Re-check after the await — the per-URL finally may have flipped
           // the flag while target.page() was resolving.
           if (urlFinished) {
@@ -3276,6 +3329,15 @@ function setupFrameHandling(page, forceDebug) {
 
           if (forceDebug) {
             console.log(formatLogMessage('debug', `[popup depth=${depth}] Capturing popup: ${target.url() || 'about:blank'}`));
+            // Window dimensions are useful for the "is the popup visible on
+            // my screen?" question — a popup with non-zero viewport in a
+            // headless=new launch shouldn't be visible but on some display
+            // servers (WSLg, X11) it can briefly flash on screen. Log the
+            // viewport so callers can correlate with what they saw.
+            try {
+              const vp = popupPage.viewport();
+              if (vp) console.log(formatLogMessage('debug', `[popup depth=${depth}] viewport: ${vp.width}x${vp.height}`));
+            } catch (_) {}
           }
 
           // Evaluate the popup's own navigation URL against the same filter
