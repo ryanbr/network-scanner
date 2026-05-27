@@ -5501,17 +5501,24 @@ function setupFrameHandling(page, forceDebug) {
      } catch {}
 
      // Per-URL timeout so a single hung processUrl can't block the batch
-     // forever. Scaled from siteConfig.timeout + siteConfig.delay + 30s
-     // headroom (cloudflare / interaction / network-idle / drain), with a
-     // 75s floor for default-config sites (nav 35s + ~30s legit overhead).
-     // Hardcoded 75s previously fired DURING legitimate work for any config
-     // with custom timeout or large delay (e.g. popunder discovery configs
-     // with delay: 84000 blew past 75s and lost partial matches when the
-     // safety net aborted the orphan processUrl before its partial-match
-     // recovery branch ran).
+     // forever. Scaled from siteConfig.timeout + (delay + interaction) ×
+     // (1 + reload) + 30s headroom, with a 75s floor.
+     //
+     // The (1 + reload) multiplier was missing from the previous formula
+     // (13dd4fa) — `reload: 4` configs perform 5 total cycles (initial +
+     // 4 reloads), each with its own delay + interaction overhead, so the
+     // 80s ceiling for the user's lean config (timeout:35000, delay:15000,
+     // reload:4) fired DURING the 3rd reload while the orphan still had
+     // 2 more cycles + drain to go — far longer than the 8s grace could
+     // bridge. Multiplying by cycle count brings the ceiling above the
+     // legitimate work envelope.
+     const reloadCount = task.config.reload || 0;
+     const INTERACTION_OVERHEAD_MS = 15000;  // hard cap per cycle in interaction.js
      const PER_URL_TIMEOUT_MS = Math.max(
        75000,
-       (task.config.timeout || 35000) + (task.config.delay || 0) + 30000
+       (task.config.timeout || 35000)
+         + ((task.config.delay || 0) + INTERACTION_OVERHEAD_MS) * (1 + reloadCount)
+         + 30000
      );
      // Grace period after primary timeout — gives the orphan a chance to
      // finish drainPendingNetTools() and emit "Saving N rules despite page
@@ -5536,6 +5543,12 @@ function setupFrameHandling(page, forceDebug) {
      } catch (err) {
        if (err && err.code === PER_URL_TIMEOUT_MARKER) {
          forceRestartFlag = true;
+         // Log the timeout fire — was invisible before; only ended up in the
+         // returned result.error field which is never printed. Makes
+         // ceiling-tuning regressions visible without source-reading.
+         if (forceDebug) {
+           console.log(formatLogMessage('warn', `${err.message} for ${task.url} — orphan in ${PER_URL_GRACE_MS / 1000}s grace`));
+         }
          // Grace period — wait briefly for the orphan to drain + recover
          // partial matches. Browser is still in a bad state (we hit the
          // primary ceiling) so the restart still fires either way; only the
