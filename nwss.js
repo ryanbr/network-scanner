@@ -3101,119 +3101,136 @@ function setupFrameHandling(page, forceDebug) {
         // setRequestInterception(true) — page.on('request') fires for every
         // request regardless of interception state, and we don't need to
         // block anything on popups.
-        const attachPopupRequestCapture = (popupPage, depth) => {
-          popupPage.on('request', (request) => {
+        // Evaluate ANY URL surfaced from a popup (the popup's own navigation URL
+        // OR an in-popup request) against the same filter pipeline the main-page
+        // request handler uses. Factored out so:
+        //   1. attachPopupRequestCapture's `popupPage.on('request', ...)` calls
+        //      this once per in-popup request (with the request's resourceType).
+        //   2. onTargetCreated calls this once with `target.url()` and resourceType
+        //      'document' BEFORE attaching the request listener — catches the
+        //      popup's navigation URL itself, which fires before our listener can
+        //      attach (targetcreated → page resolve → attach is async, and the
+        //      browser dispatches the navigation immediately on window.open).
+        //      Without #2, popunder destinations whose own URL contains the
+        //      filterRegex pattern (e.g. AdsCore campaign URLs with &campaign=)
+        //      were seen-but-not-evaluated.
+        const evaluatePopupUrl = (checkedUrl, depth, resourceType) => {
+          try {
+            if (!checkedUrl || checkedUrl === 'about:blank') return;
+            let fullSubdomain = '';
+            let checkedRootDomain = '';
             try {
-              const checkedUrl = request.url();
-              let fullSubdomain = '';
-              let checkedRootDomain = '';
-              try {
-                const parsedUrl = new URL(checkedUrl);
-                fullSubdomain = parsedUrl.hostname;
-                const pslResult = psl.parse(fullSubdomain);
-                checkedRootDomain = pslResult.domain || fullSubdomain;
-              } catch (_) { return; }
-              if (!checkedRootDomain) return;
+              const parsedUrl = new URL(checkedUrl);
+              fullSubdomain = parsedUrl.hostname;
+              const pslResult = psl.parse(fullSubdomain);
+              checkedRootDomain = pslResult.domain || fullSubdomain;
+            } catch (_) { return; }
+            if (!checkedRootDomain) return;
 
-              // ignoreDomainsByUrl — if any pattern matches this popup URL,
-              // mark the root domain as ignored for the rest of the scan
-              // (main page + all popups). Mirrors the main handler so a
-              // tracker URL surfaced via popup chain has the same dampening
-              // effect as one surfaced on the main page.
-              if (_ignoreDomainsByUrlRegexes.length > 0 && !_dynamicallyIgnoredDomains.has(checkedRootDomain)) {
-                for (let i = 0; i < _ignoreDomainsByUrlRegexes.length; i++) {
-                  if (_ignoreDomainsByUrlRegexes[i].test(checkedUrl)) {
-                    _dynamicallyIgnoredDomains.add(checkedRootDomain);
-                    if (forceDebug) {
-                      console.log(formatLogMessage('debug', `${IGNORE_DOMAINS_BY_URL_TAG} ${checkedRootDomain} ignored — matched pattern: ${_ignoreDomainsByUrlRegexes[i].source} (from popup depth=${depth})`));
-                    }
-                    break;
-                  }
-                }
-              }
-
-              // blockDomainsByUrl trigger — symmetric to ignoreDomainsByUrl
-              // above; populating the dynamic block Set from popup URLs lets
-              // tracker URLs surfaced via popup chains poison their root
-              // domain for the rest of the scan just like main-page hits do.
-              if (_blockDomainsByUrlRegexes.length > 0 && !_dynamicallyBlockedDomains.has(checkedRootDomain)) {
-                for (let i = 0; i < _blockDomainsByUrlRegexes.length; i++) {
-                  if (_blockDomainsByUrlRegexes[i].test(checkedUrl)) {
-                    _dynamicallyBlockedDomains.add(checkedRootDomain);
-                    if (forceDebug) {
-                      console.log(formatLogMessage('debug', `${BLOCK_DOMAINS_BY_URL_TAG} ${checkedRootDomain} blocked — matched pattern: ${_blockDomainsByUrlRegexes[i].source} (from popup depth=${depth})`));
-                    }
-                    break;
-                  }
-                }
-              }
-
-              // ignoreDomains gate (global; matchesIgnoreDomain also short-
-              // circuits on _dynamicallyIgnoredDomains, so a domain we just
-              // added above will be caught here on the same request).
-              if (matchesIgnoreDomain(checkedRootDomain, ignoreDomains)) return;
-
-              // Dynamic-block gate for popup requests — early return on
-              // matched root or any parent (parent-walk in
-              // matchesDynamicBlock). Popups don't have a request object
-              // available here, so we just return rather than abort; the
-              // popup-request observer treats this as "don't process".
-              if (matchesDynamicBlock(checkedRootDomain)) return;
-
-              // First-party / third-party gate (popup belongs to the main URL's
-              // domain group — its OWN URL doesn't redefine first-party).
-              const isFirstParty = firstPartyDomains.has(checkedRootDomain);
-              if (siteConfig.firstParty === false && isFirstParty) return;
-              if (siteConfig.thirdParty === false && !isFirstParty) return;
-
-              // Regex match against the site's filterRegex list
-              const resourceType = request.resourceType();
-              let regexMatched = false;
-              for (const re of regexes) {
-                if (re.test(checkedUrl)) {
-                  regexMatched = true;
+            // ignoreDomainsByUrl — if any pattern matches this popup URL,
+            // mark the root domain as ignored for the rest of the scan
+            // (main page + all popups). Mirrors the main handler so a
+            // tracker URL surfaced via popup chain has the same dampening
+            // effect as one surfaced on the main page.
+            if (_ignoreDomainsByUrlRegexes.length > 0 && !_dynamicallyIgnoredDomains.has(checkedRootDomain)) {
+              for (let i = 0; i < _ignoreDomainsByUrlRegexes.length; i++) {
+                if (_ignoreDomainsByUrlRegexes[i].test(checkedUrl)) {
+                  _dynamicallyIgnoredDomains.add(checkedRootDomain);
                   if (forceDebug) {
-                    console.log(formatLogMessage('debug', `[popup depth=${depth}] Matched ${checkedRootDomain} via ${re} (${resourceType})`));
+                    console.log(formatLogMessage('debug', `${IGNORE_DOMAINS_BY_URL_TAG} ${checkedRootDomain} ignored — matched pattern: ${_ignoreDomainsByUrlRegexes[i].source} (from popup depth=${depth})`));
                   }
                   break;
                 }
               }
+            }
 
-              if (!regexMatched) return;
-
-              // hasNetTools is the same flag the main handler uses (line ~2639).
-              // When the site config carries whois/dig terms, regex match is
-              // not sufficient by itself — the URL must ALSO pass the whois/
-              // dig validation before it counts. Mirrors the main handler's
-              // behavior so 'capture popup domains that match regex/dig/whois'
-              // means the same thing for popups as for the main page.
-              if (hasNetTools) {
-                const popupNetToolsHandler = createNetToolsHandler({
-                  whoisTerms, whoisOrTerms,
-                  processedWhoisDomains: globalProcessedWhoisDomains,
-                  processedDigDomains: globalProcessedDigDomains,
-                  whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
-                  whoisServer,
-                  whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
-                  debugLogFile,
-                  digTerms, digOrTerms, digRecordType,
-                  digSubdomain: siteConfig.dig_subdomain === true,
-                  dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
-                  matchedDomains, addMatchedDomain,
-                  isDomainAlreadyDetected: isLocallyDetected,
-                  onWhoisResult: smartCache ? (domain, result) => smartCache.cacheNetTools(domain, 'whois', result) : undefined,
-                  onDigResult: smartCache ? (domain, result, recordType) => smartCache.cacheNetTools(domain, 'dig', result, recordType) : undefined,
-                  cachedWhois: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'whois') : null,
-                  cachedDig: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'dig', digRecordType) : null,
-                  currentUrl, getRootDomain, siteConfig, dumpUrls, matchedUrlsLogFile, forceDebug, fs,
-                  ignoreDomains, matchesIgnoreDomain
-                });
-                trackNetToolsHandler(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
-              } else {
-                // No nettools required — regex match alone counts.
-                addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
+            // blockDomainsByUrl trigger — symmetric to ignoreDomainsByUrl
+            // above; populating the dynamic block Set from popup URLs lets
+            // tracker URLs surfaced via popup chains poison their root
+            // domain for the rest of the scan just like main-page hits do.
+            if (_blockDomainsByUrlRegexes.length > 0 && !_dynamicallyBlockedDomains.has(checkedRootDomain)) {
+              for (let i = 0; i < _blockDomainsByUrlRegexes.length; i++) {
+                if (_blockDomainsByUrlRegexes[i].test(checkedUrl)) {
+                  _dynamicallyBlockedDomains.add(checkedRootDomain);
+                  if (forceDebug) {
+                    console.log(formatLogMessage('debug', `${BLOCK_DOMAINS_BY_URL_TAG} ${checkedRootDomain} blocked — matched pattern: ${_blockDomainsByUrlRegexes[i].source} (from popup depth=${depth})`));
+                  }
+                  break;
+                }
               }
-            } catch (_) { /* observation-only — never let a popup error escape */ }
+            }
+
+            // ignoreDomains gate (global; matchesIgnoreDomain also short-
+            // circuits on _dynamicallyIgnoredDomains, so a domain we just
+            // added above will be caught here on the same request).
+            if (matchesIgnoreDomain(checkedRootDomain, ignoreDomains)) return;
+
+            // Dynamic-block gate for popup requests — early return on
+            // matched root or any parent (parent-walk in
+            // matchesDynamicBlock). Popups don't have a request object
+            // available here, so we just return rather than abort; the
+            // popup-request observer treats this as "don't process".
+            if (matchesDynamicBlock(checkedRootDomain)) return;
+
+            // First-party / third-party gate (popup belongs to the main URL's
+            // domain group — its OWN URL doesn't redefine first-party).
+            const isFirstParty = firstPartyDomains.has(checkedRootDomain);
+            if (siteConfig.firstParty === false && isFirstParty) return;
+            if (siteConfig.thirdParty === false && !isFirstParty) return;
+
+            // Regex match against the site's filterRegex list
+            let regexMatched = false;
+            for (const re of regexes) {
+              if (re.test(checkedUrl)) {
+                regexMatched = true;
+                if (forceDebug) {
+                  console.log(formatLogMessage('debug', `[popup depth=${depth}] Matched ${checkedRootDomain} via ${re} (${resourceType})`));
+                }
+                break;
+              }
+            }
+
+            if (!regexMatched) return;
+
+            // hasNetTools is the same flag the main handler uses (line ~2639).
+            // When the site config carries whois/dig terms, regex match is
+            // not sufficient by itself — the URL must ALSO pass the whois/
+            // dig validation before it counts. Mirrors the main handler's
+            // behavior so 'capture popup domains that match regex/dig/whois'
+            // means the same thing for popups as for the main page.
+            if (hasNetTools) {
+              const popupNetToolsHandler = createNetToolsHandler({
+                whoisTerms, whoisOrTerms,
+                processedWhoisDomains: globalProcessedWhoisDomains,
+                processedDigDomains: globalProcessedDigDomains,
+                whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
+                whoisServer,
+                whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+                debugLogFile,
+                digTerms, digOrTerms, digRecordType,
+                digSubdomain: siteConfig.dig_subdomain === true,
+                dryRunCallback: dryRunMode ? createEnhancedDryRunCallback(matchedDomains, forceDebug) : null,
+                matchedDomains, addMatchedDomain,
+                isDomainAlreadyDetected: isLocallyDetected,
+                onWhoisResult: smartCache ? (domain, result) => smartCache.cacheNetTools(domain, 'whois', result) : undefined,
+                onDigResult: smartCache ? (domain, result, recordType) => smartCache.cacheNetTools(domain, 'dig', result, recordType) : undefined,
+                cachedWhois: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'whois') : null,
+                cachedDig: smartCache ? smartCache.getCachedNetTools(checkedRootDomain, 'dig', digRecordType) : null,
+                currentUrl, getRootDomain, siteConfig, dumpUrls, matchedUrlsLogFile, forceDebug, fs,
+                ignoreDomains, matchesIgnoreDomain
+              });
+              trackNetToolsHandler(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
+            } else {
+              // No nettools required — regex match alone counts.
+              addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
+            }
+          } catch (_) { /* observation-only — never let a popup error escape */ }
+        };
+
+        // Thin wrapper around evaluatePopupUrl for the per-request listener.
+        const attachPopupRequestCapture = (popupPage, depth) => {
+          popupPage.on('request', (request) => {
+            evaluatePopupUrl(request.url(), depth, request.resourceType());
           });
         };
 
@@ -3248,6 +3265,20 @@ function setupFrameHandling(page, forceDebug) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `[popup depth=${depth}] Capturing popup: ${target.url() || 'about:blank'}`));
           }
+
+          // Evaluate the popup's own navigation URL against the same filter
+          // pipeline used for in-popup requests. Required because targetcreated
+          // → target.page() → on('request', ...) is async, and the browser
+          // dispatches the popup's navigation request immediately on window.open
+          // — by the time the listener attaches below, the navigation request
+          // has already fired and won't be re-emitted. resourceType 'document'
+          // mirrors what Chrome would emit for a top-level navigation request.
+          // Without this call, AdsCore-style popunder destinations (URL contains
+          // &campaign=, &v=, etc) were seen-but-not-evaluated: the popup was
+          // logged but its domain never matched the filter regex, so it never
+          // became a rule. Only secondary in-popup requests (tracking pixels,
+          // sub-resources) ever got tested against the regex.
+          evaluatePopupUrl(target.url(), depth, 'document');
 
           attachPopupRequestCapture(popupPage, depth);
 
