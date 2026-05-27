@@ -1883,16 +1883,47 @@ function setupFrameHandling(page, forceDebug) {
         '--check-for-update-interval=31536000',
         // PERFORMANCE: Disable non-essential Chrome features in a single flag
         // IMPORTANT: Chrome only reads the LAST --disable-features flag, so combine all into one
-        // AccountConsistencyMirror + AccountConsistencyDice prevent the
-        // Chrome sign-in subsystem from initialising at startup. Combined
-        // with --disable-sync + --allow-browser-signin=false below, this
-        // suppresses the "Something went wrong when opening your profile"
-        // popup that fires in headful + --keep-open mode (temp userDataDir
-        // has no real profile, so the sync init errors out and pops up).
-        // ChromeWhatsNewUI suppresses the post-update "What's New" page
+        //
+        // Sign-in / profile suppression family (prevents the "Something went
+        // wrong when opening your profile. Please sign out then sign in
+        // again" popup that fires in headful when Chrome's sign-in/sync
+        // subsystem can't make sense of our fresh-each-launch temp
+        // userDataDir):
+        //   AccountConsistencyMirror, AccountConsistencyDice
+        //     Older Chrome's identity consistency layer. Disabling stops
+        //     the sync subsystem from initialising at startup.
+        //   ProfilePicker, EnableProfilePicker
+        //     Two names for the same Chrome feature (renamed in Chrome
+        //     ~120s). Disabling stops the profile-picker dialog that some
+        //     Chrome versions display when launching with no recognised
+        //     profile. Was the new offender in Chrome 148 for this case.
+        //   IdentityConsistency
+        //     Chrome's identity-consistency-with-google.com checks. Tries
+        //     to read profile credentials at startup; trips the popup if
+        //     profile is fresh/empty.
+        //   SyncDisabledWithProfilePicker
+        //     Sync subsystem variant that activates when profile picker
+        //     would otherwise show. Disabling is harmless when picker is
+        //     also disabled but covers the gap if a Chrome version honors
+        //     only one of the two.
+        //   SigninInterceptBubble
+        //     Sign-in interception bubble that pops when Chrome detects
+        //     'enterprise' sign-in patterns. Defensive.
+        // Combined with --disable-sync + --allow-browser-signin=false
+        // below + --profile-directory=Default flag (explicit profile name
+        // instead of letting Chrome auto-detect/pick), this should fully
+        // suppress sign-in popups in headful from Chrome 118 through 148+.
+        //
+        // ChromeWhatsNewUI: suppresses the post-update "What's New" page
         // that auto-opens in a new tab after Chrome installs an update —
         // not popunder-relevant but visually noisy in headful sessions.
-        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding,AccountConsistencyMirror,AccountConsistencyDice,ChromeWhatsNewUI${disable_ad_tagging ? ',AdTagging' : ''}`,
+        `--disable-features=AudioServiceOutOfProcess,VizDisplayCompositor,TranslateUI,BlinkGenPropertyTrees,Translate,BackForwardCache,AcceptCHFrame,SafeBrowsing,HttpsFirstBalancedModeAutoEnable,site-per-process,PaintHolding,AccountConsistencyMirror,AccountConsistencyDice,ProfilePicker,EnableProfilePicker,IdentityConsistency,SyncDisabledWithProfilePicker,SigninInterceptBubble,ChromeWhatsNewUI${disable_ad_tagging ? ',AdTagging' : ''}`,
+        // Explicit profile directory — without this, Chrome may probe for
+        // available profiles at launch and trigger the picker dialog (or
+        // the "something went wrong" popup if no profile is found). With
+        // a fresh temp userDataDir each launch, Chrome will create
+        // 'Default' on its own; explicitly naming it skips the probe.
+        '--profile-directory=Default',
         '--disable-ipc-flooding-protection',
         '--aggressive-cache-discard',
         '--memory-pressure-off',
