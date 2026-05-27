@@ -4644,8 +4644,14 @@ function setupFrameHandling(page, forceDebug) {
             const endY = 200 + Math.floor(Math.random() * (vp.height - 400));
             await humanLikeMouseMove(page, startX, startY, endX, endY, { steps: 3, curve: 0.04, jitter: 1 });
           }
-          // Content clicks to trigger document-level onclick handlers
-          await performContentClicks(page, { clicks: 2, preDelay: 200, forceDebug });
+          // Content clicks to trigger document-level onclick handlers.
+          // Honor siteConfig.interact_click_count so popunder-discovery configs
+          // get the same click volume on every reload, not just the initial load.
+          // Omit `clicks` when no override is set so performContentClicks uses
+          // its CONTENT_CLICK.CLICK_COUNT default (single source of truth).
+          const postReloadClickOpts = { preDelay: 200, forceDebug };
+          if (interactionConfig.clickCount) postReloadClickOpts.clicks = interactionConfig.clickCount;
+          await performContentClicks(page, postReloadClickOpts);
           if (forceDebug) console.log(formatLogMessage('debug', `Post-reload interaction completed for reload #${i}`));
         } catch (postReloadInteractErr) {
           // Non-critical — continue with remaining reloads
