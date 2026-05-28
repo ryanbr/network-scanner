@@ -12,7 +12,7 @@ const path = require('path');
 const dnsPromises = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
-const { parseSearchStrings, createResponseHandler, createCurlHandler } = require('./lib/searchstring');
+const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
