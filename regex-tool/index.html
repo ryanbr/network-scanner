@@ -3,13 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Regex Tools - Converter & Validator</title>
+    <title>Regex Tools - filterRegex Builder &amp; Tester</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
@@ -21,7 +17,7 @@
         .container {
             max-width: 1000px;
             margin: 0 auto;
-            background: rgba(255, 255, 255, 0.95);
+            background: rgba(255, 255, 255, 0.97);
             border-radius: 20px;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             overflow: hidden;
@@ -30,19 +26,28 @@
         .header {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 30px;
+            padding: 28px 30px;
             text-align: center;
         }
 
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-            animation: fadeInDown 0.5s ease;
-        }
+        .header h1 { font-size: 2.2em; margin-bottom: 8px; }
+        .header p { opacity: 0.9; font-size: 1.05em; }
 
-        .header p {
-            opacity: 0.9;
-            font-size: 1.1em;
+        .note {
+            background: #f0f9ff;
+            border: 1px solid #bae6fd;
+            color: #075985;
+            padding: 12px 16px;
+            margin: 18px 40px 0;
+            border-radius: 8px;
+            font-size: 0.9em;
+            line-height: 1.5;
+        }
+        .note code {
+            background: #e0f2fe;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-family: 'Consolas', 'Monaco', monospace;
         }
 
         .tabs {
@@ -53,741 +58,394 @@
 
         .tab {
             flex: 1;
-            padding: 20px;
+            padding: 18px;
             text-align: center;
             cursor: pointer;
             background: transparent;
             border: none;
-            font-size: 1.1em;
+            font-size: 1.05em;
             font-weight: 600;
             color: #64748b;
-            transition: all 0.3s ease;
+            transition: all 0.25s ease;
             position: relative;
         }
-
-        .tab:hover {
-            background: rgba(102, 126, 234, 0.1);
-        }
-
-        .tab.active {
-            color: #667eea;
-            background: white;
-        }
-
+        .tab:hover { background: rgba(102, 126, 234, 0.1); }
+        .tab.active { color: #667eea; background: white; }
         .tab.active::after {
             content: '';
             position: absolute;
-            bottom: -2px;
-            left: 0;
-            right: 0;
+            bottom: -2px; left: 0; right: 0;
             height: 3px;
             background: linear-gradient(90deg, #667eea, #764ba2);
-            animation: slideIn 0.3s ease;
         }
 
-        .content {
-            padding: 40px;
-            min-height: 500px;
-        }
+        .content { padding: 30px 40px 40px; min-height: 420px; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
 
-        .tab-content {
-            display: none;
-            animation: fadeIn 0.3s ease;
-        }
-
-        .tab-content.active {
-            display: block;
-        }
-
-        .input-group {
-            margin-bottom: 30px;
-        }
-
+        .input-group { margin-bottom: 22px; }
         .input-group label {
             display: block;
-            margin-bottom: 10px;
+            margin-bottom: 8px;
             font-weight: 600;
             color: #334155;
-            font-size: 1.1em;
         }
+        .input-group .hint { font-weight: 400; color: #64748b; font-size: 0.85em; }
 
         .input-group input[type="text"],
         .input-group textarea {
             width: 100%;
-            padding: 15px;
+            padding: 13px;
             border: 2px solid #e2e8f0;
             border-radius: 10px;
-            font-size: 1em;
+            font-size: 0.95em;
             font-family: 'Consolas', 'Monaco', monospace;
-            transition: all 0.3s ease;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
         }
-
         .input-group input[type="text"]:focus,
         .input-group textarea:focus {
             outline: none;
             border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.12);
         }
+        .input-group textarea { resize: vertical; min-height: 90px; }
 
-        .input-group textarea {
-            resize: vertical;
-            min-height: 100px;
-        }
-
-        .checkbox-group {
-            display: flex;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
+        .checkbox-group { display: flex; align-items: center; margin-bottom: 18px; }
         .checkbox-group input[type="checkbox"] {
-            width: 20px;
-            height: 20px;
-            margin-right: 10px;
-            cursor: pointer;
+            width: 18px; height: 18px; margin-right: 10px; cursor: pointer;
         }
-
-        .checkbox-group label {
-            cursor: pointer;
-            font-weight: 500;
-            color: #475569;
-        }
+        .checkbox-group label { cursor: pointer; font-weight: 500; color: #475569; }
 
         .button {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
             border: none;
-            padding: 15px 40px;
+            padding: 13px 36px;
             border-radius: 10px;
-            font-size: 1.1em;
+            font-size: 1.05em;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: transform 0.15s ease, box-shadow 0.2s ease;
             box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
         }
-
-        .button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-        }
-
-        .button:active {
-            transform: translateY(0);
-        }
+        .button:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4); }
+        .button:active { transform: translateY(0); }
 
         .output-section {
-            margin-top: 40px;
-            padding: 25px;
+            margin-top: 28px;
+            padding: 22px;
             background: #f8fafc;
             border-radius: 10px;
             border: 2px solid #e2e8f0;
         }
-
-        .output-section h3 {
-            margin-bottom: 15px;
-            color: #334155;
-            font-size: 1.3em;
-        }
-
+        .output-section h3 { margin-bottom: 12px; color: #334155; font-size: 1.15em; }
         .output-box {
             background: white;
-            padding: 20px;
+            padding: 16px;
             border-radius: 8px;
             border: 1px solid #e2e8f0;
             font-family: 'Consolas', 'Monaco', monospace;
-            margin-bottom: 20px;
+            white-space: pre-wrap;
             word-break: break-all;
-            transition: all 0.3s ease;
+            margin-bottom: 18px;
         }
 
-        .output-box:hover {
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
+        .error { background: #fef2f2; color: #b91c1c; padding: 14px; border-radius: 8px; border: 1px solid #fecaca; margin-top: 10px; }
+        .success { background: #ecfdf5; color: #047857; padding: 14px; border-radius: 8px; border: 1px solid #6ee7b7; margin-top: 10px; }
 
-        .examples-list {
-            list-style: none;
-            padding: 0;
-        }
+        .pattern-status { font-family: 'Consolas','Monaco',monospace; font-size: 0.9em; margin-bottom: 6px; }
+        .pattern-status.ok { color: #047857; }
+        .pattern-status.bad { color: #b91c1c; }
 
-        .examples-list li {
-            background: white;
-            padding: 15px;
-            margin-bottom: 10px;
-            border-radius: 8px;
-            border-left: 4px solid #667eea;
-            font-family: 'Consolas', 'Monaco', monospace;
-            transition: all 0.3s ease;
+        table.results { width: 100%; border-collapse: collapse; font-family: 'Consolas','Monaco',monospace; font-size: 0.88em; }
+        table.results th, table.results td {
+            text-align: left;
+            padding: 9px 10px;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: top;
+            word-break: break-all;
         }
-
-        .examples-list li:hover {
-            transform: translateX(5px);
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .error {
-            background: #fee;
-            color: #c00;
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #fcc;
-            margin-top: 10px;
-        }
-
-        .success {
-            background: #e6fffa;
-            color: #047857;
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid #6ee7b7;
-            margin-top: 10px;
-        }
-
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes fadeInDown {
-            from {
-                opacity: 0;
-                transform: translateY(-20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        @keyframes slideIn {
-            from {
-                transform: scaleX(0);
-            }
-            to {
-                transform: scaleX(1);
-            }
-        }
+        table.results th { background: #f1f5f9; color: #334155; font-weight: 600; }
+        tr.match td { background: #ecfdf5; }
+        tr.nomatch td { background: #fef2f2; }
+        .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-weight: 700; font-size: 0.8em; }
+        .badge.match { background: #047857; color: white; }
+        .badge.nomatch { background: #b91c1c; color: white; }
+        .summary { margin: 4px 0 14px; font-weight: 600; color: #334155; }
 
         @media (max-width: 768px) {
-            .header h1 {
-                font-size: 1.8em;
-            }
-            
-            .content {
-                padding: 20px;
-            }
-            
-            .button {
-                width: 100%;
-            }
+            .header h1 { font-size: 1.6em; }
+            .content { padding: 20px; }
+            .note { margin: 14px 20px 0; }
+            .button { width: 100%; }
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>?? Regex Tools</h1>
-            <p>Convert and Validate Regular Expressions with Ease</p>
+            <h1>🔧 Regex Tools</h1>
+            <p>Build &amp; test <code>filterRegex</code> patterns for network-scanner</p>
+        </div>
+
+        <div class="note">
+            Matching here mirrors the scanner exactly: patterns are compiled
+            <strong>case-sensitive, with no flags</strong>, a surrounding
+            <code>/.../</code> is stripped, and a URL counts as a hit when
+            <strong>any</strong> pattern matches (OR) — or <strong>all</strong>
+            of them match when <code>regex_and</code> is enabled.
         </div>
 
         <div class="tabs">
-            <button class="tab active" data-tab="convert">
-                ?? Convert to JSON
-            </button>
-            <button class="tab" data-tab="validate">
-                ? Validate Regex
-            </button>
+            <button class="tab active" data-tab="convert" type="button">Convert to JSON</button>
+            <button class="tab" data-tab="test" type="button">Validate &amp; Test</button>
         </div>
 
         <div class="content">
             <!-- Convert Tab -->
             <div id="convert" class="tab-content active">
                 <div class="input-group">
-                    <label for="standardRegex">Enter Standard Regex Pattern:</label>
-                    <input type="text" id="standardRegex" placeholder="e.g., ^https?://.*\.example\.com/.*$">
+                    <label for="convertPatterns">Regex pattern(s)
+                        <span class="hint">— one per line; each becomes an entry in <code>filterRegex</code></span>
+                    </label>
+                    <textarea id="convertPatterns" placeholder="^https?://[a-z]{8,15}\.com/.*\.(?:css|js)$&#10;/wrr\?"></textarea>
                 </div>
-
-                <button class="button" id="convertBtn">Convert to JSON</button>
-
+                <div class="checkbox-group">
+                    <input type="checkbox" id="convertRegexAnd">
+                    <label for="convertRegexAnd">Add <code>"regex_and": true</code> (all patterns must match — default is OR)</label>
+                </div>
+                <button class="button" id="convertBtn" type="button">Generate JSON</button>
                 <div id="convertOutput"></div>
             </div>
 
-            <!-- Validate Tab -->
-            <div id="validate" class="tab-content">
-                <div class="checkbox-group" style="background: #f0f9ff; padding: 15px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #0ea5e9;">
-                    <input type="checkbox" id="useStandardRegex">
-                    <label for="useStandardRegex"><strong>?? Check this box to validate Standard Regex</strong> (uncheck for JSON format)</label>
+            <!-- Validate & Test Tab -->
+            <div id="test" class="tab-content">
+                <div class="checkbox-group" style="background:#f0f9ff; padding:12px 14px; border-radius:8px; border:1px solid #bae6fd;">
+                    <input type="checkbox" id="inputIsJson">
+                    <label for="inputIsJson">Pattern input is a JSON config snippet
+                        <span class="hint">(<code>{"filterRegex": [...], "regex_and": true}</code>)</span>
+                    </label>
                 </div>
 
                 <div class="input-group">
-                    <label for="regexToValidate">Enter Regex Pattern:</label>
-                    <textarea id="regexToValidate" placeholder='?? IMPORTANT: Check the box above if entering standard regex!&#10;&#10;For JSON (box unchecked): {"filterRegex": ["^https?:\\\\/\\\\/.*"]}&#10;For Standard (box checked): ^https?:\\/\\/.*'></textarea>
+                    <label for="testPatterns">Pattern(s)
+                        <span class="hint">— one regex per line, or a JSON snippet if the box above is checked</span>
+                    </label>
+                    <textarea id="testPatterns" placeholder="^https?://[a-z]{8,15}\.com/.*\.(?:css|js)$"></textarea>
                 </div>
 
-                <button class="button" id="validateBtn">Validate Regex</button>
+                <div class="checkbox-group">
+                    <input type="checkbox" id="testRegexAnd">
+                    <label for="testRegexAnd">Use AND logic (<code>regex_and</code>) — ignored when JSON input supplies its own</label>
+                </div>
 
-                <div id="validateOutput"></div>
+                <div class="input-group">
+                    <label for="testUrls">Test URLs
+                        <span class="hint">— one per line; paste real request URLs from your debug logs</span>
+                    </label>
+                    <textarea id="testUrls" placeholder="https://ads.example.com/track.js&#10;https://example.com/index.html"></textarea>
+                </div>
+
+                <button class="button" id="testBtn" type="button">Validate &amp; Test</button>
+                <div id="testOutput"></div>
             </div>
         </div>
     </div>
 
     <script>
-        // Use DOMContentLoaded to ensure all elements are loaded
-        document.addEventListener('DOMContentLoaded', function() {
-            // Tab switching with event delegation
-            const tabs = document.querySelectorAll('.tab');
-            tabs.forEach(tab => {
-                tab.addEventListener('click', function() {
-                    const tabName = this.getAttribute('data-tab');
-                    switchTab(tabName, this);
-                });
+        document.addEventListener('DOMContentLoaded', function () {
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.addEventListener('click', function () { switchTab(this.getAttribute('data-tab'), this); });
             });
-
-            // Button event listeners
             document.getElementById('convertBtn').addEventListener('click', convertToJSON);
-            document.getElementById('validateBtn').addEventListener('click', validateRegex);
-            document.getElementById('useStandardRegex').addEventListener('change', toggleRegexInput);
-
-            // Enter key support
-            document.getElementById('standardRegex').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter') convertToJSON();
-            });
-            
-            document.getElementById('regexToValidate').addEventListener('keypress', function(e) {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    validateRegex();
-                }
-            });
+            document.getElementById('testBtn').addEventListener('click', validateAndTest);
         });
 
         function switchTab(tabName, clickedTab) {
-            // Update tabs
-            document.querySelectorAll('.tab').forEach(tab => {
-                tab.classList.remove('active');
-            });
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             clickedTab.classList.add('active');
-
-            // Update content
-            document.querySelectorAll('.tab-content').forEach(content => {
-                content.classList.remove('active');
-            });
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             document.getElementById(tabName).classList.add('active');
         }
 
-        function toggleRegexInput() {
-            const checkbox = document.getElementById('useStandardRegex');
-            const textarea = document.getElementById('regexToValidate');
-            
-            if (checkbox.checked) {
-                textarea.placeholder = 'Enter standard regex pattern, e.g., ^https?://.*';
-            } else {
-                textarea.placeholder = 'Enter JSON regex, e.g., {"pattern": "^https?://.*", "flags": "gi"}';
-            }
-            textarea.value = '';
+        // Mirror nwss getCompiledRegex(): strip a surrounding /.../ then compile
+        // with NO flags (case-sensitive). Throws on an invalid pattern.
+        function compilePattern(pattern) {
+            const stripped = pattern.replace(/^\/(.*)\/$/, '$1');
+            return new RegExp(stripped);
         }
 
-        function generateExamples(regex) {
-            const examples = [];
-            
-            try {
-                // Get the pattern string
-                const pattern = regex.source || regex.pattern || regex.toString();
-                
-                // Helper function to generate random string of specific length
-                function generateRandomString(minLen, maxLen) {
-                    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-+=';
-                    const length = maxLen ? Math.floor(Math.random() * (maxLen - minLen + 1)) + minLen : minLen;
-                    let result = '';
-                    for (let i = 0; i < length; i++) {
-                        result += chars.charAt(Math.floor(Math.random() * chars.length));
-                    }
-                    return result;
-                }
-                
-                if (pattern.includes('http')) {
-                    // Check for specific domain requirements
-                    if (pattern.includes('com|org')) {
-                        // Pattern requires .com or .org domains
-                        const protocols = pattern.includes('https?') ? ['https://', 'http://'] : ['https://'];
-                        const domains = ['example', 'test-site', 'web-app', 'api-server', 'my-service'];
-                        const extensions = ['com', 'org'];
-                        
-                        for (let i = 0; i < 5; i++) {
-                            const protocol = protocols[i % protocols.length];
-                            const domain = domains[i % domains.length];
-                            const ext = extensions[i % extensions.length];
-                            
-                            // Build the path part
-                            let path = '';
-                            
-                            // Check for specific length requirements in path
-                            const pathMatch = pattern.match(/\[A-Za-z0-9[^\]]*\]\{(\d+),?(\d*)\}/);
-                            if (pathMatch) {
-                                const minLen = parseInt(pathMatch[1]);
-                                const maxLen = pathMatch[2] ? parseInt(pathMatch[2]) : minLen + 20;
-                                path = generateRandomString(minLen, maxLen);
-                            } else {
-                                path = 'api/v1/users/profile/data';
-                            }
-                            
-                            let url = `${protocol}${domain}.${ext}/${path}`;
-                            
-                            // Add query params if pattern requires them
-                            if (pattern.includes('\\?')) {
-                                // Check for minimum length requirements in query
-                                const queryMatch = pattern.match(/\\\?\.\{(\d+),?(\d*)\}/);
-                                if (queryMatch) {
-                                    const minLen = parseInt(queryMatch[1]);
-                                    const maxLen = queryMatch[2] ? parseInt(queryMatch[2]) : minLen + 10;
-                                    url += '?' + generateRandomString(minLen, maxLen);
-                                } else if (pattern.match(/\?\.\{(\d+),/)) {
-                                    // Handle any {n,} pattern after ?
-                                    const match = pattern.match(/\?\.\{(\d+),/);
-                                    const minLen = parseInt(match[1]);
-                                    url += '?param=' + generateRandomString(Math.max(minLen - 6, 1), minLen + 15);
-                                } else {
-                                    url += '?param=value&key=data';
-                                }
-                            } else if (pattern.includes('&.{')) {
-                                // Handle &.{n,} case
-                                const ampMatch = pattern.match(/&\.\{(\d+),/);
-                                if (ampMatch) {
-                                    const minLen = parseInt(ampMatch[1]);
-                                    url += '&' + generateRandomString(minLen, minLen + 15);
-                                }
-                            }
-                            
-                            examples.push(url);
-                        }
-                    } else {
-                        // General URL patterns
-                        const protocols = pattern.includes('https?') ? ['http://', 'https://'] : ['https://'];
-                        const urls = [
-                            'www.example.com/path/to/resource',
-                            'subdomain.test.com/api/endpoint',
-                            'example.org/page/section/item',
-                            'demo.net/products/category',
-                            'sample.io/user/profile/settings'
-                        ];
-                        
-                        urls.forEach((url, i) => {
-                            if (i < 5) {
-                                let fullUrl = protocols[i % protocols.length] + url;
-                                
-                                // Check for length requirements
-                                const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
-                                if (lengthMatch && !pattern.includes('\\?')) {
-                                    const minLen = parseInt(lengthMatch[1]);
-                                    const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 10;
-                                    fullUrl += '/' + generateRandomString(minLen, maxLen);
-                                }
-                                
-                                examples.push(fullUrl);
-                            }
-                        });
-                    }
-                    
-                    // Test all generated examples against the regex
-                    const validExamples = [];
-                    for (const example of examples) {
-                        try {
-                            // Reset regex lastIndex in case of global flag
-                            regex.lastIndex = 0;
-                            if (regex.test(example)) {
-                                validExamples.push(example);
-                            }
-                        } catch (e) {
-                            console.error('Error testing example:', e);
-                        }
-                    }
-                    
-                    // If we don't have enough valid examples, try more specific ones with proper lengths
-                    if (validExamples.length < 5) {
-                        const moreSpecific = [];
-                        for (let i = 0; i < 10; i++) {
-                            const protocol = i % 2 === 0 ? 'https://' : 'http://';
-                            const domain = ['test-api', 'web-server', 'my-app', 'demo-site', 'api-gateway'][i % 5];
-                            const ext = i % 2 === 0 ? 'com' : 'org';
-                            
-                            // Generate path with proper length if specified
-                            let path = 'Path_';
-                            const pathMatch = pattern.match(/\[A-Za-z0-9[^\]]*\]\{(\d+),?(\d*)\}/);
-                            if (pathMatch) {
-                                const minLen = parseInt(pathMatch[1]);
-                                const maxLen = pathMatch[2] ? parseInt(pathMatch[2]) : minLen + 20;
-                                path = generateRandomString(minLen, maxLen);
-                            } else {
-                                path += generateRandomString(10, 30);
-                            }
-                            
-                            let url = `${protocol}${domain}.${ext}/${path}`;
-                            
-                            // Add query with proper length if needed
-                            if (pattern.includes('\\?')) {
-                                const queryMatch = pattern.match(/\\\?\.\{(\d+),?(\d*)\}/);
-                                if (queryMatch) {
-                                    const minLen = parseInt(queryMatch[1]);
-                                    url += '?q=' + generateRandomString(Math.max(minLen - 2, 1), minLen + 10);
-                                } else if (pattern.match(/\?\.\{(\d+),/)) {
-                                    const match = pattern.match(/\?\.\{(\d+),/);
-                                    const minLen = parseInt(match[1]);
-                                    url += '?' + generateRandomString(minLen, minLen + 15);
-                                } else {
-                                    url += '?param=' + generateRandomString(10, 20);
-                                }
-                            } else if (pattern.includes('&.{')) {
-                                const ampMatch = pattern.match(/&\.\{(\d+),/);
-                                if (ampMatch) {
-                                    const minLen = parseInt(ampMatch[1]);
-                                    url += '&' + generateRandomString(minLen, minLen + 15);
-                                }
-                            }
-                            
-                            moreSpecific.push(url);
-                        }
-                        
-                        for (const url of moreSpecific) {
-                            regex.lastIndex = 0;
-                            if (regex.test(url) && validExamples.length < 5) {
-                                validExamples.push(url);
-                            }
-                        }
-                    }
-                    
-                    return validExamples.length > 0 ? validExamples.slice(0, 5) : [
-                        'Pattern is very specific - generating custom examples...',
-                        'Try: https://example.com/Page_Name/path?query=value12345',
-                        'Try: http://test.org/API_endpoint/data?param=longvalue123',
-                        'Manual testing recommended for this pattern',
-                        'Validation successful'
-                    ];
-                } else if (pattern.includes('@')) {
-                    examples.push(
-                        'user@example.com',
-                        'john.doe@company.org',
-                        'admin+tag@subdomain.example.com',
-                        'contact@business.co.uk',
-                        'support123@service.io'
-                    );
-                } else if (pattern.includes('\\d')) {
-                    // Check for length requirements
-                    const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
-                    if (lengthMatch) {
-                        const minLen = parseInt(lengthMatch[1]);
-                        const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 10;
-                        for (let i = 0; i < 5; i++) {
-                            examples.push(generateRandomString(minLen, maxLen));
-                        }
-                    } else {
-                        examples.push(
-                            '12345',
-                            '2024-01-15',
-                            'ID-9876-XY',
-                            'Version 3.14.159',
-                            'Order #00425'
-                        );
-                    }
-                } else if (pattern.includes('\\w')) {
-                    // Check for length requirements
-                    const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
-                    if (lengthMatch) {
-                        const minLen = parseInt(lengthMatch[1]);
-                        const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 10;
-                        for (let i = 0; i < 5; i++) {
-                            examples.push(generateRandomString(minLen, maxLen));
-                        }
-                    } else {
-                        examples.push(
-                            'HelloWorld',
-                            'user_name_123',
-                            'CamelCaseExample',
-                            'snake_case_text',
-                            'MixedContent2024'
-                        );
-                    }
-                } else {
-                    // Check for any length requirements in the pattern
-                    const lengthMatch = pattern.match(/\{(\d+),?(\d*)\}/);
-                    if (lengthMatch) {
-                        const minLen = parseInt(lengthMatch[1]);
-                        const maxLen = lengthMatch[2] ? parseInt(lengthMatch[2]) : minLen + 15;
-                        for (let i = 0; i < 5; i++) {
-                            examples.push(generateRandomString(minLen, maxLen));
-                        }
-                    } else {
-                        // Generic examples
-                        examples.push(
-                            'example text',
-                            'Sample String 123',
-                            'test-data-here',
-                            'Another_Example',
-                            'final.test.value'
-                        );
-                    }
-                }
-                
-                // Filter examples that actually match the regex
-                const validExamples = examples.filter(ex => {
-                    try {
-                        regex.lastIndex = 0;
-                        return regex.test(ex);
-                    } catch (e) {
-                        return false;
-                    }
-                });
-                
-                return validExamples.length > 0 ? validExamples.slice(0, 5) : [
-                    'No automatic examples could be generated.',
-                    'The pattern may be too specific.',
-                    'Try testing with your own strings.',
-                    'Enter test strings manually.',
-                    'Pattern validation successful.'
-                ];
-            } catch (error) {
-                console.error('Error in generateExamples:', error);
-                return ['Error generating examples'];
-            }
-        }
-
-        function convertToJSON() {
-            const standardRegex = document.getElementById('standardRegex').value;
-            const outputDiv = document.getElementById('convertOutput');
-            
-            if (!standardRegex) {
-                outputDiv.innerHTML = '<div class="error">Please enter a regex pattern</div>';
-                return;
-            }
-            
-            try {
-                // Remove surrounding quotes if present
-                let cleanPattern = standardRegex.trim();
-                if ((cleanPattern.startsWith('"') && cleanPattern.endsWith('"')) || 
-                    (cleanPattern.startsWith("'") && cleanPattern.endsWith("'"))) {
-                    cleanPattern = cleanPattern.slice(1, -1);
-                }
-                
-                // Test if the regex is valid first (using the cleaned pattern)
-                const testRegex = new RegExp(cleanPattern);
-                
-                // For JSON string format: the input pattern stays as is
-                // JSON.stringify will handle the escaping
-                const jsonOutput = {
-                    filterRegex: [cleanPattern]
-                };
-                
-                // Generate examples
-                const examples = generateExamples(testRegex);
-                
-                outputDiv.innerHTML = `
-                    <div class="output-section">
-                        <h3>?? JSON Output:</h3>
-                        <div class="output-box">${JSON.stringify(jsonOutput, null, 2)}</div>
-                        
-                        <h3>? Example Matches:</h3>
-                        <ul class="examples-list">
-                            ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
-                        </ul>
-                        
-                        <div class="success">? Regex successfully converted to JSON format!</div>
-                    </div>
-                `;
-            } catch (error) {
-                outputDiv.innerHTML = `<div class="error">? Invalid regex pattern: ${escapeHtml(error.message)}</div>`;
-            }
-        }
-
-        function validateRegex() {
-            const useStandard = document.getElementById('useStandardRegex').checked;
-            const regexInput = document.getElementById('regexToValidate').value.trim();
-            const outputDiv = document.getElementById('validateOutput');
-            
-            if (!regexInput) {
-                outputDiv.innerHTML = '<div class="error">Please enter a regex pattern to validate</div>';
-                return;
-            }
-            
-            try {
-                let regex;
-                let pattern;
-                
-                if (useStandard) {
-                    // Use standard regex directly
-                    pattern = regexInput;
-                    regex = new RegExp(pattern);
-                } else {
-                    // JSON mode - handle multiple formats
-                    if (regexInput.startsWith('{')) {
-                        // Full JSON format
-                        const jsonRegex = JSON.parse(regexInput);
-                        
-                        if (jsonRegex.filterRegex && Array.isArray(jsonRegex.filterRegex)) {
-                            pattern = jsonRegex.filterRegex[0];
-                        } else if (jsonRegex.pattern) {
-                            pattern = jsonRegex.pattern;
-                        } else {
-                            throw new Error('Invalid JSON format. Expected {"filterRegex": ["pattern"]}');
-                        }
-                    } else if (regexInput.startsWith('"') && regexInput.endsWith('"')) {
-                        // Just a quoted string - parse as JSON string
-                        pattern = JSON.parse(regexInput);
-                    } else {
-                        // Raw pattern without quotes or JSON wrapper
-                        outputDiv.innerHTML = `
-                            <div class="error">
-                                ? Invalid format for JSON mode.<br><br>
-                                You can use one of these formats:<br>
-                                <div class="output-box" style="margin-top: 10px; background: #fef3c7;">
-                                    1. Full JSON: {"filterRegex": ["${escapeHtml(regexInput)}"]}<br><br>
-                                    2. Quoted string: "${escapeHtml(regexInput)}"
-                                </div>
-                                <br>
-                                ?? <strong>Tip:</strong> Check the "Use Standard Regex" box above to validate regex patterns directly without quotes.
-                            </div>
-                        `;
-                        return;
-                    }
-                    
-                    regex = new RegExp(pattern);
-                }
-                
-                // Generate examples
-                const examples = generateExamples(regex);
-                
-                outputDiv.innerHTML = `
-                    <div class="output-section">
-                        <h3>?? Validation Result:</h3>
-                        <div class="output-box">
-                            Pattern: ${escapeHtml(pattern)}<br>
-                            Type: ${useStandard ? 'Standard Regex' : 'JSON Regex'}
-                        </div>
-                        
-                        <h3>? Example Matches:</h3>
-                        <ul class="examples-list">
-                            ${examples.map(ex => `<li>${escapeHtml(ex)}</li>`).join('')}
-                        </ul>
-                        
-                        <div class="success">? Regex is valid!</div>
-                    </div>
-                `;
-            } catch (error) {
-                if (error instanceof SyntaxError && !useStandard) {
-                    outputDiv.innerHTML = `<div class="error">? Invalid JSON syntax: ${escapeHtml(error.message)}<br><br>Expected format: {"filterRegex": ["your-regex-pattern"]} or "your-regex-pattern"</div>`;
-                } else {
-                    outputDiv.innerHTML = `<div class="error">? Invalid regex: ${escapeHtml(error.message)}</div>`;
-                }
-            }
+        // Split a textarea into non-empty, trimmed lines.
+        function toLines(text) {
+            return text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
         }
 
         function escapeHtml(text) {
             const div = document.createElement('div');
-            div.textContent = text;
+            div.textContent = String(text);
             return div.innerHTML;
+        }
+
+        // Compile a list of pattern strings, returning { compiled, errors }.
+        // compiled is [{ source, re }]; errors is [{ source, message }].
+        function compileAll(patterns) {
+            const compiled = [], errors = [];
+            for (const p of patterns) {
+                try { compiled.push({ source: p, re: compilePattern(p) }); }
+                catch (e) { errors.push({ source: p, message: e.message }); }
+            }
+            return { compiled, errors };
+        }
+
+        function convertToJSON() {
+            const out = document.getElementById('convertOutput');
+            const patterns = toLines(document.getElementById('convertPatterns').value);
+            const useAnd = document.getElementById('convertRegexAnd').checked;
+
+            if (patterns.length === 0) {
+                out.innerHTML = '<div class="error">Please enter at least one regex pattern.</div>';
+                return;
+            }
+
+            const { compiled, errors } = compileAll(patterns);
+
+            // Per-pattern validity report
+            let statusHtml = '';
+            for (const p of patterns) {
+                const bad = errors.find(e => e.source === p);
+                statusHtml += bad
+                    ? `<div class="pattern-status bad">✗ ${escapeHtml(p)} — ${escapeHtml(bad.message)}</div>`
+                    : `<div class="pattern-status ok">✓ ${escapeHtml(p)}</div>`;
+            }
+
+            if (errors.length > 0) {
+                out.innerHTML = `
+                    <div class="output-section">
+                        <h3>Pattern check</h3>
+                        ${statusHtml}
+                        <div class="error">Fix the invalid pattern(s) above before generating JSON.</div>
+                    </div>`;
+                return;
+            }
+
+            // Build the config object. JSON.stringify performs the escaping that
+            // trips people up (e.g. \\/ , \\? ) — this is the canonical form.
+            const config = { filterRegex: patterns };
+            if (useAnd) config.regex_and = true;
+            const json = JSON.stringify(config, null, 2);
+
+            out.innerHTML = `
+                <div class="output-section">
+                    <h3>Pattern check</h3>
+                    ${statusHtml}
+                    <h3>JSON for your site config</h3>
+                    <div class="output-box">${escapeHtml(json)}</div>
+                    <div class="success">✓ ${patterns.length} pattern(s) compiled successfully. Paste the keys above into your site entry.</div>
+                </div>`;
+        }
+
+        function validateAndTest() {
+            const out = document.getElementById('testOutput');
+            const isJson = document.getElementById('inputIsJson').checked;
+            const raw = document.getElementById('testPatterns').value.trim();
+            let useAnd = document.getElementById('testRegexAnd').checked;
+
+            if (!raw) {
+                out.innerHTML = '<div class="error">Please enter pattern(s) to validate.</div>';
+                return;
+            }
+
+            // Resolve the pattern list (+ regex_and from JSON if provided).
+            let patterns;
+            try {
+                if (isJson) {
+                    const parsed = JSON.parse(raw);
+                    const fr = parsed.filterRegex;
+                    if (fr === undefined) throw new Error('JSON has no "filterRegex" key.');
+                    patterns = Array.isArray(fr) ? fr.slice() : [fr];
+                    if (typeof parsed.regex_and === 'boolean') useAnd = parsed.regex_and;
+                } else {
+                    patterns = toLines(raw);
+                }
+            } catch (e) {
+                out.innerHTML = `<div class="error">Invalid JSON: ${escapeHtml(e.message)}<br><br>Expected: <code>{"filterRegex": ["pattern"], "regex_and": false}</code></div>`;
+                return;
+            }
+
+            if (patterns.length === 0) {
+                out.innerHTML = '<div class="error">No patterns found in the input.</div>';
+                return;
+            }
+
+            const { compiled, errors } = compileAll(patterns);
+
+            let statusHtml = '';
+            for (const p of patterns) {
+                const bad = errors.find(e => e.source === p);
+                statusHtml += bad
+                    ? `<div class="pattern-status bad">✗ ${escapeHtml(p)} — ${escapeHtml(bad.message)}</div>`
+                    : `<div class="pattern-status ok">✓ ${escapeHtml(p)}</div>`;
+            }
+
+            const logicLabel = useAnd ? 'AND (all patterns must match)' : 'OR (any pattern matches)';
+
+            if (errors.length > 0) {
+                out.innerHTML = `
+                    <div class="output-section">
+                        <h3>Pattern check &mdash; logic: ${logicLabel}</h3>
+                        ${statusHtml}
+                        <div class="error">Fix the invalid pattern(s) above before testing.</div>
+                    </div>`;
+                return;
+            }
+
+            const urls = toLines(document.getElementById('testUrls').value);
+
+            // No test URLs: report validity only.
+            if (urls.length === 0) {
+                out.innerHTML = `
+                    <div class="output-section">
+                        <h3>Pattern check &mdash; logic: ${logicLabel}</h3>
+                        ${statusHtml}
+                        <div class="success">✓ ${patterns.length} pattern(s) valid. Add test URLs above to see what they match.</div>
+                    </div>`;
+                return;
+            }
+
+            // Evaluate each URL exactly as nwss would.
+            let matchCount = 0;
+            const rows = urls.map(url => {
+                const hitIdx = [];
+                compiled.forEach((c, i) => {
+                    c.re.lastIndex = 0;
+                    if (c.re.test(url)) hitIdx.push(i);
+                });
+                const matched = useAnd ? hitIdx.length === compiled.length : hitIdx.length > 0;
+                if (matched) matchCount++;
+                const which = hitIdx.length
+                    ? hitIdx.map(i => '#' + (i + 1)).join(', ')
+                    : '—';
+                return `
+                    <tr class="${matched ? 'match' : 'nomatch'}">
+                        <td>${escapeHtml(url)}</td>
+                        <td><span class="badge ${matched ? 'match' : 'nomatch'}">${matched ? 'MATCH' : 'NO MATCH'}</span></td>
+                        <td>${which}</td>
+                    </tr>`;
+            }).join('');
+
+            // Numbered legend so the "matched pattern #" column is readable.
+            const legend = compiled.map((c, i) => `<div class="pattern-status ok">#${i + 1}: ${escapeHtml(c.source)}</div>`).join('');
+
+            out.innerHTML = `
+                <div class="output-section">
+                    <h3>Pattern check &mdash; logic: ${logicLabel}</h3>
+                    ${legend}
+                    <div class="summary">${matchCount} of ${urls.length} URL(s) matched.</div>
+                    <table class="results">
+                        <thead><tr><th>URL</th><th>Result</th><th>Matched pattern</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>`;
         }
     </script>
 </body>
