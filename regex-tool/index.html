@@ -205,10 +205,14 @@
             <!-- Convert Tab -->
             <div id="convert" class="tab-content active">
                 <div class="input-group">
-                    <label for="convertPatterns">Regex pattern(s)
+                    <label for="convertPatterns">Pattern(s) / text
                         <span class="hint">— one per line; each becomes an entry in <code>filterRegex</code></span>
                     </label>
-                    <textarea id="convertPatterns" placeholder="^https?://[a-z]{8,15}\.com/.*\.(?:css|js)$&#10;/wrr\?"></textarea>
+                    <textarea id="convertPatterns" placeholder="/wrr/test.js&#10;https://ads.example.com/track.js"></textarea>
+                </div>
+                <div class="checkbox-group" style="background:#f0f9ff; padding:12px 14px; border-radius:8px; border:1px solid #bae6fd;">
+                    <input type="checkbox" id="convertEscape" checked>
+                    <label for="convertEscape">Escape as literal text — build a regex that matches the input <em>exactly</em> (escapes <code>. / ? * + ( ) [ ] $ ^ { } |</code>). <strong>Uncheck</strong> if you're pasting a finished regex.</label>
                 </div>
                 <div class="checkbox-group">
                     <input type="checkbox" id="convertRegexAnd">
@@ -275,6 +279,15 @@
             return new RegExp(stripped);
         }
 
+        // Escape every regex metacharacter so the input matches literally.
+        // Forward slash isn't special in a RegExp built from a string, but we
+        // escape it too (\/) to match adblock convention and what the scanner
+        // configs use. Example: /wrr/test.js -> \/wrr\/test\.js , which
+        // JSON.stringify then renders as "\\/wrr\\/test\\.js".
+        function escapeRegexLiteral(text) {
+            return text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+        }
+
         // Split a textarea into non-empty, trimmed lines.
         function toLines(text) {
             return text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -299,24 +312,33 @@
 
         function convertToJSON() {
             const out = document.getElementById('convertOutput');
-            const patterns = toLines(document.getElementById('convertPatterns').value);
+            const rawPatterns = toLines(document.getElementById('convertPatterns').value);
             const useAnd = document.getElementById('convertRegexAnd').checked;
+            const escapeLiteral = document.getElementById('convertEscape').checked;
 
-            if (patterns.length === 0) {
-                out.innerHTML = '<div class="error">Please enter at least one regex pattern.</div>';
+            if (rawPatterns.length === 0) {
+                out.innerHTML = '<div class="error">Please enter at least one line of text or a regex pattern.</div>';
                 return;
             }
 
+            // In literal mode, escape each line into a regex that matches it
+            // exactly; otherwise treat each line as an already-written regex.
+            const patterns = escapeLiteral ? rawPatterns.map(escapeRegexLiteral) : rawPatterns;
+
             const { compiled, errors } = compileAll(patterns);
 
-            // Per-pattern validity report
+            // Per-pattern report. In literal mode show raw -> escaped so it's
+            // clear what was produced; in regex mode just validate as-is.
             let statusHtml = '';
-            for (const p of patterns) {
+            patterns.forEach((p, i) => {
                 const bad = errors.find(e => e.source === p);
+                const shown = escapeLiteral
+                    ? `${escapeHtml(rawPatterns[i])} &rarr; ${escapeHtml(p)}`
+                    : escapeHtml(p);
                 statusHtml += bad
-                    ? `<div class="pattern-status bad">✗ ${escapeHtml(p)} — ${escapeHtml(bad.message)}</div>`
-                    : `<div class="pattern-status ok">✓ ${escapeHtml(p)}</div>`;
-            }
+                    ? `<div class="pattern-status bad">✗ ${shown} — ${escapeHtml(bad.message)}</div>`
+                    : `<div class="pattern-status ok">✓ ${shown}</div>`;
+            });
 
             if (errors.length > 0) {
                 out.innerHTML = `
