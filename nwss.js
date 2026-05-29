@@ -129,15 +129,12 @@ const CONCURRENCY_LIMITS = Object.freeze({
 });
 
 // V8 Optimization: Use Map for user agent lookups instead of object
-const USER_AGENTS = Object.freeze(new Map([
-  ['chrome', "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"],
-  ['chrome_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"],
-  ['chrome_linux', "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"],
-  ['firefox', "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0"],
-  ['firefox_mac', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:148.0) Gecko/20100101 Firefox/148.0"],
-  ['firefox_linux', "Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0"],
-  ['safari', "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"]
-]));
+// User-Agent strings come from the single source of truth in lib/fingerprint
+// (USER_AGENT_COLLECTIONS, imported above) — the same map page.setUserAgent
+// applies to the browser. The previous local duplicate had silently drifted
+// (Chrome 146 vs the browser's 148, Firefox 148 vs 151, Safari 18.6 vs 19.5),
+// so curl content-fetches advertised a different browser than the page did.
+// Keep using the imported map directly so the two can never diverge again.
 
 const REALTIME_CLEANUP_THRESHOLD = 8; // Default pages to keep for realtime cleanup
 
@@ -2811,7 +2808,7 @@ function setupFrameHandling(page, forceDebug) {
    // Get user agent for curl if needed
    let curlUserAgent = '';
    if (useCurl && siteConfig.userAgent) {
-     curlUserAgent = USER_AGENTS.get(siteConfig.userAgent.toLowerCase()) || '';
+     curlUserAgent = USER_AGENT_COLLECTIONS.get(siteConfig.userAgent.toLowerCase()) || '';
    }
 
    if (useCurl && forceDebug) {
