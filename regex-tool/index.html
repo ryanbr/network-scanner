@@ -210,9 +210,18 @@
                     </label>
                     <textarea id="convertPatterns" placeholder="/wrr/test.js&#10;https://ads.example.com/track.js"></textarea>
                 </div>
-                <div class="checkbox-group" style="background:#f0f9ff; padding:12px 14px; border-radius:8px; border:1px solid #bae6fd;">
-                    <input type="checkbox" id="convertEscape" checked>
-                    <label for="convertEscape">Escape as literal text — build a regex that matches the input <em>exactly</em> (escapes <code>. / ? * + ( ) [ ] $ ^ { } |</code>). <strong>Uncheck</strong> if you're pasting a finished regex.</label>
+                <div style="background:#f0f9ff; padding:12px 14px; border-radius:8px; border:1px solid #bae6fd; margin-bottom:18px;">
+                    <div style="font-weight:600; color:#334155; margin-bottom:8px;">Input is:</div>
+                    <label style="display:block; margin-bottom:6px; cursor:pointer; font-weight:500; color:#475569;">
+                        <input type="radio" name="convertMode" value="literal" checked style="margin-right:8px;">
+                        Literal text — escape it so the regex matches exactly
+                        (<code>/wrr/test.js</code> &rarr; <code>"\\/wrr\\/test\\.js"</code>)
+                    </label>
+                    <label style="display:block; cursor:pointer; font-weight:500; color:#475569;">
+                        <input type="radio" name="convertMode" value="regex" style="margin-right:8px;">
+                        Standard regex — already a pattern, just JSON-encode it
+                        (<code>\.js$</code> &rarr; <code>"\\.js$"</code>)
+                    </label>
                 </div>
                 <div class="checkbox-group">
                     <input type="checkbox" id="convertRegexAnd">
@@ -314,7 +323,7 @@
             const out = document.getElementById('convertOutput');
             const rawPatterns = toLines(document.getElementById('convertPatterns').value);
             const useAnd = document.getElementById('convertRegexAnd').checked;
-            const escapeLiteral = document.getElementById('convertEscape').checked;
+            const escapeLiteral = document.querySelector('input[name="convertMode"]:checked').value === 'literal';
 
             if (rawPatterns.length === 0) {
                 out.innerHTML = '<div class="error">Please enter at least one line of text or a regex pattern.</div>';
