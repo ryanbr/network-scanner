@@ -66,7 +66,7 @@ const SMART_CACHE_TAG = messageColors.processing('[SmartCache]');
 // log lines (start/completed). Same cyan as the other monitoring tags.
 const CONCURRENCY_TAG = messageColors.processing('[CONCURRENCY]');
 // Enhanced mouse interaction and page simulation
-const { performPageInteraction, createInteractionConfig, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
+const { performPageInteraction, createInteractionConfig, computeInteractionCeilingMs, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
 const { isGhostCursorAvailable, createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
 // Domain detection cache for performance optimization
@@ -4499,7 +4499,11 @@ function setupFrameHandling(page, forceDebug) {
 
         // Mark page as processing during interactions
         updatePageUsage(page, true);
-        const INTERACTION_HARD_TIMEOUT = 15000;
+        // Work-aware ceiling (scales with click count / realistic_click /
+        // intensity) instead of a flat 15s, which truncated high-click
+        // popunder configs mid-pass. Single source of truth shared with
+        // interaction.js's own internal hard cap so the two can't disagree.
+        const INTERACTION_HARD_TIMEOUT = computeInteractionCeilingMs(interactionConfig);
 
         // Capture-and-clear timer wrapper — same fix as cdp.js (0772ccd) and
         // the per-URL grace (577ad66). The 3 inline Promise.race patterns
@@ -5564,7 +5568,16 @@ function setupFrameHandling(page, forceDebug) {
      // bridge. Multiplying by cycle count brings the ceiling above the
      // legitimate work envelope.
      const reloadCount = task.config.reload || 0;
-     const INTERACTION_OVERHEAD_MS = 15000;  // hard cap per cycle in interaction.js
+     // Interaction overhead per cycle must match interaction.js's actual
+     // ceiling, which is now work-aware (high interact_click_count /
+     // realistic_click configs legitimately run far longer than the old flat
+     // 15s). Compute the same value here so the per-URL ceiling stays above
+     // the real interaction envelope and can't fire mid-pass. Zero when
+     // interaction is disabled for this task (no interaction cost to budget).
+     const interactionOnForTask = task.config.interact === true && !disableInteract;
+     const INTERACTION_OVERHEAD_MS = interactionOnForTask
+       ? computeInteractionCeilingMs(createInteractionConfig(task.url, task.config))
+       : 0;
      const PER_URL_TIMEOUT_MS = Math.max(
        75000,
        (task.config.timeout || 35000)
