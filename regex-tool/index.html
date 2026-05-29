@@ -327,14 +327,18 @@
 
             const { compiled, errors } = compileAll(patterns);
 
-            // Per-pattern report. In literal mode show raw -> escaped so it's
-            // clear what was produced; in regex mode just validate as-is.
+            // Per-pattern report. Show the JSON-string form (JSON.stringify ->
+            // doubled backslashes, with quotes) since that's what actually goes
+            // in config.json — never the single-backslash "engine" form, which
+            // would be under-escaped if pasted into JSON. In literal mode also
+            // show the raw input -> JSON form so the transformation is clear.
             let statusHtml = '';
             patterns.forEach((p, i) => {
                 const bad = errors.find(e => e.source === p);
+                const jsonForm = JSON.stringify(p); // e.g. "\\/wrr\\/test\\.js"
                 const shown = escapeLiteral
-                    ? `${escapeHtml(rawPatterns[i])} &rarr; ${escapeHtml(p)}`
-                    : escapeHtml(p);
+                    ? `${escapeHtml(rawPatterns[i])} &rarr; ${escapeHtml(jsonForm)}`
+                    : escapeHtml(jsonForm);
                 statusHtml += bad
                     ? `<div class="pattern-status bad">✗ ${shown} — ${escapeHtml(bad.message)}</div>`
                     : `<div class="pattern-status ok">✓ ${shown}</div>`;
