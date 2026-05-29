@@ -773,7 +773,7 @@ Redirect Handling Options:
   resourceTypes: ["script", "stylesheet"]     Only process requests of these resource types (default: all types)
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
-  userAgent: "chrome"|"chrome_mac"|"chrome_linux"|"firefox"|"firefox_mac"|"firefox_linux"|"safari"  Custom desktop User-Agent
+  userAgent: "chrome"|"chrome_mac"|"chrome_linux"|"firefox"|"firefox_mac"|"firefox_linux"|"safari"  Desktop User-Agent (defaults to "chrome" if unset; set false to scan with the raw headless UA)
   interact_intensity: "low"|"medium"|"high"     Interaction simulation intensity (default: medium)
   delay: <milliseconds>                        Delay after load (default: 6000, capped at 2000ms unless delay_uncapped: true)
   delay_uncapped: true/false                   Honor 'delay' up to half the per-URL timeout instead of the 2s default cap. Use for sites with setTimeout-deferred lazy ad/tracker loaders that fire well past the standard post-networkidle window
@@ -5112,7 +5112,17 @@ function setupFrameHandling(page, forceDebug) {
     for (const url of urlsToProcess) {
       allTasks[taskIndex++] = {
         url,
-        config: { ...site, _originalUrl: url }, // Preserve original URL for CDP domain checking
+        // Default userAgent to 'chrome' when a site doesn't set one. Without
+        // it the browser sends its bundled default UA, which literally
+        // contains "HeadlessChrome" (verified, both headless modes) — an
+        // instant automation tell. Defaulting here (rather than at launch)
+        // activates the whole coherent path, since UA-string spoofing, the
+        // navigator/webdriver/plugins/userAgentData JS masking, the Sec-CH-UA
+        // request headers, and the curl content-fetch UA all gate on
+        // config.userAgent. Placing 'chrome' BEFORE the spread means an
+        // explicit site value wins — including userAgent:false / null to opt
+        // out and scan with the raw headless UA.
+        config: { userAgent: 'chrome', ...site, _originalUrl: url },
         taskId: taskIndex - 1 // For tracking
       };
     }
