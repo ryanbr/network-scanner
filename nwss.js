@@ -13,7 +13,7 @@ const dnsPromises = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
-const { applyAllFingerprintSpoofing } = require('./lib/fingerprint');
+const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
@@ -2758,23 +2758,34 @@ function setupFrameHandling(page, forceDebug) {
           
           if (userAgentKey === 'chrome_mac') {
             platform = 'macOS';
-            platformVersion = '13.5.0'; 
+            platformVersion = '13.5.0';
             arch = 'arm';
           } else if (userAgentKey === 'chrome_linux') {
             platform = 'Linux';
             platformVersion = '6.5.0';
             arch = 'x86';
           }
-                    
+
+          // Derive the Chrome major version from the SAME UA string the
+          // browser actually sends (USER_AGENT_COLLECTIONS, via
+          // page.setUserAgent in applyUserAgentSpoofing) so Sec-CH-UA can
+          // never drift out of sync with navigator.userAgent. The version
+          // used to be hardcoded ('146') while the UA list moved to 148 —
+          // a detector cross-checking UA vs Sec-CH-UA saw the mismatch.
+          // Chrome's UA-reduction means the full version is "<major>.0.0.0".
+          const browserUa = USER_AGENT_COLLECTIONS.get(userAgentKey) || '';
+          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '148';
+          const fullVer = `${chromeMajor}.0.0.0`;
+
           await page.setExtraHTTPHeaders({
-            'Sec-CH-UA': '"Not:A-Brand";v="99", "Google Chrome";v="146", "Chromium";v="146"',
+            'Sec-CH-UA': `"Not:A-Brand";v="99", "Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}"`,
             'Sec-CH-UA-Platform': `"${platform}"`,
             'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
             'Sec-CH-UA-Mobile': '?0',
             'Sec-CH-UA-Arch': `"${arch}"`,
             'Sec-CH-UA-Bitness': '"64"',
-            'Sec-CH-UA-Full-Version': '"146.0.0.0"',
-            'Sec-CH-UA-Full-Version-List': '"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="146.0.0.0", "Chromium";v="146.0.0.0"'
+            'Sec-CH-UA-Full-Version': `"${fullVer}"`,
+            'Sec-CH-UA-Full-Version-List': `"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="${fullVer}", "Chromium";v="${fullVer}"`
           });
         }
       } catch (fingerprintErr) {
