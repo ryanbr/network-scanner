@@ -2,6 +2,38 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [3.1.0] - 2026-05-29
+
+### Added
+- **`realistic_click`** site flag — denser mouse approach, hold tremor, and mouseup drift for sites that score click realism.
+- **`interact_click_count`** site override for popunder-discovery click volume (default content-click count also raised 2 → 3).
+- **`clear_sitedata_full_on_reload`** site flag — full storage clear between reloads; quick mode now also clears localStorage/sessionStorage.
+- **regex-tool rewritten** as a real `filterRegex` builder/tester: literal↔standard↔JSON conversion, multi-pattern + `regex_and`, and testing against real request URLs (matching mirrors the scanner exactly).
+- **Fingerprint coverage**: per-domain-seeded Battery / `navigator.connection` values, `AudioBuffer` fingerprint defeat, `PerformanceNavigationTiming` jitter, `userActivation`; UA strings bumped to Chrome 148 / Firefox 151 / Safari 19.5.
+
+### Changed
+- **`userAgent` now defaults to `"chrome"`** when a site doesn't set one — previously sites without it leaked the bundled `HeadlessChrome` UA.
+- **`Sec-CH-UA` headers and the curl content-fetch UA derive from the single UA source**, so Client Hints can't drift from `navigator.userAgent`.
+- **VPN configs force scan concurrency to 1** — the shared system routing table isn't concurrency-safe.
+- **Interaction time ceiling scales with the work envelope** (click count / `realistic_click`) instead of a flat 15s.
+
+### Fixed
+- **Per-URL timeout scales** with site timeout/delay/reload (+8s recovery grace) instead of a flat 75s that discarded partial-match recovery on multi-URL scans.
+- **Interaction hard cap is now actually enforced** (was cooperative, overshooting to 20s+ under concurrency).
+- **WireGuard** inline temp-config leaked the private key on failed connect and broke retries; temp dir is now per-PID so concurrent processes can't wipe each other's config.
+- **nettools**: fixed a dig dedup race (concurrent same-domain double lookups); whois no longer discards valid records over non-fatal stderr.
+- **Orphan resource leaks** on `Promise.race` timeout (cdp.js, clear_sitedata.js, browserhealth.js) and several un-`unref`'d `setTimeout` handles.
+- **Config keys validated at startup** with boolean-like coercion, preventing silent misconfiguration.
+
+### Security
+- **OpenVPN** `pkill`/`ping`/`curl` calls moved from shell-interpolated `execSync` to `spawnSync` arg arrays (command-injection).
+- **WireGuard/OpenVPN interface & connection names validated** against a strict charset before use in paths/commands.
+
+### Performance
+- **adblock**: O(1) exact-domain lookup for `$third-party` / `$first-party` rules.
+- Parallelized site-data clearing and window-cleanup checks.
+- Removed dead code across cdp, domain-cache, searchstring, compress, adblock-rust, and nettools.
+
 ## [3.0.3] - 2026-05-26
 
 ### Improved
