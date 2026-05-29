@@ -1982,7 +1982,20 @@ function setupFrameHandling(page, forceDebug) {
 
 
   const pLimit = (await import('p-limit')).default;
-  const limit = pLimit(MAX_CONCURRENT_SITES);
+  // VPN connect/disconnect is per-URL (wgConnect/ovpnConnect at scan start,
+  // wgDisconnect/ovpnDisconnect in the finally) and manipulates the SHARED
+  // system routing table. Interface names are derived from a hash of the VPN
+  // config and connect/disconnect is not refcounted, so two concurrent URLs
+  // that share a VPN config resolve to the same interface and one task's
+  // teardown rips the interface out from under the other mid-scan. Force
+  // serial execution whenever any site uses vpn/openvpn — correctness over
+  // throughput, and VPN scans are network-bound rather than CPU-bound anyway.
+  const vpnInUse = sites.some(site => site.vpn || site.openvpn);
+  const effectiveConcurrency = vpnInUse ? 1 : MAX_CONCURRENT_SITES;
+  if (vpnInUse && MAX_CONCURRENT_SITES > 1 && (forceDebug || !silentMode)) {
+    console.log(formatLogMessage('info', `${VPN_TAG} VPN configured — forcing concurrency 1 (was ${MAX_CONCURRENT_SITES}) to avoid routing-table races`));
+  }
+  const limit = pLimit(effectiveConcurrency);
 
   const perSiteHeadful = sites.some(site => site.headful === true);
   const launchHeadless = !(headfulMode || perSiteHeadful);
@@ -5124,7 +5137,7 @@ function setupFrameHandling(page, forceDebug) {
   let urlsSinceLastCleanup = 0;
   
   if (!silentMode && totalUrls > 0) {
-    console.log(`\n${messageColors.processing('Processing')} ${totalUrls} URLs with TRUE concurrency ${MAX_CONCURRENT_SITES}...`);
+    console.log(`\n${messageColors.processing('Processing')} ${totalUrls} URLs with TRUE concurrency ${effectiveConcurrency}...`);
     if (totalUrls > RESOURCE_CLEANUP_INTERVAL) {
       console.log(messageColors.processing('Browser will restart every') + ` ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
     }
