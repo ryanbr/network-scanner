@@ -13,7 +13,7 @@ const dnsPromises = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
-const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD } = require('./lib/fingerprint');
+const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
@@ -2778,14 +2778,19 @@ function setupFrameHandling(page, forceDebug) {
           const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
 
           await page.setExtraHTTPHeaders({
-            'Sec-CH-UA': `"Not:A-Brand";v="99", "Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}"`,
+            // Brand list order + grease string match real Chrome of this major
+            // exactly (deterministic GREASE): Chromium, Google Chrome, <grease>.
+            // Same order/grease the JS brands spoof uses, so HTTP and JS agree.
+            'Sec-CH-UA': `"Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}", "${CHROME_GREASE_BRAND}";v="99"`,
             'Sec-CH-UA-Platform': `"${platform}"`,
             'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
             'Sec-CH-UA-Mobile': '?0',
             'Sec-CH-UA-Arch': `"${arch}"`,
             'Sec-CH-UA-Bitness': '"64"',
+            'Sec-CH-UA-WoW64': '?0',
+            'Sec-CH-UA-Model': '""',
             'Sec-CH-UA-Full-Version': `"${fullVer}"`,
-            'Sec-CH-UA-Full-Version-List': `"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="${fullVer}", "Chromium";v="${fullVer}"`,
+            'Sec-CH-UA-Full-Version-List': `"Chromium";v="${fullVer}", "Google Chrome";v="${fullVer}", "${CHROME_GREASE_BRAND}";v="99.0.0.0"`,
             // Real Chrome (128+) sends this for desktop; pairs with the
             // formFactors value in fingerprint.js's getHighEntropyValues spoof.
             'Sec-CH-UA-Form-Factors': '"Desktop"'
