@@ -746,7 +746,7 @@ Global config.json options:
   ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
   ignore_similar_threshold: 80                    Similarity threshold percentage for ignore_similar (default: 80)
   ignore_similar_ignored_domains: true/false      Ignore domains similar to ignoreDomains list (default: true)
-  max_concurrent_sites: 8                        Maximum concurrent site processing (1-50, default: 8)
+  max_concurrent_sites: 6                        Maximum concurrent site processing (1-50, default: 6)
   resource_cleanup_interval: 80                  Browser restart interval in URLs processed (1-1000, default: 80)
   disable_ad_tagging: true/false                 Disable Chrome AdTagging to prevent ad frame throttling (default: true)
 
