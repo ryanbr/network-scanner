@@ -13,7 +13,7 @@ const dnsPromises = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
-const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS } = require('./lib/fingerprint');
+const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
@@ -2769,10 +2769,13 @@ function setupFrameHandling(page, forceDebug) {
           // never drift out of sync with navigator.userAgent. The version
           // used to be hardcoded ('146') while the UA list moved to 148 —
           // a detector cross-checking UA vs Sec-CH-UA saw the mismatch.
-          // Chrome's UA-reduction means the full version is "<major>.0.0.0".
+          // The full-version hints carry the REAL build (major.0.BUILD) — the
+          // reduced UA hides it, these reveal it. Build comes from
+          // lib/fingerprint's CHROME_BUILD, the same source the JS
+          // getHighEntropyValues spoof uses, so HTTP and JS can't disagree.
           const browserUa = USER_AGENT_COLLECTIONS.get(userAgentKey) || '';
-          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '148';
-          const fullVer = `${chromeMajor}.0.0.0`;
+          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '149';
+          const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
 
           await page.setExtraHTTPHeaders({
             'Sec-CH-UA': `"Not:A-Brand";v="99", "Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}"`,
