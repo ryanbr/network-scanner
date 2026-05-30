@@ -5574,10 +5574,24 @@ function setupFrameHandling(page, forceDebug) {
            }
          } catch (dnsErr) {
            const errCode = dnsErr.code || dnsErr.message || 'DNS resolve failed';
-           dnsNegativeCacheSet(taskDomain, errCode);
-           dnsPrecheckSkips++;
-           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
-           return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
+           // Only a definitive "host does not exist / has no address" answer
+           // justifies dropping the URL. A resolver-level failure (EREFUSED,
+           // ESERVFAIL, ETIMEOUT, ECONNREFUSED, or our 2s timeout) says nothing
+           // about whether the domain is live — under scan concurrency a weak
+           // stub resolver REFUSES bursts of c-ares queries, which would
+           // otherwise skip live sites AND poison the negative cache for the
+           // whole host. Fail open on those: don't cache, don't skip — let the
+           // URL proceed to real browser navigation (different resolution path;
+           // a genuinely dead host still fails fast there).
+           if (errCode === 'ENOTFOUND' || errCode === 'ENODATA') {
+             dnsNegativeCacheSet(taskDomain, errCode);
+             dnsPrecheckSkips++;
+             if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
+             return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
+           }
+           // Resolver/transient failure — proceed to navigation, and neither
+           // cache nor count it as a skip so the end-of-scan stat stays honest.
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check inconclusive (${errCode}) for ${taskDomain} — proceeding (resolver issue, not a dead host)`));
          }
          } // close `else` from domainKnownToResolve shortcut above
        }
