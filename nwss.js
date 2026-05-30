@@ -1530,7 +1530,12 @@ function matchesDynamicBlock(domain) {
   return _domainOrParentInSet(_dynamicallyBlockedDomains, domain);
 }
 
-function matchesIgnoreDomain(domain, ignorePatterns) {
+// `_ignorePatterns` is intentionally unused (underscore-marked): every caller
+// and the grep/curl/nettools/searchstring callback contract pass the ignore
+// list as a 2nd arg, but the ignore-state actually lives in the module-level
+// _dynamicallyIgnoredDomains / _ignoreDomainsExact Sets walked below. Kept in
+// the signature only to preserve that shared call shape.
+function matchesIgnoreDomain(domain, _ignorePatterns) {
   // Both dynamic and static ignore lists are walked parent-by-parent so a
   // subdomain of an ignored root inherits the ignore. Previously the
   // dynamic check was exact-only, creating an asymmetry: a static-config
