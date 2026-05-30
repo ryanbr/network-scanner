@@ -11,7 +11,7 @@ const psl = require('psl');
 const path = require('path');
 const dnsPromises = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
-const { compressMultipleFiles, formatFileSize } = require('./lib/compress');
+const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
@@ -35,8 +35,6 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
 const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve } = require('./lib/nettools');
-// File compare
-const { loadComparisonRules, filterUniqueRules } = require('./lib/compare');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -68,14 +66,14 @@ const CONCURRENCY_TAG = messageColors.processing('[CONCURRENCY]');
 // Enhanced mouse interaction and page simulation
 const { performPageInteraction, createInteractionConfig, computeInteractionCeilingMs, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
-const { isGhostCursorAvailable, createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
+const { createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
 // Domain detection cache for performance optimization
 const { createGlobalHelpers, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
 const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy, prepareSocksRelays, closeAllSocksRelays } = require('./lib/proxy');
 // Dry run functionality
-const { initializeDryRunCollections, addDryRunMatch, addDryRunNetTools, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
+const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Referrer header generation
@@ -182,7 +180,7 @@ const { navigateWithRedirectHandling, handleRedirectTimeout } = require('./lib/r
 // purgeStaleTrackers removed from import: browserhealth's pageCreationTracker
 // and pageUsageTracker are now WeakMaps, so GC reclaims dead-page entries
 // automatically — manual purging is no longer needed.
-const { monitorBrowserHealth, isBrowserHealthy, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, untrackPage, cleanupPageBeforeReload } = require('./lib/browserhealth');
+const { monitorBrowserHealth, isQuicklyResponsive, performGroupWindowCleanup, performRealtimeWindowCleanup, trackPageForRealtime, updatePageUsage, untrackPage, cleanupPageBeforeReload } = require('./lib/browserhealth');
 
 // --- Script Configuration & Constants --- 
 const VERSION = '2.0.33'; // Script version
@@ -2126,12 +2124,7 @@ function setupFrameHandling(page, forceDebug) {
       bypass_cache
     } = siteConfig;
     
-    const allowFirstParty = firstParty === true || firstParty === 1;
-    const allowThirdParty = thirdParty === undefined || thirdParty === true || thirdParty === 1;
     const perSiteSubDomains = subDomains === 1 ? true : subDomainsMode;
-    const siteLocalhostIP = localhost || null;
-    const cloudflarePhishBypass = cloudflare_phish === true;
-    const cloudflareBypass = cloudflare_bypass === true;
     // Add redirect and same-page loop protection
     const MAX_REDIRECT_DEPTH = siteConfig.max_redirects || 10;
     const redirectHistory = new Set();
@@ -2140,8 +2133,6 @@ function setupFrameHandling(page, forceDebug) {
     const MAX_SAME_PAGE_LOADS = 3;
     let currentPageUrl = currentUrl;
 
-    const sitePrivoxy = privoxy === true;
-    const sitePihole = pihole === true;
     const flowproxyDetection = flowproxy_detection === true;
     
     const evenBlocked = even_blocked === true;
