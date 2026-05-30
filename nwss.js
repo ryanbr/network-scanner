@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const psl = require('psl');
 const path = require('path');
-const { createRotatingResolver, parseDnsServers, isNonExistenceError } = require('./lib/dns');
+const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonExistenceError } = require('./lib/dns');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
@@ -410,6 +410,10 @@ const dnsServersOverride = (dnsServerIndex !== -1 && args[dnsServerIndex + 1])
   ? parseDnsServers(args[dnsServerIndex + 1])
   : [];
 const dnsResolver = createRotatingResolver({ servers: dnsServersOverride, forceDebug });
+// Circuit breaker: if resolver errors dominate, suspend the pre-check for a
+// cooldown so a refusal storm doesn't keep hammering a broken resolver (sites
+// still load — a suspended pre-check just proceeds to navigation).
+const dnsBreaker = createDnsCircuitBreaker({ forceDebug });
 if (dnsResolver.pinned && !silentMode) {
   const how = dnsResolver.servers.length === 1 ? 'pinned to' : 'rotating';
   console.log(formatLogMessage('info', `DNS pre-check ${how} ${dnsResolver.servers.join(', ')}`));
@@ -5562,12 +5566,18 @@ function setupFrameHandling(page, forceDebug) {
            dnsPositiveSkippedHosts.add(taskDomain);
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check skipped (dig/whois cache confirms resolution): ${taskDomain}`));
            // Fall through to navigation -- pre-check "passed" by proxy.
+         } else if (dnsBreaker.isTripped()) {
+           // Resolver is in a refusal storm — pre-checking is futile and only
+           // adds load. Skip the resolve and proceed to navigation (same effect
+           // as a fail-open); no breaker record since no resolve happened.
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check suspended (resolver circuit open) — proceeding: ${taskDomain}`));
          } else {
          try {
            // Rotates the lead nameserver per attempt and retries once on a
            // transient error; rejects with the final error (code intact) on
            // failure. See lib/dns.js.
            await dnsResolver.resolveHost(taskDomain, dnsPrecheckTimeoutMs);
+           dnsBreaker.record(false); // resolved OK — resolver healthy
          } catch (dnsErr) {
            const errCode = dnsErr.code || dnsErr.message || 'DNS resolve failed';
            // Only a definitive "host does not exist / has no address" answer
@@ -5577,14 +5587,16 @@ function setupFrameHandling(page, forceDebug) {
            // don't skip, let it proceed to real browser navigation (a genuinely
            // dead host still fails fast there).
            if (isNonExistenceError(errCode)) {
+             dnsBreaker.record(false); // resolver answered NXDOMAIN — healthy
              dnsNegativeCacheSet(taskDomain, errCode);
              dnsPrecheckSkips++;
              if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
              return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
            }
+           dnsBreaker.record(true); // resolver error — counts toward tripping the circuit
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check inconclusive (${errCode}) for ${taskDomain} — proceeding (resolver issue, not a dead host)`));
          }
-         } // close `else` from domainKnownToResolve shortcut above
+         } // close the resolve `else` (domainKnownToResolve / circuit-open shortcuts above)
        }
      } catch {}
 
@@ -6004,6 +6016,13 @@ function setupFrameHandling(page, forceDebug) {
          parts.push(`${dnsPositiveSkips} URL(s) via ${dnsPositiveSkippedHosts.size} resolved host(s)`);
        }
        console.log(formatLogMessage('debug', `DNS pre-check skipped: ${parts.join(', ')}`));
+     }
+     // Surface circuit-breaker activity in the end-of-scan summary (each trip
+     // also warns in real time). Shown outside forceDebug because a resolver
+     // refusal storm is something the operator should know happened.
+     const dnsBreakerTrips = dnsBreaker.stats().trips;
+     if (dnsBreakerTrips > 0 && !silentMode) {
+       console.log(formatLogMessage('info', `DNS pre-check circuit tripped ${dnsBreakerTrips}× this scan (resolver refusal back-off)`));
      }
      // Blocked-pattern hit stats. Surfaces which patterns are actually
      // doing work this scan and (by absence) which are stale enough to
