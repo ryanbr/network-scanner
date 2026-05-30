@@ -2774,7 +2774,7 @@ function setupFrameHandling(page, forceDebug) {
           // lib/fingerprint's CHROME_BUILD, the same source the JS
           // getHighEntropyValues spoof uses, so HTTP and JS can't disagree.
           const browserUa = USER_AGENT_COLLECTIONS.get(userAgentKey) || '';
-          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '149';
+          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '148';
           const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
 
           await page.setExtraHTTPHeaders({
