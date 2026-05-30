@@ -137,6 +137,7 @@ const CONCURRENCY_LIMITS = Object.freeze({
 // Keep using the imported map directly so the two can never diverge again.
 
 const REALTIME_CLEANUP_THRESHOLD = 8; // Default pages to keep for realtime cleanup
+const REALTIME_CLEANUP_BUFFER_MS = 25000; // Buffer added after site delay before realtime window cleanup
 
 /**
  * Detects the installed Puppeteer version dynamically
@@ -4485,7 +4486,7 @@ function setupFrameHandling(page, forceDebug) {
       }
       }
 
-      const delayMs = siteConfig.delay || DEFAULT_DELAY;
+      const delayMs = siteConfig.delay || TIMEOUTS.DEFAULT_DELAY;
 
       // Optimized delays for Puppeteer 23.x performance
       const isFastSite = timeout <= TIMEOUTS.FAST_SITE_THRESHOLD;
@@ -4900,7 +4901,7 @@ function setupFrameHandling(page, forceDebug) {
       // Only add delay if we're continuing with more reloads
       if (i < totalReloads) {
     // Reduce delay for problematic sites
-    const adjustedDelay = i > 1 ? Math.min(DEFAULT_DELAY, 2000) : DEFAULT_DELAY;
+    const adjustedDelay = i > 1 ? Math.min(TIMEOUTS.DEFAULT_DELAY, 2000) : TIMEOUTS.DEFAULT_DELAY;
     await fastTimeout(adjustedDelay);
       }
     }
@@ -6203,9 +6204,6 @@ function setupFrameHandling(page, forceDebug) {
       console.log(messageColors.success('Generated') + ` ${outputResult.totalRules} unique rules`);
     } else if (outputResult.totalRules > 0 && dryRunMode) {
       console.log(messageColors.success('Found') + ` ${outputResult.totalRules} total matches across all URLs`);
-    }
-    if (totalDomainsSkipped > 0) {
-      console.log(messageColors.info('Performance:') + ` ${totalDomainsSkipped} domains skipped (already detected)`);
     }
     if (ignoreCache && forceDebug) {
       console.log(messageColors.info('Cache:') + ` Smart caching was disabled`);
