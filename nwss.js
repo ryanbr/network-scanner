@@ -384,10 +384,10 @@ const DNS_NEGATIVE_CACHE_MAX = 1000;
 // persisting it can't silently drop a live host. Opt-in via --dns-cache: dead
 // hosts are remembered for DNS_NEGATIVE_PERSIST_TTL_MS and reloaded next run;
 // otherwise it's a 5-min in-memory-only cache. The persist TTL is deliberately
-// much shorter than the dig/whois positive cache (20h): a domain that doesn't
-// exist now MAY get registered, and this is a domain-hunting scanner, so the
-// dead ones are re-checked a few times a day rather than trusted for ~a day.
-const DNS_NEGATIVE_PERSIST_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+// shorter than the dig/whois positive cache (20h): a domain that doesn't exist
+// now MAY get registered, and this is a domain-hunting scanner, so the dead
+// ones are re-checked twice a day rather than trusted for ~a day.
+const DNS_NEGATIVE_PERSIST_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
 const DNS_NEGATIVE_CACHE_TTL_MS = dnsCacheMode ? DNS_NEGATIVE_PERSIST_TTL_MS : 5 * 60 * 1000;
 const DNS_NEGATIVE_CACHE_FILE = path.join(__dirname, '.dnsnegcache');
 if (dnsCacheMode) {
@@ -764,7 +764,7 @@ Validation Options:
   --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check only (not Chrome/dig). One pins all
                                  queries to it; several rotate per query. Overrides /etc/resolv.conf.
   --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each),
-                                 plus the DNS pre-check negative cache (NXDOMAIN only, 6h TTL, .dnsnegcache)
+                                 plus the DNS pre-check negative cache (NXDOMAIN only, 12h TTL, .dnsnegcache)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
                                  immediately (saves ~5-15s of Puppeteer time per dead host).
