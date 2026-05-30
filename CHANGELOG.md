@@ -2,6 +2,27 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [3.1.1] - 2026-05-30
+
+### Changed
+- **Fingerprint identity pinned to Stable Chrome 148**, not whatever Chrome-for-Testing puppeteer bundles (currently 149, ahead of Stable). The spoof must blend with the real-world population; claiming an unreleased build is itself a tell. The Chrome major + build (`CHROME_BUILD`) + GREASE brand (`CHROME_GREASE_BRAND`) are now single constants — see `lib/fingerprint.md`.
+- **UA Client Hints made fully consistent and matched to real Chrome 148** (verified field-for-field against a live desktop): brand-list order + GREASE string (`Not/A)Brand`), and the full-version build (`148.0.7778.217`) sourced from one place so JS `getHighEntropyValues` and the HTTP `Sec-CH-UA-Full-Version*` headers can't drift. Added `wow64`, `model`, `formFactors`, `uaFullVersion`, and `Sec-CH-UA-WoW64`/`-Model`/`-Form-Factors` headers; Windows `platformVersion` → `19.0.0`.
+- **`navigator.deviceMemory` and `Sec-CH-Device-Memory` both pinned to `8`** (consistent JS↔HTTP), hiding the host's real RAM; `hardwareConcurrency` reports 4–8 (hides datacenter core count).
+- **Dependencies**: puppeteer / puppeteer-core 25.1.0, lru-cache 11.5.1.
+
+### Fixed
+- **Timezone is now spoofed via CDP `emulateTimezone`** instead of JS overrides, so `Date`, `Intl`, and `getTimezoneOffset` are all consistent and DST-correct. The old JS patching left the real `Date` in the host zone — an 8-hour `Date`-vs-`Intl` contradiction and a leaked host timezone.
+- **Closed several headless tells**: Battery now reports the plugged-in default (`charging:true, level:1`); `navigator.bluetooth`, `navigator.share`/`canShare` stubs added (present in real Chrome, absent in headless); `speechSynthesis.getVoices()` returns the claimed-OS voice set (`instanceof`-correct).
+- **proxy**: a string `proxy_bypass`/`socks5_bypass` (instead of an array) no longer throws `bypass.join is not a function` in the browser-launch path.
+- **socks-relay**: a client that disconnects during the upstream-connect await is now handled, so a tunnel isn't opened for a gone client and the watchdog clears immediately.
+- **smart-cache**: the memory-check and auto-save `setInterval`s are now `unref`'d, so an error path that skips `destroy()` can no longer hang the process.
+
+### Removed
+- Dead code: `browserhealth` `testNetworkCapability` + `purgeStaleTrackers` (zero callers), and a redundant 2-voice `speechSynthesis` block superseded by the full voice set.
+
+### Added
+- **`lib/fingerprint.md`** — fingerprint spoofing coverage tables (surfaces, mitigations, gating flags) and known limitations.
+
 ## [3.1.0] - 2026-05-29
 
 ### Added
