@@ -70,7 +70,7 @@ const { performPageInteraction, createInteractionConfig, computeInteractionCeili
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
 const { isGhostCursorAvailable, createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
 // Domain detection cache for performance optimization
-const { createGlobalHelpers, getTotalDomainsSkipped, getDetectedDomainsCount } = require('./lib/domain-cache');
+const { createGlobalHelpers, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
 const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy, prepareSocksRelays, closeAllSocksRelays } = require('./lib/proxy');
@@ -191,7 +191,12 @@ const startTime = Date.now();
 
 // Initialize domain cache helpers with debug logging if enabled
 const domainCacheOptions = { enableLogging: false }; // Set to true for cache debug logs
-const { isDomainAlreadyDetected, markDomainAsDetected } = createGlobalHelpers(domainCacheOptions);
+// Only markDomainAsDetected is used — the global cache feeds the end-of-scan
+// "unique domains cached" stat (getDetectedDomainsCount). The skip-check
+// (isDomainAlreadyDetected) is intentionally not wired in: cross-URL dedup is
+// already handled by nettools' global processed-domain sets, smart-cache, and
+// the per-URL local set, so a cache-level skip would be redundant.
+const { markDomainAsDetected } = createGlobalHelpers(domainCacheOptions);
 
 // Smart cache will be initialized after config is loaded
 let smartCache = null;
@@ -5954,7 +5959,6 @@ function setupFrameHandling(page, forceDebug) {
   const totalMatches = results.reduce((sum, r) => sum + (r.rules ? r.rules.length : 0), 0);
 
   // Debug: Show output format being used
-  const totalDomainsSkipped = getTotalDomainsSkipped();
   const detectedDomainsCount = getDetectedDomainsCount();
   if (forceDebug) {
     const globalOptions = {
@@ -5969,7 +5973,7 @@ function setupFrameHandling(page, forceDebug) {
     };
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
-     console.log(formatLogMessage('debug', `Performance: ${totalDomainsSkipped} domains skipped (already detected), ${detectedDomainsCount} unique domains cached`));
+     console.log(formatLogMessage('debug', `Performance: ${detectedDomainsCount} unique domains cached`));
      // Cloudflare cache statistics
      const cloudflareStats = getCacheStats();
      if (cloudflareStats.size > 0) {
