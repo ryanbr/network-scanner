@@ -10,6 +10,8 @@ const os = require('os');
 const psl = require('psl');
 const path = require('path');
 const dnsPromises = require('node:dns/promises');
+const { getServers: getDnsServers } = require('node:dns');
+const { Resolver: DnsPromiseResolver } = require('node:dns/promises');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
@@ -385,6 +387,36 @@ const dnsPositiveSkippedHosts = new Set(); // unique hostnames that triggered th
 // c-ares transient codes — read-only, hoisted out of the per-task DNS
 // pre-check so we don't allocate a fresh Set per URL.
 const DNS_TRANSIENT_ERRORS = new Set(['ETIMEOUT', 'ESERVFAIL', 'EREFUSED', 'ECONNREFUSED']);
+
+// Multi-nameserver rotation. The default global resolver leads EVERY query
+// with the FIRST nameserver in /etc/resolv.conf, so under scan concurrency one
+// server (typically the ISP resolver) takes the whole c-ares burst and starts
+// answering REFUSED while the other configured servers (e.g. 8.8.8.8/8.8.4.4)
+// sit idle. Build one Resolver per nameserver, each leading with a different
+// server and keeping the rest as failover order, then round-robin them per
+// resolve attempt — the lead server rotates across queries (and across the
+// retry), spreading load so no single server is hammered. Falls back to the
+// global promises API when 0/1 server is configured (nothing to rotate).
+const _dnsConfiguredServers = (() => { try { return getDnsServers(); } catch { return []; } })();
+const _dnsResolverPool = _dnsConfiguredServers.length > 1
+  ? _dnsConfiguredServers.map((_, i) => {
+      const r = new DnsPromiseResolver();
+      // setServers preserves the exact format getServers returns (incl. ports
+      // / bracketed IPv6), so this round-trips safely. Keep default order if a
+      // particular entry is somehow rejected.
+      try { r.setServers([..._dnsConfiguredServers.slice(i), ..._dnsConfiguredServers.slice(0, i)]); } catch { /* keep default */ }
+      return r;
+    })
+  : null;
+let _dnsResolverCursor = 0;
+// Resolver to use for the next pre-check attempt: rotated when multiple
+// nameservers exist, else the global promises API. The cursor is shared across
+// concurrent tasks; a benign race there only perturbs the distribution, which
+// is exactly what we want anyway.
+function nextDnsResolver() {
+  if (!_dnsResolverPool) return dnsPromises;
+  return _dnsResolverPool[_dnsResolverCursor++ % _dnsResolverPool.length];
+}
 
 function dnsNegativeCacheSet(hostname, error) {
   if (dnsNegativeCache.size >= DNS_NEGATIVE_CACHE_MAX) {
@@ -5530,9 +5562,11 @@ function setupFrameHandling(page, forceDebug) {
            // Fall through to navigation -- pre-check "passed" by proxy.
          } else {
          const dnsResolve = async () => {
-           // resolve4 first; on no-IPv4 (ENODATA / ENOTFOUND) fall back to
-           // resolve6 so IPv6-only hosts aren't wrongly skipped. ANY OTHER
-           // error code (ESERVFAIL, ETIMEOUT, EREFUSED, etc.) propagates
+           // Rotate the lead nameserver per attempt (so the retry below leads
+           // with a different server — if one REFUSES, the next attempt hits
+           // another). resolve4 first; on no-IPv4 (ENODATA / ENOTFOUND) fall
+           // back to resolve6 so IPv6-only hosts aren't wrongly skipped. ANY
+           // OTHER error code (ESERVFAIL, ETIMEOUT, EREFUSED, etc.) propagates
            // unchanged so the outer transient-retry path sees the real
            // resolver code and the negative cache records the right reason.
            // Previously a bare .catch swallowed everything and tried
@@ -5540,15 +5574,16 @@ function setupFrameHandling(page, forceDebug) {
            // whatever resolve6 ended up reporting.
            // 2s timeout kept as a real safety net — with c-ares off the
            // threadpool it should now rarely fire.
+           const resolver = nextDnsResolver();
            let timer;
            try {
              const timeoutP = new Promise((_, reject) => {
                timer = setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs);
              });
-             const resolveChain = dnsPromises.resolve4(taskDomain)
+             const resolveChain = resolver.resolve4(taskDomain)
                .catch(err => {
                  if (err && (err.code === 'ENODATA' || err.code === 'ENOTFOUND')) {
-                   return dnsPromises.resolve6(taskDomain);
+                   return resolver.resolve6(taskDomain);
                  }
                  throw err;
                });
