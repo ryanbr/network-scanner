@@ -6,7 +6,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
 
 - `nwss.js` — Main entry point (~5,800 lines). CLI args, URL processing, orchestration.
 - `config.json` — Default scan configuration (sites, filters, options).
-- `lib/` — 32 focused, single-purpose modules:
+- `lib/` — 33 focused, single-purpose modules:
   - `fingerprint.js` — Bot detection evasion (device/GPU/timezone spoofing)
   - `cloudflare.js` — Cloudflare challenge detection and solving
   - `browserhealth.js` — Memory management and browser lifecycle
@@ -14,6 +14,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
   - `ghost-cursor.js` — Bezier-curve cursor pathing for human-like mouse movement
   - `smart-cache.js` — Multi-layer caching with persistence
   - `nettools.js` — WHOIS/dig integration
+  - `dns.js` — DNS pre-check resolver: multi-nameserver rotation + `--dns` override (pre-check only; not Chrome/dig)
   - `output.js` — Multi-format rule output (adblock, dnsmasq, unbound, pihole, etc.)
   - `proxy.js` — SOCKS5/HTTP proxy support
   - `socks-relay.js` — Local SOCKS proxy relay/chain helper
