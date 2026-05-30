@@ -2777,7 +2777,7 @@ function setupFrameHandling(page, forceDebug) {
           const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '148';
           const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
 
-          await page.setExtraHTTPHeaders({
+          const chHeaders = {
             // Brand list order + grease string match real Chrome of this major
             // exactly (deterministic GREASE): Chromium, Google Chrome, <grease>.
             // Same order/grease the JS brands spoof uses, so HTTP and JS agree.
@@ -2794,7 +2794,21 @@ function setupFrameHandling(page, forceDebug) {
             // Real Chrome (128+) sends this for desktop; pairs with the
             // formFactors value in fingerprint.js's getHighEntropyValues spoof.
             'Sec-CH-UA-Form-Factors': '"Desktop"'
-          });
+          };
+          // Sec-CH-Device-Memory must mirror the JS navigator.deviceMemory
+          // override (8) so a server reading BOTH can't cross-check a mismatch.
+          // That JS override lives in applyFingerprintProtection, so it only
+          // runs when fingerprint_protection is set — gate the header the same
+          // way. Without this gate, a userAgent-only site (no fp_protection)
+          // would get JS deviceMemory = the real host RAM (e.g. 32) but HTTP
+          // = 8, a fresh mismatch. With fp off we send neither and both sides
+          // report the native value, which is also consistent. (RAM isn't
+          // server-observable, so spoofing it down hides datacenter specs with
+          // nothing external to contradict — unlike rtt, which we leave native.)
+          if (siteConfig.fingerprint_protection) {
+            chHeaders['Sec-CH-Device-Memory'] = '8';
+          }
+          await page.setExtraHTTPHeaders(chHeaders);
         }
       } catch (fingerprintErr) {
         if (fingerprintErr.message.includes('Session closed') || 
