@@ -133,6 +133,14 @@ Remove Chrome/Puppeteer temporary files before exit.
 Maximum concurrent site processing (1-50, overrides config/default).
 
 .TP
+.BR \--dns " \fIIP\fR[,\fIIP\fR...]"
+Nameserver(s) for the DNS pre-check only — does not affect Chrome navigation
+or dig/whois. A single address pins all pre-check queries to it; several are
+rotated per query (each leading once, the rest as failover) to spread the
+c-ares burst. Overrides /etc/resolv.conf. Invalid entries are warned and
+dropped.
+
+.TP
 .BR \--cleanup-interval " \fINUMBER\fR"
 Browser restart interval in URLs processed (1-1000, overrides config/default).
 

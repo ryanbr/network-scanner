@@ -75,6 +75,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--help`, `-h`              | Show this help menu |
 | `--version`                 | Show script version |
 | `--max-concurrent <number>` | Maximum concurrent site processing (1-50, overrides config/default) |
+| `--dns <ip[,ip,...]>` | Resolver(s) for the DNS pre-check only (one pins, several rotate per query; overrides `/etc/resolv.conf`) |
 | `--cleanup-interval <number>` | Browser restart interval in URLs processed (1-1000, overrides config/default) |
 
 ### Validation Options

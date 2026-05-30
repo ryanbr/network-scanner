@@ -9,9 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const psl = require('psl');
 const path = require('path');
-const dnsPromises = require('node:dns/promises');
-const { getServers: getDnsServers } = require('node:dns');
-const { Resolver: DnsPromiseResolver } = require('node:dns/promises');
+const { createRotatingResolver, parseDnsServers, isNonExistenceError } = require('./lib/dns');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
@@ -238,6 +236,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
       const settingsMap = {
         output: ['-o', '--output'],
         max_concurrent: ['--max-concurrent'],
+        dns: ['--dns'],
         dns_cache: ['--dns-cache'],
         cache_requests: ['--cache-requests'],
         dumpurls: ['--dumpurls'],
@@ -384,38 +383,21 @@ const DNS_NEGATIVE_CACHE_MAX = 1000;
 let dnsPrecheckSkips = 0;          // URLs skipped because hostname is NXDOMAIN-cached
 let dnsPositiveSkips = 0;          // URLs skipped because dig/whois cache proves resolution
 const dnsPositiveSkippedHosts = new Set(); // unique hostnames that triggered the positive skip path
-// c-ares transient codes — read-only, hoisted out of the per-task DNS
-// pre-check so we don't allocate a fresh Set per URL.
-const DNS_TRANSIENT_ERRORS = new Set(['ETIMEOUT', 'ESERVFAIL', 'EREFUSED', 'ECONNREFUSED']);
-
-// Multi-nameserver rotation. The default global resolver leads EVERY query
-// with the FIRST nameserver in /etc/resolv.conf, so under scan concurrency one
-// server (typically the ISP resolver) takes the whole c-ares burst and starts
-// answering REFUSED while the other configured servers (e.g. 8.8.8.8/8.8.4.4)
-// sit idle. Build one Resolver per nameserver, each leading with a different
-// server and keeping the rest as failover order, then round-robin them per
-// resolve attempt — the lead server rotates across queries (and across the
-// retry), spreading load so no single server is hammered. Falls back to the
-// global promises API when 0/1 server is configured (nothing to rotate).
-const _dnsConfiguredServers = (() => { try { return getDnsServers(); } catch { return []; } })();
-const _dnsResolverPool = _dnsConfiguredServers.length > 1
-  ? _dnsConfiguredServers.map((_, i) => {
-      const r = new DnsPromiseResolver();
-      // setServers preserves the exact format getServers returns (incl. ports
-      // / bracketed IPv6), so this round-trips safely. Keep default order if a
-      // particular entry is somehow rejected.
-      try { r.setServers([..._dnsConfiguredServers.slice(i), ..._dnsConfiguredServers.slice(0, i)]); } catch { /* keep default */ }
-      return r;
-    })
-  : null;
-let _dnsResolverCursor = 0;
-// Resolver to use for the next pre-check attempt: rotated when multiple
-// nameservers exist, else the global promises API. The cursor is shared across
-// concurrent tasks; a benign race there only perturbs the distribution, which
-// is exactly what we want anyway.
-function nextDnsResolver() {
-  if (!_dnsResolverPool) return dnsPromises;
-  return _dnsResolverPool[_dnsResolverCursor++ % _dnsResolverPool.length];
+// DNS pre-check resolver (rotation + resolution logic lives in lib/dns.js).
+// `--dns <ip[,ip...]>` (or a `dns` setting in .nwssconfig, mapped to the same
+// flag) pins/rotates an explicit resolver list; otherwise the resolv.conf
+// nameservers are rotated. Rotation spreads the c-ares burst so one server
+// (e.g. a flaky ISP resolver) doesn't absorb every query and answer REFUSED.
+const dnsServerIndex = args.findIndex(arg => arg === '--dns');
+const dnsServersOverride = (dnsServerIndex !== -1 && args[dnsServerIndex + 1])
+  ? parseDnsServers(args[dnsServerIndex + 1])
+  : [];
+const dnsResolver = createRotatingResolver({ servers: dnsServersOverride, forceDebug });
+if (dnsResolver.pinned && !silentMode) {
+  const how = dnsResolver.servers.length === 1 ? 'pinned to' : 'rotating';
+  console.log(formatLogMessage('info', `DNS pre-check ${how} ${dnsResolver.servers.join(', ')}`));
+} else if (forceDebug && dnsResolver.rotates) {
+  console.log(formatLogMessage('debug', `DNS pre-check rotating ${dnsResolver.servers.length} resolv.conf nameservers: ${dnsResolver.servers.join(', ')}`));
 }
 
 function dnsNegativeCacheSet(hostname, error) {
@@ -758,6 +740,8 @@ General Options:
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
+  --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check only (not Chrome/dig). One pins all
+                                 queries to it; several rotate per query. Overrides /etc/resolv.conf.
   --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
@@ -5561,71 +5545,25 @@ function setupFrameHandling(page, forceDebug) {
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check skipped (dig/whois cache confirms resolution): ${taskDomain}`));
            // Fall through to navigation -- pre-check "passed" by proxy.
          } else {
-         const dnsResolve = async () => {
-           // Rotate the lead nameserver per attempt (so the retry below leads
-           // with a different server — if one REFUSES, the next attempt hits
-           // another). resolve4 first; on no-IPv4 (ENODATA / ENOTFOUND) fall
-           // back to resolve6 so IPv6-only hosts aren't wrongly skipped. ANY
-           // OTHER error code (ESERVFAIL, ETIMEOUT, EREFUSED, etc.) propagates
-           // unchanged so the outer transient-retry path sees the real
-           // resolver code and the negative cache records the right reason.
-           // Previously a bare .catch swallowed everything and tried
-           // resolve6, which masked transient v4-side errors behind
-           // whatever resolve6 ended up reporting.
-           // 2s timeout kept as a real safety net — with c-ares off the
-           // threadpool it should now rarely fire.
-           const resolver = nextDnsResolver();
-           let timer;
-           try {
-             const timeoutP = new Promise((_, reject) => {
-               timer = setTimeout(() => reject(new Error('DNS timeout')), dnsPrecheckTimeoutMs);
-             });
-             const resolveChain = resolver.resolve4(taskDomain)
-               .catch(err => {
-                 if (err && (err.code === 'ENODATA' || err.code === 'ENOTFOUND')) {
-                   return resolver.resolve6(taskDomain);
-                 }
-                 throw err;
-               });
-             await Promise.race([resolveChain, timeoutP]);
-           } finally {
-             if (timer) clearTimeout(timer);
-           }
-         };
-         // c-ares transient codes — retry once so a momentary resolver
-         // hiccup doesn't poison the negative cache for 5 minutes.
-         // DNS_TRANSIENT_ERRORS is module-level so we don't allocate per task.
          try {
-           try {
-             await dnsResolve();
-           } catch (firstErr) {
-             const code = firstErr && firstErr.code;
-             if (DNS_TRANSIENT_ERRORS.has(code) || (firstErr && firstErr.message === 'DNS timeout')) {
-               if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check transient (${code || 'timeout'}) for ${taskDomain}, retrying once`));
-               await dnsResolve();
-             } else {
-               throw firstErr;
-             }
-           }
+           // Rotates the lead nameserver per attempt and retries once on a
+           // transient error; rejects with the final error (code intact) on
+           // failure. See lib/dns.js.
+           await dnsResolver.resolveHost(taskDomain, dnsPrecheckTimeoutMs);
          } catch (dnsErr) {
            const errCode = dnsErr.code || dnsErr.message || 'DNS resolve failed';
            // Only a definitive "host does not exist / has no address" answer
-           // justifies dropping the URL. A resolver-level failure (EREFUSED,
-           // ESERVFAIL, ETIMEOUT, ECONNREFUSED, or our 2s timeout) says nothing
-           // about whether the domain is live — under scan concurrency a weak
-           // stub resolver REFUSES bursts of c-ares queries, which would
-           // otherwise skip live sites AND poison the negative cache for the
-           // whole host. Fail open on those: don't cache, don't skip — let the
-           // URL proceed to real browser navigation (different resolution path;
-           // a genuinely dead host still fails fast there).
-           if (errCode === 'ENOTFOUND' || errCode === 'ENODATA') {
+           // (ENOTFOUND/ENODATA) justifies dropping the URL. A resolver-level
+           // failure (EREFUSED/ESERVFAIL/ETIMEOUT/ECONNREFUSED/timeout) says
+           // nothing about whether the domain is live — fail open: don't cache,
+           // don't skip, let it proceed to real browser navigation (a genuinely
+           // dead host still fails fast there).
+           if (isNonExistenceError(errCode)) {
              dnsNegativeCacheSet(taskDomain, errCode);
              dnsPrecheckSkips++;
              if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
              return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
            }
-           // Resolver/transient failure — proceed to navigation, and neither
-           // cache nor count it as a skip so the end-of-scan stat stays honest.
            if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check inconclusive (${errCode}) for ${taskDomain} — proceeding (resolver issue, not a dead host)`));
          }
          } // close `else` from domainKnownToResolve shortcut above
