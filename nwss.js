@@ -247,7 +247,6 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         compress_logs: ['--compress-logs'],
         debug: ['--debug'],
         silent: ['--silent'],
-        verbose: ['--verbose'],
         headful: ['--headful'],
         keep_open: ['--keep-open'],
         dry_run: ['--dry-run'],
@@ -318,7 +317,6 @@ if (compareIndex !== -1 && args[compareIndex + 1]) {
 }
 
 
-const forceVerbose = args.includes('--verbose');
 const forceDebug = args.includes('--debug');
 const silentMode = args.includes('--silent');
 const showTitles = args.includes('--titles');
@@ -699,7 +697,6 @@ Per-config settings file (.nwssconfig):
   See README.md for format details.
 
 General Options:
-  --verbose                      Force verbose mode globally
   --debug                        Force debug mode globally
   --silent                       Suppress normal console logs
   --titles                       Add ! <url> title before each site's group

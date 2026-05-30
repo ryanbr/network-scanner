@@ -73,10 +73,6 @@ Generate adblock filter rules with resource type modifiers (requires \fB\-o\fR).
 
 .SS General Options
 .TP
-.B \--verbose
-Enable verbose output globally for all sites.
-
-.TP
 .B \--debug
 Enable debug mode with detailed logging of all network requests.
 
@@ -844,7 +840,7 @@ With default settings (\fBignore_similar_threshold: 80\fR):
 
 .SS Run with debug mode and similarity filtering:
 .EX
-node nwss.js --debug --dry-run --verbose
+node nwss.js --debug --dry-run
 .EE
 
 .SS Run with adblock output format:

@@ -50,7 +50,6 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 
 | Argument                  | Description |
 |:---------------------------|:------------|
-| `--verbose`                 | Force verbose mode globally |
 | `--debug`                   | Force debug mode globally |
 | `--silent`                  | Suppress normal console logs |
 | `--titles`                  | Add `! <url>` title before each site's group |
