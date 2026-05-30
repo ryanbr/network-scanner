@@ -432,8 +432,9 @@ if (dnsResolver.pinned && !silentMode) {
 // RESPONDS to a trivial evaluate; a hung one does not). Entries self-heal via
 // isClosed() so timeout/error paths that skip the normal close can't leak.
 const _inFlightPages = new Map(); // page -> { url, unresponsiveStrikes }
-const PAGE_HANG_PROBE_TIMEOUT_MS = 2000; // liveness-probe (page.evaluate) cap
-const PAGE_HANG_STRIKES_TO_KILL = 2;     // consecutive unresponsive probes (during a stall) before force-close
+const PAGE_HANG_PROBE_TIMEOUT_MS = 2000;   // liveness-probe (page.evaluate) cap; no response within this = hung
+const PAGE_HANG_PROBE_INTERVAL_MS = 15000; // how often to probe in-flight pages while the scan is stalled
+const PAGE_HANG_STRIKES_TO_KILL = 2;       // consecutive HUNG probes before force-close (~30s recovery at the 15s interval)
 
 function dnsNegativeCacheSet(hostname, error) {
   if (dnsNegativeCache.size >= DNS_NEGATIVE_CACHE_MAX) {
@@ -5265,14 +5266,19 @@ function setupFrameHandling(page, forceDebug) {
  // entry so the interval callback doesn't re-colorize per tick.
  const HANG_CHECK_TAG = messageColors.processing('[HANG CHECK]');
 
- // Idle-hang watchdog. Called only while the scan is stalled (no URL completing).
- // Probes each in-flight page for liveness; a page unresponsive across
- // PAGE_HANG_STRIKES_TO_KILL consecutive probes is force-closed, which makes the
- // stuck task's awaits reject so its batch completes instead of waiting out the
- // full per-URL ceiling. A page that's merely slow (e.g. sitting in a config
- // delay) still RESPONDS to the trivial evaluate, so it's spared. Probes run in
- // parallel (bounded by the 2s cap); a guard prevents overlapping sweeps. Adds
- // zero overhead during normal progress because it's only invoked on a stall.
+ // Idle-hang watchdog. Runs only while the scan is stalled (no URL completing).
+ // The probe distinguishes a HUNG renderer from one that's merely NAVIGATING,
+ // which is the key to probing aggressively without false-kills:
+ //   - evaluate resolves            -> 'alive'      -> reset strikes
+ //   - evaluate rejects fast (e.g. "Execution context destroyed" mid goto/
+ //     reload)                       -> 'navigating' -> inconclusive: neither
+ //                                                      strike nor reset, so a
+ //                                                      navigation can NEVER trip
+ //                                                      the kill regardless of cadence
+ //   - no response within the cap    -> 'hung'       -> strike
+ // PAGE_HANG_STRIKES_TO_KILL consecutive HUNG probes force-close the page, so the
+ // stuck task's awaits reject and its batch completes instead of waiting out the
+ // full per-URL ceiling. Parallel, guarded against overlap; zero overhead off a stall.
  let _hangProbeInProgress = false;
  const probeInFlightPagesForHang = async () => {
    if (_hangProbeInProgress || _inFlightPages.size === 0) return;
@@ -5280,17 +5286,19 @@ function setupFrameHandling(page, forceDebug) {
    try {
      await Promise.all([..._inFlightPages.entries()].map(async ([page, info]) => {
        if (page.isClosed()) { _inFlightPages.delete(page); return; }
-       let alive = false;
+       let verdict;
        try {
-         alive = await Promise.race([
-           page.evaluate(() => true).then(() => true, () => false),
-           new Promise(r => setTimeout(() => r(false), PAGE_HANG_PROBE_TIMEOUT_MS)),
+         verdict = await Promise.race([
+           page.evaluate(() => true).then(() => 'alive', () => 'navigating'),
+           new Promise(r => setTimeout(() => r('hung'), PAGE_HANG_PROBE_TIMEOUT_MS)),
          ]);
-       } catch { alive = false; }
-       if (alive) { info.unresponsiveStrikes = 0; return; }
+       } catch { verdict = 'hung'; }
+       if (verdict === 'alive') { info.unresponsiveStrikes = 0; return; }
+       if (verdict === 'navigating') return; // context destroyed mid-nav — not a hang; don't strike or reset
+       // verdict === 'hung' — renderer gave no response within the cap
        info.unresponsiveStrikes++;
        if (info.unresponsiveStrikes >= PAGE_HANG_STRIKES_TO_KILL) {
-         console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} Force-closing unresponsive page after ${info.unresponsiveStrikes} stalled probes: ${info.url}`));
+         console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} Force-closing hung page after ${info.unresponsiveStrikes} unresponsive probes: ${info.url}`));
          _inFlightPages.delete(page);
          page.close().catch(() => {}); // stuck task's awaits reject -> task errors -> batch completes
        }
@@ -5312,11 +5320,8 @@ function setupFrameHandling(page, forceDebug) {
      if (forceDebug) {
        console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} No progress for ${hangCheckCount * 30}s`));
      }
-     // Surgical recovery first: probe in-flight pages and force-close any that
-     // are confirmed hung. This usually clears the stall (and so resets
-     // hangCheckCount via the progress branch) well before the 2.5-min nuclear
-     // restart below. Fire-and-forget; self-guarded against overlap.
-     probeInFlightPagesForHang();
+     // The faster 15s probe interval below does surgical per-page recovery; this
+     // 30s interval owns only the slower nuclear-restart escalation.
      if (hangCheckCount >= 5) {
        console.log(formatLogMessage('error', `${HANG_CHECK_TAG} Hung for 2.5 minutes. Triggering emergency browser restart.`));
        forceRestartFlag = true; // Set flag instead of exiting
@@ -5324,9 +5329,6 @@ function setupFrameHandling(page, forceDebug) {
      }
    } else {
      hangCheckCount = 0;
-     // Progress resumed — clear any accumulated unresponsive strikes so a fresh
-     // stall starts probing from zero rather than killing on the next blip.
-     for (const info of _inFlightPages.values()) info.unresponsiveStrikes = 0;
    }
    lastProcessedCount = processedUrlCount;
 
@@ -5342,6 +5344,22 @@ function setupFrameHandling(page, forceDebug) {
  // clearInterval calls at the normal-exit and error paths already cover the
  // cleanup, this is belt-and-suspenders in case a future refactor moves them.
  hangDetectionInterval.unref();
+
+ // Fast surgical recovery on its own 15s cadence (the 30s interval above owns
+ // the slower nuclear-restart escalation). Probes in-flight pages only while
+ // progress is stalled and force-closes confirmed-hung ones; clears strikes when
+ // progress resumes so a fresh stall starts from zero. Starts at -1 so the very
+ // first window is grace (processedUrlCount begins at 0).
+ let lastProbeCount = -1;
+ const pageHangProbeInterval = setInterval(() => {
+   if (processedUrlCount === lastProbeCount) {
+     probeInFlightPagesForHang(); // fire-and-forget; self-guarded against overlap
+   } else {
+     for (const info of _inFlightPages.values()) info.unresponsiveStrikes = 0;
+   }
+   lastProbeCount = processedUrlCount;
+ }, PAGE_HANG_PROBE_INTERVAL_MS);
+ pageHangProbeInterval.unref();
 
  // Process URLs in batches with exception handling
  let siteGroupIndex = 0;
@@ -5949,11 +5967,13 @@ function setupFrameHandling(page, forceDebug) {
  } catch (processingError) {
    console.log(formatLogMessage('error', `Critical error: ${processingError.message}`));
    clearInterval(hangDetectionInterval);
+   clearInterval(pageHangProbeInterval);
    throw processingError;
   }
 
-  // Clear hang detection interval
+  // Clear hang detection intervals
   clearInterval(hangDetectionInterval);
+  clearInterval(pageHangProbeInterval);
 
   // === POST-SCAN PROCESSING ===
   // Clean up first-party domains and validate results
