@@ -421,6 +421,20 @@ if (dnsResolver.pinned && !silentMode) {
   console.log(formatLogMessage('debug', `DNS pre-check rotating ${dnsResolver.servers.length} resolv.conf nameservers: ${dnsResolver.servers.join(', ')}`));
 }
 
+// Idle-hang watchdog registry: in-flight main pages, iterable (the
+// browserhealth page trackers are WeakMaps and can't be scanned). Registered
+// when a task starts navigating, removed on completion. The hang check probes
+// these ONLY while global progress is stalled and force-closes any page that is
+// unresponsive across consecutive probes — recovering a single hung URL in ~the
+// hang-check window instead of waiting out its full per-URL ceiling (which is
+// the backstop). Acting only during a stall + requiring unresponsiveness avoids
+// killing a page that's merely slow (a page in a config delay is idle but
+// RESPONDS to a trivial evaluate; a hung one does not). Entries self-heal via
+// isClosed() so timeout/error paths that skip the normal close can't leak.
+const _inFlightPages = new Map(); // page -> { url, unresponsiveStrikes }
+const PAGE_HANG_PROBE_TIMEOUT_MS = 2000; // liveness-probe (page.evaluate) cap
+const PAGE_HANG_STRIKES_TO_KILL = 2;     // consecutive unresponsive probes (during a stall) before force-close
+
 function dnsNegativeCacheSet(hostname, error) {
   if (dnsNegativeCache.size >= DNS_NEGATIVE_CACHE_MAX) {
     dnsNegativeCache.delete(dnsNegativeCache.keys().next().value);
@@ -2339,6 +2353,9 @@ function setupFrameHandling(page, forceDebug) {
 
       // Track page for realtime cleanup
       trackPageForRealtime(page);
+      // Register with the idle-hang watchdog (force-closed if it goes
+      // unresponsive while the whole scan has stalled).
+      _inFlightPages.set(page, { url: currentUrl, unresponsiveStrikes: 0 });
 
       // Mark page as actively processing
       updatePageUsage(page, true);
@@ -5140,6 +5157,7 @@ function setupFrameHandling(page, forceDebug) {
         if (!keepBrowserOpen) {
           try {
             untrackPage(page);
+            _inFlightPages.delete(page);
             await page.close();
             if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
           } catch (pageCloseErr) {
@@ -5247,6 +5265,41 @@ function setupFrameHandling(page, forceDebug) {
  // entry so the interval callback doesn't re-colorize per tick.
  const HANG_CHECK_TAG = messageColors.processing('[HANG CHECK]');
 
+ // Idle-hang watchdog. Called only while the scan is stalled (no URL completing).
+ // Probes each in-flight page for liveness; a page unresponsive across
+ // PAGE_HANG_STRIKES_TO_KILL consecutive probes is force-closed, which makes the
+ // stuck task's awaits reject so its batch completes instead of waiting out the
+ // full per-URL ceiling. A page that's merely slow (e.g. sitting in a config
+ // delay) still RESPONDS to the trivial evaluate, so it's spared. Probes run in
+ // parallel (bounded by the 2s cap); a guard prevents overlapping sweeps. Adds
+ // zero overhead during normal progress because it's only invoked on a stall.
+ let _hangProbeInProgress = false;
+ const probeInFlightPagesForHang = async () => {
+   if (_hangProbeInProgress || _inFlightPages.size === 0) return;
+   _hangProbeInProgress = true;
+   try {
+     await Promise.all([..._inFlightPages.entries()].map(async ([page, info]) => {
+       if (page.isClosed()) { _inFlightPages.delete(page); return; }
+       let alive = false;
+       try {
+         alive = await Promise.race([
+           page.evaluate(() => true).then(() => true, () => false),
+           new Promise(r => setTimeout(() => r(false), PAGE_HANG_PROBE_TIMEOUT_MS)),
+         ]);
+       } catch { alive = false; }
+       if (alive) { info.unresponsiveStrikes = 0; return; }
+       info.unresponsiveStrikes++;
+       if (info.unresponsiveStrikes >= PAGE_HANG_STRIKES_TO_KILL) {
+         console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} Force-closing unresponsive page after ${info.unresponsiveStrikes} stalled probes: ${info.url}`));
+         _inFlightPages.delete(page);
+         page.close().catch(() => {}); // stuck task's awaits reject -> task errors -> batch completes
+       }
+     }));
+   } finally {
+     _hangProbeInProgress = false;
+   }
+ };
+
  const hangDetectionInterval = setInterval(() => {
    // Progress check, counter, and forceRestartFlag MUST run regardless of
    // debug mode — previously the entire body was gated on forceDebug, which
@@ -5259,6 +5312,11 @@ function setupFrameHandling(page, forceDebug) {
      if (forceDebug) {
        console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} No progress for ${hangCheckCount * 30}s`));
      }
+     // Surgical recovery first: probe in-flight pages and force-close any that
+     // are confirmed hung. This usually clears the stall (and so resets
+     // hangCheckCount via the progress branch) well before the 2.5-min nuclear
+     // restart below. Fire-and-forget; self-guarded against overlap.
+     probeInFlightPagesForHang();
      if (hangCheckCount >= 5) {
        console.log(formatLogMessage('error', `${HANG_CHECK_TAG} Hung for 2.5 minutes. Triggering emergency browser restart.`));
        forceRestartFlag = true; // Set flag instead of exiting
@@ -5266,6 +5324,9 @@ function setupFrameHandling(page, forceDebug) {
      }
    } else {
      hangCheckCount = 0;
+     // Progress resumed — clear any accumulated unresponsive strikes so a fresh
+     // stall starts probing from zero rather than killing on the next blip.
+     for (const info of _inFlightPages.values()) info.unresponsiveStrikes = 0;
    }
    lastProcessedCount = processedUrlCount;
 
