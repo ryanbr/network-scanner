@@ -236,6 +236,8 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
       const settingsMap = {
         output: ['-o', '--output'],
         max_concurrent: ['--max-concurrent'],
+        cleanup_interval: ['--cleanup-interval'],
+        resource_cleanup_interval: ['--cleanup-interval'],
         dns: ['--dns'],
         dns_cache: ['--dns-cache'],
         cache_requests: ['--cache-requests'],
