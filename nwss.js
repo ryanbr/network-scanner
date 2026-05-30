@@ -343,12 +343,16 @@ const disableInteract = args.includes('--no-interact');
 const globalGhostCursor = args.includes('--ghost-cursor');
 const plainOutput = args.includes('--plain');
 const enableCDP = args.includes('--cdp');
-const dnsmasqMode = args.includes('--dnsmasq');
-const dnsmasqOldMode = args.includes('--dnsmasq-old');
-const unboundMode = args.includes('--unbound');
+// These six are reassigned to false by the incompatible-flag validation
+// blocks below (e.g. --dnsmasq + --unbound), so they must be `let` — as
+// `const` that fallback threw "Assignment to constant variable" the moment
+// two conflicting output modes were combined.
+let dnsmasqMode = args.includes('--dnsmasq');
+let dnsmasqOldMode = args.includes('--dnsmasq-old');
+let unboundMode = args.includes('--unbound');
 const removeDupes = args.includes('--remove-dupes') || args.includes('--remove-dubes');
-const privoxyMode = args.includes('--privoxy');
-const piholeMode = args.includes('--pihole');
+let privoxyMode = args.includes('--privoxy');
+let piholeMode = args.includes('--pihole');
 const globalEvalOnDoc = args.includes('--eval-on-doc'); // For Fetch/XHR interception
 const dryRunMode = args.includes('--dry-run');
 const compressLogs = args.includes('--compress-logs');
@@ -2833,7 +2837,7 @@ function setupFrameHandling(page, forceDebug) {
 
    // Parse searchstring patterns using module
    const { searchStrings, searchStringsAnd, hasSearchString, hasSearchStringAnd } = parseSearchStrings(siteConfig.searchstring, siteConfig.searchstring_and);
-   const useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring
+   let useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring (reassigned to false below if curl is unavailable)
    let useGrep = siteConfig.grep === true; // Grep can work independently
 
    // Get user agent for curl if needed
