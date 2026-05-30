@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [3.1.1] - 2026-05-30
+## [3.1.2] - 2026-05-30
 
 ### Changed
 - **Fingerprint identity pinned to Stable Chrome 148**, not whatever Chrome-for-Testing puppeteer bundles (currently 149, ahead of Stable). The spoof must blend with the real-world population; claiming an unreleased build is itself a tell. The Chrome major + build (`CHROME_BUILD`) + GREASE brand (`CHROME_GREASE_BRAND`) are now single constants — see `lib/fingerprint.md`.
