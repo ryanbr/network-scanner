@@ -2750,7 +2750,7 @@ function setupFrameHandling(page, forceDebug) {
         if (!useObscura && siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
           const userAgentKey = siteConfig.userAgent.toLowerCase();
           let platform = 'Windows';
-          let platformVersion = '15.0.0';
+          let platformVersion = '19.0.0'; // Win11 — MUST match fingerprint.js's userAgentData platformVersion
           let arch = 'x86';
           
           if (userAgentKey === 'chrome_mac') {
@@ -2785,7 +2785,10 @@ function setupFrameHandling(page, forceDebug) {
             'Sec-CH-UA-Arch': `"${arch}"`,
             'Sec-CH-UA-Bitness': '"64"',
             'Sec-CH-UA-Full-Version': `"${fullVer}"`,
-            'Sec-CH-UA-Full-Version-List': `"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="${fullVer}", "Chromium";v="${fullVer}"`
+            'Sec-CH-UA-Full-Version-List': `"Not:A-Brand";v="99.0.0.0", "Google Chrome";v="${fullVer}", "Chromium";v="${fullVer}"`,
+            // Real Chrome (128+) sends this for desktop; pairs with the
+            // formFactors value in fingerprint.js's getHighEntropyValues spoof.
+            'Sec-CH-UA-Form-Factors': '"Desktop"'
           });
         }
       } catch (fingerprintErr) {
