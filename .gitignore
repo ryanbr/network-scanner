@@ -4,6 +4,7 @@ node_modules/
 .npmrc
 .digcache
 .whoiscache
+.dnsnegcache
 .nwssconfig
 
 # Local scan-output artifacts (one-off test runs)

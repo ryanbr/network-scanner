@@ -34,7 +34,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -378,8 +378,25 @@ const dnsPrecheckTimeoutMs = 2000;
 // of unique dead hosts) can't grow the cache unboundedly. Same pattern as
 // the rest of the codebase's in-memory caches.
 const dnsNegativeCache = new Map(); // hostname -> { error, timestamp }
-const DNS_NEGATIVE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 const DNS_NEGATIVE_CACHE_MAX = 1000;
+// The negative cache holds ONLY definitive non-existence (NXDOMAIN/ENODATA) —
+// resolver errors fail open and never enter it (see the pre-check catch), so
+// persisting it can't silently drop a live host. Opt-in via --dns-cache: dead
+// hosts are remembered for DNS_NEGATIVE_PERSIST_TTL_MS and reloaded next run;
+// otherwise it's a 5-min in-memory-only cache. The persist TTL is deliberately
+// much shorter than the dig/whois positive cache (20h): a domain that doesn't
+// exist now MAY get registered, and this is a domain-hunting scanner, so the
+// dead ones are re-checked a few times a day rather than trusted for ~a day.
+const DNS_NEGATIVE_PERSIST_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const DNS_NEGATIVE_CACHE_TTL_MS = dnsCacheMode ? DNS_NEGATIVE_PERSIST_TTL_MS : 5 * 60 * 1000;
+const DNS_NEGATIVE_CACHE_FILE = path.join(__dirname, '.dnsnegcache');
+if (dnsCacheMode) {
+  // Reuse the dig/whois caches' generic load/save (atomic write, TTL + size
+  // bounded). The 'exit' flush is synchronous (writeFileSync) so it fires on
+  // any exit path, mirroring nettools' dig/whois flush.
+  loadDiskCache(DNS_NEGATIVE_CACHE_FILE, dnsNegativeCache, DNS_NEGATIVE_CACHE_TTL_MS, DNS_NEGATIVE_CACHE_MAX);
+  process.on('exit', () => saveDiskCache(DNS_NEGATIVE_CACHE_FILE, dnsNegativeCache, DNS_NEGATIVE_CACHE_TTL_MS, DNS_NEGATIVE_CACHE_MAX));
+}
 let dnsPrecheckSkips = 0;          // URLs skipped because hostname is NXDOMAIN-cached
 let dnsPositiveSkips = 0;          // URLs skipped because dig/whois cache proves resolution
 const dnsPositiveSkippedHosts = new Set(); // unique hostnames that triggered the positive skip path
@@ -742,7 +759,8 @@ Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
   --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check only (not Chrome/dig). One pins all
                                  queries to it; several rotate per query. Overrides /etc/resolv.conf.
-  --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each)
+  --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each),
+                                 plus the DNS pre-check negative cache (NXDOMAIN only, 6h TTL, .dnsnegcache)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
                                  immediately (saves ~5-15s of Puppeteer time per dead host).
