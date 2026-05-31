@@ -256,6 +256,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         titles: ['--titles'],
         sub_domains: ['--sub-domains'],
         no_interact: ['--no-interact'],
+        show_dead_domains: ['--show-dead-domains'],
         ghost_cursor: ['--ghost-cursor'],
         plain: ['--plain'],
         cdp: ['--cdp'],
@@ -371,6 +372,21 @@ if (dnsCacheMode) enableDiskCache();
 // ~5-15s Puppeteer + Cloudflare detection round-trip on each.
 const dnsPrecheckEnabled = !args.includes('--no-dns-precheck');
 const dnsPrecheckTimeoutMs = 2000;
+
+// --show-dead-domains: collect hostnames that are definitively DEAD (do not
+// exist / unreachable) and print them at the end of the scan so they can be
+// pruned. Only hard signals count — NXDOMAIN/ENODATA from the pre-check and
+// ERR_NAME_NOT_RESOLVED / ERR_ADDRESS_UNREACHABLE from navigation. Transient
+// failures (403/429 blocks, timeouts, Cloudflare challenges) mean the domain is
+// ALIVE and are deliberately excluded. host -> reason (first seen).
+const showDeadDomains = args.includes('--show-dead-domains');
+const _deadDomains = new Map();
+function recordDeadDomain(urlOrHost, reason) {
+  if (!showDeadDomains || !urlOrHost) return;
+  let host = urlOrHost;
+  try { host = new URL(urlOrHost).hostname; } catch { /* already a bare host */ }
+  if (host && !_deadDomains.has(host)) _deadDomains.set(host, reason);
+}
 
 // Per-scan cache of negative DNS lookups. OS resolvers don't always cache
 // NXDOMAIN responses, and a scan can hit the same dead hostname many times
@@ -785,6 +801,9 @@ Validation Options:
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
                                  immediately (saves ~5-15s of Puppeteer time per dead host).
+  --show-dead-domains            At end of scan, list hostnames that did not resolve / were
+                                 unreachable (NXDOMAIN/ENODATA + ERR_NAME_NOT_RESOLVED/ERR_ADDRESS_UNREACHABLE).
+                                 Excludes blocks/timeouts (those mean the domain is alive). For pruning.
   --validate-config              Validate config.json file and exit
   --validate-rules [file]        Validate rule file format (uses --output/--compare files if no file specified)
   --clean-rules [file]           Clean rule files by removing invalid lines and optionally duplicates (uses --output/--compare files if no file specified)
@@ -4536,6 +4555,11 @@ function setupFrameHandling(page, forceDebug) {
             }
           }
           console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
+          // Capture hard "dead domain" navigation errors for --show-dead-domains
+          // (DNS doesn't resolve / host unreachable). Blocks, timeouts and CF
+          // challenges are NOT dead — they're excluded by this match.
+          const deadNav = /ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE|ERR_DNS/.exec(err.message || '');
+          if (deadNav) recordDeadDomain(currentUrl, deadNav[0]);
           throw err;
         }
       }
@@ -5670,6 +5694,7 @@ function setupFrameHandling(page, forceDebug) {
            if (isNonExistenceError(errCode)) {
              dnsBreaker.record(false); // resolver answered NXDOMAIN — healthy
              dnsNegativeCacheSet(taskDomain, errCode);
+             recordDeadDomain(taskDomain, errCode);
              dnsPrecheckSkips++;
              if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
              return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
@@ -6308,6 +6333,19 @@ function setupFrameHandling(page, forceDebug) {
       console.log(messageColors.success('Generated') + ` ${outputResult.totalRules} unique rules`);
     } else if (outputResult.totalRules > 0 && dryRunMode) {
       console.log(messageColors.success('Found') + ` ${outputResult.totalRules} total matches across all URLs`);
+    }
+    // --show-dead-domains: list hostnames that didn't resolve / were unreachable
+    // this scan (NXDOMAIN/ENODATA + ERR_NAME_NOT_RESOLVED/ERR_ADDRESS_UNREACHABLE).
+    // One host per line so it's greppable for pruning; reason in the trailing column.
+    if (showDeadDomains) {
+      if (_deadDomains.size > 0) {
+        console.log(`\n${messageColors.warn(`Dead domains (${_deadDomains.size}) — did not resolve / unreachable:`)}`);
+        for (const [host, reason] of [..._deadDomains].sort((a, b) => a[0].localeCompare(b[0]))) {
+          console.log(`  ${host}\t${reason}`);
+        }
+      } else {
+        console.log(`\n${messageColors.success('Dead domains: none detected')}`);
+      }
     }
     if (ignoreCache && forceDebug) {
       console.log(messageColors.info('Cache:') + ` Smart caching was disabled`);
