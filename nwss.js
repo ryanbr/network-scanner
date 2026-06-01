@@ -5290,6 +5290,12 @@ function setupFrameHandling(page, forceDebug) {
  let lastProcessedCount = 0;
  let hangCheckCount = 0;
  let forceRestartFlag = false; // Flag to trigger restart on next iteration
+ // Largest per-URL timeout budget seen across tasks. The hang-check restart
+ // scales to this so it can't false-fire on a legitimately-slow config (high
+ // delay × reload × interact) whose per-URL budget exceeds a flat threshold —
+ // the emergency restart should only fire once the per-URL timeout ITSELF has
+ // had its chance and failed (a true browser hang).
+ let maxPerUrlTimeoutMs = 0;
 
  // Precomputed colored '[HANG CHECK]' subsystem prefix. formatLogMessage
  // only colors the [severity] tag; the '[HANG CHECK]' substring was
@@ -5352,9 +5358,17 @@ function setupFrameHandling(page, forceDebug) {
        console.log(formatLogMessage('warn', `${HANG_CHECK_TAG} No progress for ${hangCheckCount * 30}s`));
      }
      // The faster 15s probe interval below does surgical per-page recovery; this
-     // 30s interval owns only the slower nuclear-restart escalation.
-     if (hangCheckCount >= 5) {
-       console.log(formatLogMessage('error', `${HANG_CHECK_TAG} Hung for 2.5 minutes. Triggering emergency browser restart.`));
+     // 30s interval owns only the slower nuclear-restart escalation. Deadline-
+     // aware: the restart only fires once the stall has OUTLASTED the heaviest
+     // in-flight per-URL budget (+ grace) — i.e. the per-URL timeout itself had
+     // its chance and failed, a true hang. A flat threshold (the old 2.5min)
+     // false-fires on legitimately-slow configs (high delay × reload × interact)
+     // whose per-URL budget exceeds it, restarting the browser mid-work. Floor
+     // at 150s so light configs behave exactly as before.
+     // +45s buffer covers the per-URL 8s orphan grace + the 30s tick granularity + slack.
+     const restartAfterMs = Math.max(150000, maxPerUrlTimeoutMs + 45000);
+     if (hangCheckCount * 30000 >= restartAfterMs) {
+       console.log(formatLogMessage('error', `${HANG_CHECK_TAG} No progress for ${Math.round(hangCheckCount * 30)}s (past the ${Math.round(restartAfterMs / 1000)}s per-URL budget). Triggering emergency browser restart.`));
        forceRestartFlag = true; // Set flag instead of exiting
        hangCheckCount = 0; // Reset counter for next cycle
      }
@@ -5740,6 +5754,9 @@ function setupFrameHandling(page, forceDebug) {
          + ((task.config.delay || 0) + INTERACTION_OVERHEAD_MS) * (1 + reloadCount)
          + 30000
      );
+     // Feed the hang-check restart so it never escalates before this URL's own
+     // timeout could have fired (see maxPerUrlTimeoutMs).
+     if (PER_URL_TIMEOUT_MS > maxPerUrlTimeoutMs) maxPerUrlTimeoutMs = PER_URL_TIMEOUT_MS;
      // Grace period after primary timeout — gives the orphan a chance to
      // finish drainPendingNetTools() and emit "Saving N rules despite page
      // load failure" before we abandon its result. Drain typically completes
