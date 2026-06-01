@@ -3255,7 +3255,7 @@ function setupFrameHandling(page, forceDebug) {
       // next ad/redirect (requires capture_popups — no popups exist otherwise).
       // Light pass; the request listener catches whatever the clicks surface.
       const interactPopups = capturePopups && siteConfig.interact_popups === true;
-      const POPUP_INTERACT_CLICKS = 2; // enough to fire popunder/redirect SDKs without runaway cascades
+      const POPUP_INTERACT_CLICKS = 3; // enough to fire popunder/redirect SDKs (incl. SDKs that suppress the 1st/2nd click as warmup) without runaway cascades
 
       if (capturePopups && forceDebug) {
         // One-time setup-time warning if the click prerequisite isn't met.
