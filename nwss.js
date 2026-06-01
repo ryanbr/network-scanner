@@ -3245,7 +3245,7 @@ function setupFrameHandling(page, forceDebug) {
       // fall back to the default rather than silently disabling capture.
       const POPUP_MAX_DEPTH = (() => {
         const v = parseInt(siteConfig.capture_popups_max_depth, 10);
-        return Number.isFinite(v) && v > 0 ? v : 2;
+        return Number.isFinite(v) && v > 0 ? v : 4;
       })();
       const POPUP_CAPTURE_WINDOW_MS = (() => {
         const v = parseInt(siteConfig.capture_popups_window_ms, 10);
