@@ -3251,6 +3251,11 @@ function setupFrameHandling(page, forceDebug) {
         const v = parseInt(siteConfig.capture_popups_window_ms, 10);
         return Number.isFinite(v) && v > 0 ? v : 5000;
       })();
+      // interact_popups: click inside captured popups so they cascade to their
+      // next ad/redirect (requires capture_popups — no popups exist otherwise).
+      // Light pass; the request listener catches whatever the clicks surface.
+      const interactPopups = capturePopups && siteConfig.interact_popups === true;
+      const POPUP_INTERACT_CLICKS = 2; // enough to fire popunder/redirect SDKs without runaway cascades
 
       if (capturePopups && forceDebug) {
         // One-time setup-time warning if the click prerequisite isn't met.
@@ -3537,6 +3542,24 @@ function setupFrameHandling(page, forceDebug) {
           evaluatePopupUrl(target.url(), depth, 'document');
 
           attachPopupRequestCapture(popupPage, depth);
+
+          // interact_popups: click inside the popup so it can cascade to its next
+          // ad/redirect — popunder/redirect SDKs fire on a document-level click,
+          // and a captured-but-unclicked popup only ever shows its landing URL.
+          // Light pass (POPUP_INTERACT_CLICKS random content-zone clicks), only
+          // on popups shallower than max depth so a clicked popup's spawned child
+          // (depth+1) is still within the capture depth. Fire-and-forget: it must
+          // not block onTargetCreated, and the popup may close/navigate mid-click
+          // (performContentClicks no-ops on a closed page). The request listener
+          // above captures whatever the clicks surface; the close timer bounds it.
+          if (interactPopups && depth < POPUP_MAX_DEPTH && !popupPage.isClosed()) {
+            if (forceDebug) console.log(formatLogMessage('debug', `[popup depth=${depth}] interact_popups: ${POPUP_INTERACT_CLICKS} content click(s)`));
+            performContentClicks(popupPage, {
+              clicks: POPUP_INTERACT_CLICKS,
+              forceDebug,
+              realistic: siteConfig.realistic_click === true,
+            }).catch(() => {}); // popup is transient — non-fatal
+          }
 
           // Auto-close after the capture window so popups don't pile up.
           const closeTimer = setTimeout(() => {
