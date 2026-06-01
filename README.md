@@ -17,6 +17,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 - Subdomain handling (collapse to root or full subdomain)
 - Optionally match only first-party, third-party, or both
 - Enhanced redirect handling with JavaScript and meta refresh detection
+- Capture and drive popup/popunder chains (`capture_popups` + `interact_popups`) so domains reachable only via a clicked popup still match
 - Per-site proxy routing (SOCKS5, SOCKS4, HTTP, HTTPS) with pre-flight health checks
 
 ---
@@ -76,6 +77,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--version`                 | Show script version |
 | `--max-concurrent <number>` | Maximum concurrent site processing (1-50, overrides config/default) |
 | `--dns <ip[,ip,...]>` | Resolver(s) for the DNS pre-check only (one pins, several rotate per query; overrides `/etc/resolv.conf`) |
+| `--show-dead-domains` | At end of scan, list hostnames that did not resolve / were unreachable (`NXDOMAIN`/`ENODATA` + `ERR_NAME_NOT_RESOLVED`/`ERR_ADDRESS_UNREACHABLE`). Excludes blocks/timeouts (those mean the domain is alive). For pruning dead URLs. |
 | `--cleanup-interval <number>` | Browser restart interval in URLs processed (1-1000, overrides config/default) |
 
 ### Validation Options
@@ -294,6 +296,21 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `ignore_similar`     | Boolean | - | Override global `ignore_similar` setting for this site |
 | `ignore_similar_threshold` | Integer | - | Override global similarity threshold for this site |
 | `ignore_similar_ignored_domains` | Boolean | - | Override global `ignore_similar_ignored_domains` for this site |
+
+### Popup Capture Options
+
+Capture (and optionally drive) the popup/popunder windows that ad and redirect
+scripts open, so domains reachable only via a popup chain still match `filterRegex`.
+The same `filterRegex` applies to the whole chain — it must contain every pattern
+you expect along it. Popup capture only fires when the main page is actually
+clicking, so set `interact: true` **and** `interact_clicks: true` as well.
+
+| Field                | Values | Default | Description |
+|:---------------------|:-------|:-------:|:------------|
+| `capture_popups`     | Boolean | `false` | Capture popup windows opened during the scan and evaluate their landing URL + in-popup requests against `filterRegex`/`dig`/`whois` (requires `interact` + `interact_clicks` to fire user-gesture clicks) |
+| `interact_popups`    | Boolean | `false` | Mouse-click inside captured popups (3 content-zone clicks) so the chain cascades to its next redirect/ad. Requires `capture_popups`. Clicks popups up to `capture_popups_max_depth − 1` (the deepest captured popup is observed, not clicked) |
+| `capture_popups_max_depth` | Integer | `4` | Max popup-chain depth to capture (`site → p1 → p2 → p3 → destination`). Each extra level multiplies popups + time |
+| `capture_popups_window_ms` | Integer | `5000` | Per-popup capture window (ms) before the popup is auto-closed |
 
 ### VPN Options
 
