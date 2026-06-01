@@ -281,6 +281,8 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `interact_duration`  | Milliseconds | `2000` | Duration of interaction simulation |
 | `interact_scrolling` | Boolean | `true` | Enable scrolling simulation |
 | `interact_clicks`    | Boolean | `false` | Enable element clicking simulation |
+| `interact_click_count` | Integer | `3` | Number of random content-zone clicks per load (capped at 20). Default 3 = primary + 2 backups, since ad SDKs sometimes suppress the 1st/2nd click as warmup |
+| `realistic_click`    | Boolean | `false` | Higher click fidelity: denser mouse approach (15 steps), ±1px hand-tremor micro-moves during the press, and ±1.5px mouseup drift (so mousedown≠mouseup coords) — for sites that score click realism. Costs ~80–120ms/click |
 | `interact_typing`    | Boolean | `false` | Enable typing simulation |
 | `interact_intensity` | String | `"medium"` | Interaction simulation intensity: "low", "medium", "high" |
 | `cursor_mode`        | `"ghost"` | - | Use ghost-cursor Bezier mouse movements (requires `npm i ghost-cursor`) |
