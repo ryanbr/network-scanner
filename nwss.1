@@ -134,11 +134,12 @@ Maximum concurrent site processing (1-50, overrides config/default).
 
 .TP
 .BR \--dns " \fIIP\fR[,\fIIP\fR...]"
-Nameserver(s) for the DNS pre-check only — does not affect Chrome navigation
-or dig/whois. A single address pins all pre-check queries to it; several are
+Nameserver(s) for the DNS pre-check AND nettools' dig — does not affect Chrome
+navigation or whois. A single address pins all queries to it; several are
 rotated per query (each leading once, the rest as failover) to spread the
-c-ares burst. Overrides /etc/resolv.conf. Invalid entries are warned and
-dropped.
+load. Routing dig through these avoids dig timeouts on a flaky system resolver
+silently dropping dig-gated domains. Overrides /etc/resolv.conf. Invalid
+entries are warned and dropped.
 
 .TP
 .BR \--cleanup-interval " \fINUMBER\fR"

@@ -34,7 +34,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -433,6 +433,10 @@ const dnsServersOverride = (dnsServerIndex !== -1 && args[dnsServerIndex + 1])
   ? parseDnsServers(args[dnsServerIndex + 1])
   : [];
 const dnsResolver = createRotatingResolver({ servers: dnsServersOverride, forceDebug });
+// Route nettools' dig through the same --dns resolvers (dig otherwise uses the
+// system /etc/resolv.conf, which on a flaky setup times out and silently drops
+// dig-gated domains). Only when --dns is explicitly set.
+if (dnsServersOverride.length > 0) setDigResolvers(dnsServersOverride);
 // Circuit breaker: if resolver errors dominate, suspend the pre-check for a
 // cooldown so a refusal storm doesn't keep hammering a broken resolver (sites
 // still load — a suspended pre-check just proceeds to navigation).
@@ -799,8 +803,8 @@ General Options:
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
-  --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check only (not Chrome/dig). One pins all
-                                 queries to it; several rotate per query. Overrides /etc/resolv.conf.
+  --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check AND nettools' dig (not Chrome nav / whois).
+                                 One pins all queries to it; several rotate per query. Overrides /etc/resolv.conf.
   --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each),
                                  plus the DNS pre-check negative cache (NXDOMAIN only, 12h TTL, .dnsnegcache)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
