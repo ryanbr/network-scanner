@@ -178,8 +178,7 @@ Example:
 
 | Field                | Values | Default | Description |
 |:---------------------|:-------|:-------:|:------------|
-| `follow_redirects`   | Boolean | `true` | Follow redirects to new domains |
-| `max_redirects`      | Integer | `10` | Maximum number of redirects to follow |
+| `max_redirects`      | Integer | `10` | Maximum number of redirects to follow (`0` = follow none) |
 | `js_redirect_timeout` | Milliseconds | `5000` | Time to wait for JavaScript redirects |
 | `detect_js_patterns` | Boolean | `true` | Analyze page source for redirect patterns |
 | `redirect_timeout_multiplier` | Number | `1.5` | Increase timeout for redirected URLs |

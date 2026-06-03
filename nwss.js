@@ -840,8 +840,7 @@ Per-site config.json options:
                                               When true, ALL regex patterns must match the same URL
   
 Redirect Handling Options:
-  follow_redirects: true/false               Follow redirects to new domains (default: true)
-  max_redirects: 10                          Maximum number of redirects to follow (default: 10)
+  max_redirects: 10                          Maximum number of redirects to follow (default: 10; 0 = follow none)
   js_redirect_timeout: 5000                  Milliseconds to wait for JavaScript redirects (default: 5000)
   detect_js_patterns: true/false             Analyze page source for redirect patterns (default: true)
   redirect_timeout_multiplier: 1.5          Increase timeout for redirected URLs (default: 1.5)
@@ -2211,7 +2210,9 @@ function setupFrameHandling(page, forceDebug) {
     
     const perSiteSubDomains = subDomains === 1 ? true : subDomainsMode;
     // Add redirect and same-page loop protection
-    const MAX_REDIRECT_DEPTH = siteConfig.max_redirects || 10;
+    // Number check (not ||) so max_redirects: 0 isn't swallowed as falsy → 10.
+    const MAX_REDIRECT_DEPTH = (typeof siteConfig.max_redirects === 'number' && siteConfig.max_redirects >= 0)
+      ? siteConfig.max_redirects : 10;
     const redirectHistory = new Set();
     let redirectCount = 0;
     const pageLoadHistory = new Map(); // Track same-page reloads

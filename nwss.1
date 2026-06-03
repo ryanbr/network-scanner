@@ -487,12 +487,8 @@ Both modes wait 16 seconds before cleanup to allow final operations to complete,
 .SS Redirect Handling Options
 
 .TP
-.B follow_redirects
-Boolean. Follow redirects to new domains (default: true).
-
-.TP
 .B max_redirects
-Number. Maximum number of redirects to follow (default: 10).
+Number. Maximum number of redirects to follow (default: 10; 0 = follow none).
 
 .TP
 .B js_redirect_timeout
