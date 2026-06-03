@@ -134,7 +134,7 @@ Maximum concurrent site processing (1-50, overrides config/default).
 
 .TP
 .BR \--dns " \fIIP\fR[,\fIIP\fR...]"
-Nameserver(s) for the DNS pre-check AND nettools' dig — does not affect Chrome
+Nameserver(s) for the DNS pre-check AND nettools' dig \(em does not affect Chrome
 navigation or whois. A single address pins all queries to it; several are
 rotated per query (each leading once, the rest as failover) to spread the
 load. Routing dig through these avoids dig timeouts on a flaky system resolver
@@ -144,6 +144,10 @@ entries are warned and dropped.
 .TP
 .BR \--cleanup-interval " \fINUMBER\fR"
 Browser restart interval in URLs processed (1-1000, overrides config/default).
+
+.TP
+.B \--show-dead-domains
+At end of scan, list hostnames that did not resolve or were unreachable (\fBNXDOMAIN\fR/\fBENODATA\fR plus \fBERR_NAME_NOT_RESOLVED\fR/\fBERR_ADDRESS_UNREACHABLE\fR). Excludes blocks and timeouts, since those mean the domain is alive. Useful for pruning dead URLs.
 
 .TP
 .BR \-h ", " \--help
@@ -299,6 +303,14 @@ Boolean. Simulate mouse movements and clicks.
 String. Interaction simulation intensity: \fB"low"\fR, \fB"medium"\fR, \fB"high"\fR (default: "medium").
 
 .TP
+.B interact_click_count
+Integer. Number of random content-zone clicks per load, capped at 20 (default: 3). The default of 3 is a primary click plus two backups, since some ad SDKs suppress the first or second click as warmup.
+
+.TP
+.B realistic_click
+Boolean. Higher click fidelity: denser mouse approach (15 steps), sub-pixel hand-tremor micro-moves during the press, and a small mouseup drift so the mousedown and mouseup coordinates differ. For sites that score click realism. Costs roughly 80-120ms per click (default: false).
+
+.TP
 .B delay
 Milliseconds to wait after page load (default: 4000).
 
@@ -424,7 +436,7 @@ Object. Custom page.goto() options for Puppeteer navigation. Available options:
 .IP \(bu 4
 \fB"networkidle0"\fR - Wait until 0 network requests for 500ms
 .IP \(bu 4
-\fB"networkidle2"\fR - Wait until ≤2 network requests for 500ms
+\fB"networkidle2"\fR - Wait until \(<=2 network requests for 500ms
 .RE
 .IP \(bu 4
 \fBtimeout\fR: Maximum navigation time in milliseconds (overrides site timeout)
@@ -483,6 +495,23 @@ Boolean or String. Close old/unused browser windows and tabs after entire URL gr
 Both modes wait 16 seconds before cleanup to allow final operations to complete, and always preserve the main browser window to maintain browser instance stability. Cleanup targets popup windows, extra tabs, and pages from previously completed site groups, but never affects actively processing pages.
 
 .TP
+
+.SS Popup Capture Options
+.TP
+.B capture_popups
+Boolean. Capture popup windows opened during the scan and evaluate their landing URL and in-popup requests against \fBfilterRegex\fR/\fBdig\fR/\fBwhois\fR. Requires \fBinteract\fR plus interaction clicks to fire the user-gesture click that opens popups; \fBcapture_popups\fR alone registers the listener but no popups will fire (default: false).
+
+.TP
+.B interact_popups
+Boolean. Mouse-click inside captured popups (content-zone clicks) so the chain cascades to its next redirect or ad. Requires \fBcapture_popups\fR. Clicks popups up to \fBcapture_popups_max_depth\fR minus 1 \(em the deepest captured popup is observed, not clicked (default: false).
+
+.TP
+.B capture_popups_max_depth
+Integer. Maximum popup-chain depth to capture, e.g. \fBsite -> p1 -> p2 -> p3 -> destination\fR. Each extra level multiplies popups and time (default: 4).
+
+.TP
+.B capture_popups_window_ms
+Integer. Per-popup capture window in milliseconds before the popup is auto-closed (default: 5000).
 
 .SS Redirect Handling Options
 
@@ -679,15 +708,15 @@ Global and per-site boolean to enable similarity filtering against ignoreDomains
 With default settings (\fBignore_similar_threshold: 80\fR):
 .RS
 .IP \(bu 4
-\fBanimerco.com\fR vs \fBanimerco.org\fR → 100% similar → Ignored
+\fBanimerco.com\fR vs \fBanimerco.org\fR \(-> 100% similar \(-> Ignored
 .IP \(bu 4
-\fBgoogle.com\fR vs \fBgoogle.co.uk\fR → 100% similar → Ignored
+\fBgoogle.com\fR vs \fBgoogle.co.uk\fR \(-> 100% similar \(-> Ignored
 .IP \(bu 4
-\fBamazon.com\fR vs \fBamazon2.org\fR → 89% similar → Ignored
+\fBamazon.com\fR vs \fBamazon2.org\fR \(-> 89% similar \(-> Ignored
 .IP \(bu 4
-\fBfacebook.com\fR vs \fBfaceboook.com\fR → 91% similar → Ignored
+\fBfacebook.com\fR vs \fBfaceboook.com\fR \(-> 91% similar \(-> Ignored
 .IP \(bu 4
-\fBapple.com\fR vs \fBmicrosoft.com\fR → 0% similar → Kept
+\fBapple.com\fR vs \fBmicrosoft.com\fR \(-> 0% similar \(-> Kept
 .RE
 
 .SH EXAMPLES
