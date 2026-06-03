@@ -154,6 +154,7 @@ Example:
 | `userAgent`          | `chrome`, `chrome_mac`, `chrome_linux`, `firefox`, `firefox_mac`, `firefox_linux`, `safari` | - | User agent for page |
 | `filterRegex`        | String or Array | `.*` | Regex or list of regexes to match requests |
 | `regex_and`          | Boolean | `false` | Use AND logic for multiple filterRegex patterns - ALL patterns must match the same URL |
+| `output_regex`       | String | — | Regex applied to each matched URL to build the rule body: capture group 1 (or whole match) becomes `\|\|<capture>` instead of `\|\|host^`. E.g. `^https?:\/\/([^\/]+\/[^\/]+\/)` turns `https://host.com/script/abc.js` into `\|\|host.com/script/`. The capture must include the host. No match → falls back to `\|\|host^`. Adblock-only; domain formats (dnsmasq/pihole/hosts/plain) emit the bare host |
 | `comments`           | String or Array | - | String of comments or references |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
 | `reload`             | Integer | `1` | Number of times to reload page |

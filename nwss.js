@@ -2912,6 +2912,17 @@ function setupFrameHandling(page, forceDebug) {
 
       const regexes = getCompiledRegexes(siteConfig.filterRegex);
 
+      // output_regex (optional per-site): extract the rule body from each matched
+      // URL via capture group 1 (or the whole match), so output becomes
+      // ||<capture> (e.g. ||host/script/) instead of ||host^ — lets a stable
+      // folder/file be blocked on a host that also serves legit content. Compiled
+      // silently here; config-load validation (validate_rules) warns on a bad
+      // pattern, so a throw here just disables the feature for this site.
+      let outputRegex = null;
+      if (siteConfig.output_regex) {
+        try { outputRegex = new RegExp(siteConfig.output_regex); } catch (_) { outputRegex = null; }
+      }
+
       // NEW: Get regex_and setting (defaults to false for backward compatibility)
       const useRegexAnd = siteConfig.regex_and === true;
 
@@ -3099,9 +3110,30 @@ function setupFrameHandling(page, forceDebug) {
        * @param {string} fullSubdomain - Full subdomain for cache tracking
        * @param {string} resourceType - Resource type (for --adblock-rules mode)
        */
-      function addMatchedDomain(domain, resourceType = null, fullSubdomain = null) {
+      function addMatchedDomain(domain, resourceType = null, fullSubdomain = null, matchedUrl = null) {
        // Use fullSubdomain for cache tracking if provided, otherwise fall back to domain
        const cacheKey = fullSubdomain || domain;
+       // output_regex: derive the rule body from the matched URL. Capture group 1
+       // (or the whole match) becomes the stored key, e.g. "host/script/", which
+       // formatDomain emits as ||host/script/ for adblock and falls back to the
+       // bare host for domain-only formats. All similarity / dedup / smart-cache
+       // logic below still runs on the bare host (domain); only the final stored
+       // key changes. The capture must contain both '/' and '.' (i.e. host+path),
+       // otherwise we keep the host so a mis-written regex can't emit garbage.
+       let outputKey = domain;
+       if (outputRegex && matchedUrl) {
+         const m = matchedUrl.match(outputRegex);
+         if (m) {
+           const cap = (m[1] != null ? m[1] : m[0]);
+           // Accept only a host+path shape: a '/' with a real host before it
+           // (segment before the first '/' must contain a '.'). Rejects a
+           // capture that accidentally includes the scheme (host part would be
+           // "https:") or a path-only capture with no host — both fall back to
+           // the bare-host ||host^ rule rather than emit garbage.
+           const sl = cap ? cap.indexOf('/') : -1;
+           if (sl > 0 && cap.slice(0, sl).includes('.')) outputKey = cap;
+         }
+       }
        // Check if we should ignore similar domains
        const ignoreSimilarEnabled = siteConfig.ignore_similar !== undefined ? siteConfig.ignore_similar : ignore_similar;
        const similarityThreshold = siteConfig.ignore_similar_threshold || ignore_similar_threshold;
@@ -3203,15 +3235,15 @@ function setupFrameHandling(page, forceDebug) {
       }
 
         if (matchedDomains instanceof Map) {
-          if (!matchedDomains.has(domain)) {
-            matchedDomains.set(domain, new Set());
+          if (!matchedDomains.has(outputKey)) {
+            matchedDomains.set(outputKey, new Set());
           }
           // Only add the specific resourceType that was matched, not all types for this domain
           if (resourceType) {
-            matchedDomains.get(domain).add(resourceType);
+            matchedDomains.get(outputKey).add(resourceType);
           }
         } else {
-          matchedDomains.add(domain);
+          matchedDomains.add(outputKey);
         }
       }
 
@@ -3426,7 +3458,7 @@ function setupFrameHandling(page, forceDebug) {
               trackNetToolsHandler(() => popupNetToolsHandler(checkedRootDomain, fullSubdomain));
             } else {
               // No nettools required — regex match alone counts.
-              addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain);
+              addMatchedDomain(checkedRootDomain, resourceType, fullSubdomain, checkedUrl);
             }
           } catch (_) { /* observation-only — never let a popup error escape */ }
         };
@@ -3771,7 +3803,7 @@ function setupFrameHandling(page, forceDebug) {
                         wasBlocked: true
                       });
                     } else {
-                      addMatchedDomain(reqDomain, resourceType, fullSubdomain);
+                      addMatchedDomain(reqDomain, resourceType, fullSubdomain, reqUrl);
                     }
                     matchedRegexPatterns.add(evenBlockedRegexPattern);
 
@@ -3949,7 +3981,10 @@ function setupFrameHandling(page, forceDebug) {
                  isFirstParty: isFirstParty
                });
              } else {
-               addMatchedDomain(reqDomain, resourceType);
+               // Pass null for fullSubdomain (not the in-scope hostname) to keep
+               // this path's dedup key as the root domain exactly as before —
+               // only matchedUrl is new here, for output_regex.
+               addMatchedDomain(reqDomain, resourceType, null, reqUrl);
              }
              if (matchedRegexPattern) matchedRegexPatterns.add(matchedRegexPattern);
              if (siteConfig.verbose === 1) {

@@ -259,6 +259,10 @@ Regex pattern(s) to match suspicious requests.
 Boolean. Use AND logic for multiple filterRegex patterns - ALL patterns must match the same URL (default: false).
 
 .TP
+.B output_regex
+String. Regex applied to each matched URL to build the rule body: capture group 1 (or the whole match) becomes \fB||<capture>\fR instead of \fB||host^\fR. For example \fB^https?://([^/]+/[^/]+/)\fR turns \fBhttps://host.com/script/abc.js\fR into \fB||host.com/script/\fR, collapsing randomized filenames under a path into one rule. The capture must include the host. If the regex does not match a URL, output falls back to \fB||host^\fR. Adblock-only; domain-based formats (dnsmasq, pihole, hosts, plain) emit the bare host.
+
+.TP
 .B comments
 Documentation strings or notes - completely ignored by the scanner. Can be a single string or array of strings. Used for adding context, URLs, timestamps, or any documentation notes to configuration files.
 
