@@ -2918,9 +2918,13 @@ function setupFrameHandling(page, forceDebug) {
       // folder/file be blocked on a host that also serves legit content. Compiled
       // silently here; config-load validation (validate_rules) warns on a bad
       // pattern, so a throw here just disables the feature for this site.
+      // Reuse the memoized regex compiler (same cache as filterRegex) so the
+      // pattern compiles once per unique source, not once per URL. try/catch
+      // because getCompiledRegex throws on a bad pattern — config-load
+      // validation already warned; a throw here just disables the feature.
       let outputRegex = null;
       if (siteConfig.output_regex) {
-        try { outputRegex = new RegExp(siteConfig.output_regex); } catch (_) { outputRegex = null; }
+        try { outputRegex = getCompiledRegexes(siteConfig.output_regex)[0] || null; } catch (_) { outputRegex = null; }
       }
 
       // NEW: Get regex_and setting (defaults to false for backward compatibility)
