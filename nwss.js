@@ -4738,6 +4738,7 @@ function setupFrameHandling(page, forceDebug) {
                   const clickY = Math.floor(viewport.height * 0.2 + Math.random() * viewport.height * 0.6);
                   await ghostClick(cursor, { x: clickX, y: clickY }, {
                     hesitate: ghostConfig.hesitate,
+                    page,
                     forceDebug
                   });
                 }
