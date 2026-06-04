@@ -4739,6 +4739,7 @@ function setupFrameHandling(page, forceDebug) {
                   await ghostClick(cursor, { x: clickX, y: clickY }, {
                     hesitate: ghostConfig.hesitate,
                     page,
+                    realistic: siteConfig.realistic_click === true,
                     forceDebug
                   });
                 }
