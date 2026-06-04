@@ -4717,8 +4717,21 @@ function setupFrameHandling(page, forceDebug) {
                 const ghostStart = Date.now();
                 const ghostTimeLeft = () => ghostDuration - (Date.now() - ghostStart);
 
-                // Time-based Bezier mouse movements — runs for ghostDuration ms
-                while (ghostTimeLeft() > 200) {
+                // Honor interact_click_count in ghost mode too (built-in default
+                // is 3 — ad SDKs often swallow the 1st/2nd click as warmup). Same
+                // default + 20-cap as the built-in content-click path. 0 when
+                // element clicks are disabled.
+                const ghostClickCount = interactionConfig.includeElementClicks
+                  ? Math.min(Math.max(Number(siteConfig.interact_click_count) || 3, 1), 20)
+                  : 0;
+                // Reserve part of the duration budget for those clicks so the
+                // movement loop doesn't consume all of ghost_cursor_duration.
+                // Capped at half the budget so movement still happens; raise
+                // ghost_cursor_duration to fit more clicks.
+                const clickReserveMs = Math.min(ghostClickCount * 600, ghostDuration * 0.5);
+
+                // Time-based Bezier mouse movements — runs for the unreserved budget
+                while (ghostTimeLeft() > 200 + clickReserveMs) {
                   const toX = Math.floor(Math.random() * (viewport.width - 100)) + 50;
                   const toY = Math.floor(Math.random() * (viewport.height - 100)) + 50;
                   await ghostMove(cursor, toX, toY, {
@@ -4726,14 +4739,17 @@ function setupFrameHandling(page, forceDebug) {
                     overshootThreshold: ghostConfig.overshootThreshold,
                     forceDebug
                   });
-                  if (ghostTimeLeft() > 100) {
+                  if (ghostTimeLeft() > 100 + clickReserveMs) {
                     await new Promise(r => setTimeout(r, 25 + Math.random() * 75));
                   }
                 }
                 if (ghostTimeLeft() > 100 && Math.random() < 0.3) {
                   await ghostRandomMove(cursor, { forceDebug });
                 }
-                if (interactionConfig.includeElementClicks && ghostTimeLeft() > 100) {
+                // interact_click_count clicks, each to a fresh content-zone point.
+                // The time guard stops early if the budget runs out (raise
+                // ghost_cursor_duration for more).
+                for (let gc = 0; gc < ghostClickCount && ghostTimeLeft() > 100; gc++) {
                   const clickX = Math.floor(viewport.width * 0.2 + Math.random() * viewport.width * 0.6);
                   const clickY = Math.floor(viewport.height * 0.2 + Math.random() * viewport.height * 0.6);
                   await ghostClick(cursor, { x: clickX, y: clickY }, {
