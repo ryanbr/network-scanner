@@ -2,6 +2,29 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [3.2.0] - 2026-06-04
+
+### Added
+- **`output_regex`** site option — a per-site regex whose capture group 1 (or whole match) becomes the rule body, so output can be a path-prefix rule like `||host/script/` instead of `||host^`. Collapses randomized filenames under a stable path into one rule and lets you block a folder on a host that also serves legit content; falls back to `||host^` when the regex doesn't match. Adblock-only — domain-based formats (dnsmasq/unbound/pi-hole/hosts/plain) emit the bare host. Compiled once per pattern (memoized) and validated at config load.
+- **dig resolver failover** — `digLookup` now fails over through the `--dns` resolvers on timeout / no-reply / `REFUSED` / `SERVFAIL` (up to 3 attempts, `+time=2 +tries=1` each), matching the resilience the whois retry and DNS pre-check rotation already had. With no `--dns`, the system-resolver path keeps dig's native `resolv.conf` rotation unchanged.
+
+### Changed
+- **Ghost-cursor coordinate clicks now use the same realistic press as the built-in content clicks** (`humanClick`): hover dwell + mousedown/hold/mouseup, plus hand-tremor during the hold and a mouseup drift (so mousedown ≠ mouseup coordinates) when `realistic_click` is set — replacing a 0ms `page.mouse.click`.
+- **Ghost-cursor clicks honor `interact_click_count`** (default 3, cap 20) instead of firing a single click — ad SDKs often swallow the 1st/2nd click as warmup. The bezier movement loop reserves part of `ghost_cursor_duration` for the clicks (raise the duration to fit more; the default 2000ms fits ~1 realistic click).
+- **`dig` success is judged by RCODE, not stderr** — a dig that prints a transient `communications error` warning but still returns a valid `ANSWER SECTION` is no longer discarded.
+- **dig-only configs skip the whois root-domain parse** per request (small per-request saving when no `whois`/`whois-or` is configured).
+
+### Fixed
+- **`max_redirects: 0`** now means "follow none" instead of silently becoming 10 (the `|| 10` falsy-zero bug in `nwss.js` and `lib/redirect.js`).
+- **A `REFUSED`/`SERVFAIL` dig that exhausts all resolvers returns failure** so it isn't cached — a transient resolver-side error no longer poisons a domain for the cache TTL.
+- **Ghost-cursor coordinate click no longer reports false success** — it returned `true` (and logged "Clicked") even when the click was silently skipped for lack of a page; it now returns `false` and logs the skip.
+
+### Removed
+- **`follow_redirects`** site option — documented in `--help`, the man page, the README, and example configs but never wired to any runtime behavior; removed from the docs. Use `max_redirects` instead (`0` = follow none).
+
+### Security
+- **dig argv-injection guard** — `digLookup` rejects non-hostname-shaped input before shelling out. `dig` has no `--` end-of-options marker (unlike whois) and parses `@`/`-`/`+`-leading argv tokens as options, so a crafted "domain" like `@evil-resolver` (redirects the query to an arbitrary server) or `-f /path` (reads a file as a query batch) is now rejected — out-of-charset or dash-leading values fall back to no-match.
+
 ## [3.1.2] - 2026-05-30
 
 ### Changed
