@@ -101,6 +101,10 @@ Output full subdomains instead of collapsing to root domains.
 Disable mouse simulation and page interaction globally.
 
 .TP
+.B \--ghost-cursor
+Use ghost-cursor Bezier mouse movements globally (requires \fBnpm i ghost-cursor\fR). See \fBGhost Cursor Options\fR. Equivalent to per-site \fBcursor_mode: "ghost"\fR.
+
+.TP
 .BR \--custom-json " \fIFILE\fR"
 Use \fIFILE\fR instead of \fBconfig.json\fR for configuration.
 
@@ -534,6 +538,29 @@ Boolean. Analyze page source for redirect patterns (default: true).
 .TP
 .B redirect_timeout_multiplier
 Number. Increase timeout for redirected URLs (default: 1.5).
+
+.SS Ghost Cursor Options
+Optional Bezier-curve mouse engine (the \fBghost-cursor\fR npm package, install
+with \fBnpm i ghost-cursor\fR). Falls back to the built-in mouse if not
+installed. Enable per-site with \fBcursor_mode\fR or globally with the
+\fB\-\-ghost-cursor\fR flag.
+.TP
+.B cursor_mode
+String. Set to \fB"ghost"\fR to use ghost-cursor Bezier mouse movements for this site.
+.TP
+.B ghost_cursor_speed
+Number. Movement speed multiplier (default: auto).
+.TP
+.B ghost_cursor_hesitate
+Number. Delay in milliseconds before a click (default: 50).
+.TP
+.B ghost_cursor_overshoot
+Number. Maximum overshoot distance in pixels before correcting back to the target (default: auto).
+.TP
+.B ghost_cursor_duration
+Number. How long the Bezier movement loop runs, in milliseconds (default: \fBinteract_duration\fR or 2000). Part of this budget (up to half) is reserved for clicks.
+.PP
+Ghost-cursor only \fIclicks\fR when both \fBinteract\fR and \fBinteract_clicks\fR are true. With \fBrealistic_click\fR set, each press adds hand-tremor during the hold plus a mouseup drift so mousedown and mouseup coordinates differ. Ghost mode honors \fBinteract_click_count\fR (default 3, cap 20); since realistic clicks take roughly 600-700ms each, raise \fBghost_cursor_duration\fR (about \fBinteract_click_count\fR x 700 plus movement, e.g. 5000-8000) to fit all of them \(em the default 2000 fits about one click.
 
 .SS Cloudflare Protection Options
 

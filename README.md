@@ -615,8 +615,11 @@ node nwss.js --max-concurrent 12 --cleanup-interval 300 -o rules.txt
 {
   "url": "https://anti-bot-site.com",
   "interact": true,
+  "interact_clicks": true,
   "cursor_mode": "ghost",
-  "ghost_cursor_duration": 3000,
+  "realistic_click": true,
+  "interact_click_count": 3,
+  "ghost_cursor_duration": 5000,
   "ghost_cursor_speed": 1.2,
   "fingerprint_protection": "random",
   "filterRegex": "tracking|analytics",
@@ -628,6 +631,12 @@ Or enable globally via CLI:
 ```bash
 node nwss.js --ghost-cursor --debug -o rules.txt
 ```
+
+**Ghost-cursor clicks.** The cursor moves with `cursor_mode: "ghost"`, but it only *clicks* when both `interact: true` **and** `interact_clicks: true` are set (same rule as the built-in path). Click behavior:
+
+- `realistic_click: true` — each press adds hand-tremor during the hold and a mouseup drift, so `mousedown` ≠ `mouseup` coordinates (the press is routed through the same `humanClick` the built-in content clicks use).
+- `interact_click_count` — number of clicks per load (default `3`, capped at `20`). The default of 3 matters because some ad SDKs swallow the 1st/2nd click as warmup.
+- **Duration vs. clicks:** realistic clicks take ~600–700ms each, and the bezier movement loop reserves up to **half** of `ghost_cursor_duration` for them. So the default `ghost_cursor_duration: 2000` only fits **~1 click** — raise it to roughly `interact_click_count × 700 + movement` (e.g. `5000`–`8000`) to fit all of them.
 
 > **Note:** ghost-cursor is an optional dependency. Install with `npm install ghost-cursor`. If not installed, the scanner falls back to the built-in mouse simulation automatically.
 
