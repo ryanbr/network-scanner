@@ -1930,6 +1930,12 @@ function setupFrameHandling(page, forceDebug) {
       // Puppeteer 22.x headless mode optimization
       // Auto-detect best headless mode based on Puppeteer version
       headless: headlessMode,
+      // Bypass TLS cert errors at the browser level (drives CDP
+      // Security.setIgnoreCertificateErrors). Robust on new-headless Chrome,
+      // where the --ignore-certificate-errors *flag* is increasingly ignored.
+      // An ad/tracker scanner must reach self-signed / mismatched-cert ad and
+      // embed domains; we observe traffic, we don't transmit secrets.
+      acceptInsecureCerts: true,
       args: [
         // CRITICAL: Remove automation detection markers
         '--disable-blink-features=AutomationControlled',
