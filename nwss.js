@@ -411,7 +411,7 @@ const DNS_NEGATIVE_CACHE_MAX = 1000;
 // persisting it can't silently drop a live host. Opt-in via --dns-cache: dead
 // hosts are remembered for DNS_NEGATIVE_PERSIST_TTL_MS and reloaded next run;
 // otherwise it's a 5-min in-memory-only cache. The persist TTL is deliberately
-// shorter than the dig/whois positive cache (20h): a domain that doesn't exist
+// shorter than the dig/whois positive cache (dig 20h / whois 36h): a domain that doesn't exist
 // now MAY get registered, and this is a domain-hunting scanner, so the dead
 // ones are re-checked twice a day rather than trusted for ~a day.
 const DNS_NEGATIVE_PERSIST_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
@@ -809,7 +809,7 @@ Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
   --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check AND nettools' dig (not Chrome nav / whois).
                                  One pins all queries to it; several rotate per query. Overrides /etc/resolv.conf.
-  --dns-cache                    Persist dig/whois results to disk between runs (20h TTL, 2000-entry cap each),
+  --dns-cache                    Persist dig/whois results to disk between runs (dig 20h / whois 36h TTL, 2000-entry cap each),
                                  plus the DNS pre-check negative cache (NXDOMAIN only, 12h TTL, .dnsnegcache)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
                                  By default, URLs whose hostname doesn't resolve are skipped
