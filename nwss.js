@@ -933,7 +933,7 @@ Advanced Options:
   whois_delay: <milliseconds>                Delay between whois requests for this site (default: global whois_delay)
   dig: ["term1", "term2"]                     Check dig output for ALL specified terms (AND logic)
   dig-or: ["term1", "term2"]                  Check dig output for ANY specified term (OR logic)
-  goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "load"})
+  goto_options: {"waitUntil": "domcontentloaded"} Custom page.goto() options (default: {"waitUntil": "domcontentloaded"})
   dig_subdomain: true/false                    Use subdomain for dig lookup instead of root domain (default: false)
   digRecordType: "A"                          DNS record type for dig (default: A)
 
@@ -4355,15 +4355,43 @@ function setupFrameHandling(page, forceDebug) {
         try {
           navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
         } catch (navErr) {
-          // Only retry on genuine timeouts, not chrome-error:// redirects
+          // Only handle genuine timeouts here, not chrome-error:// redirects.
+          // pageUrl === 'about:blank' means the navigation never committed
+          // (server never responded) — treat as a real failure, not a partial
+          // page; only a page that actually reached a URL is worth observing.
           let pageUrl = '';
           try { if (!page.isClosed()) pageUrl = page.url(); } catch {}
           const isPopupFailure = navErr.message.includes('chrome-error://') || navErr.message.includes('invalid URL') ||
             pageUrl.startsWith('chrome-error://') || pageUrl === 'about:blank';
           if ((navErr.message.includes('timeout') || navErr.message.includes('Timeout')) && !isPopupFailure) {
-            if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout, retrying with waitUntil:networkidle2 for ${currentUrl}`));
-            const fallbackOptions = { ...gotoOptions, waitUntil: 'networkidle2', timeout: Math.min(timeout, 10000) };
-            navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
+            // The OLD fallback retried with networkidle2 — STRICTER than the
+            // domcontentloaded default, so it could never rescue a
+            // domcontentloaded timeout (and Puppeteer 25 has no 'commit', i.e.
+            // nothing more lenient). Two-tier recovery instead:
+            //   1. If the site used a wait STRICTER than domcontentloaded, do one
+            //      lenient retry with domcontentloaded (it fires earlier).
+            //   2. Otherwise proceed with the partially-loaded page rather than
+            //      discarding the URL — it exists and requests already fired
+            //      (captured by page.on('request')); the delay/interact phase
+            //      below keeps capturing. Streaming/embed/media pages routinely
+            //      never reach DOM-ready (a connection stays open) but their
+            //      ad/tracker calls fired early.
+            const primaryWait = gotoOptions.waitUntil || defaultWaitUntil;
+            let recovered = false;
+            if (primaryWait !== 'domcontentloaded') {
+              try {
+                if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout (${primaryWait}), retrying with waitUntil:domcontentloaded for ${currentUrl}`));
+                const fallbackOptions = { ...gotoOptions, waitUntil: 'domcontentloaded', timeout: Math.min(timeout, 15000) };
+                navigationResult = await navigateWithRedirectHandling(page, currentUrl, siteConfig, fallbackOptions, forceDebug, formatLogMessage);
+                recovered = true;
+              } catch (_) { /* fall through to proceed-with-partial */ }
+            }
+            if (!recovered) {
+              let partialUrl = currentUrl;
+              try { if (!page.isClosed()) partialUrl = page.url() || currentUrl; } catch {}
+              if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout — proceeding with partially-loaded page for ${currentUrl}`));
+              navigationResult = { finalUrl: partialUrl, redirected: false, redirectChain: [currentUrl], originalUrl: currentUrl, redirectDomains: [], httpStatus: null, cfRay: null };
+            }
           } else {
             throw navErr;
           }
