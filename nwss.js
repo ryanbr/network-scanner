@@ -387,7 +387,11 @@ const dnsPrecheckTimeoutMs = 2000;
 const showDeadDomains = args.includes('--show-dead-domains');
 const _deadDomains = new Map();
 function recordDeadDomain(urlOrHost, reason) {
-  if (!showDeadDomains || !urlOrHost) return;
+  // Populate unconditionally — the pre-check skip reads _deadDomains to drop
+  // repeat URLs on a host already proven dead this run, which must work whether
+  // or not --show-dead-domains is set. The end-of-scan REPORT is separately
+  // gated on showDeadDomains, so the flag still controls output, not recording.
+  if (!urlOrHost) return;
   let host = urlOrHost;
   try { host = new URL(urlOrHost).hostname; } catch { /* already a bare host */ }
   if (host && !_deadDomains.has(host)) _deadDomains.set(host, reason);
@@ -4683,7 +4687,13 @@ function setupFrameHandling(page, forceDebug) {
           // Capture hard "dead domain" navigation errors for --show-dead-domains
           // (DNS doesn't resolve / host unreachable). Blocks, timeouts and CF
           // challenges are NOT dead — they're excluded by this match.
-          const deadNav = /ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE|ERR_DNS/.exec(err.message || '');
+          // Only DEFINITIVE non-existence / unreachable signals — these now drive
+          // the in-scan dead-domain SKIP (not just --show-dead-domains reporting),
+          // so transient DNS errors must NOT match. The bare `ERR_DNS` used to
+          // catch ERR_DNS_TIMED_OUT / ERR_DNS_MALFORMED_RESPONSE / ERR_DNS_SERVER_FAILED
+          // (all transient) — dropped so a slow-DNS blip can't false-skip the
+          // rest of a live host's URLs.
+          const deadNav = /ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE/.exec(err.message || '');
           if (deadNav) recordDeadDomain(currentUrl, deadNav[0]);
           throw err;
         }
