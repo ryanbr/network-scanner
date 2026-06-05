@@ -3648,25 +3648,18 @@ function setupFrameHandling(page, forceDebug) {
           checkedRootDomain = pslResult.domain || fullSubdomain;
         } catch (e) {}
 
-        // Never block the page we're scanning. Aborting the top-level document
-        // request makes the navigation never commit (page stays at about:blank →
-        // navigation timeout), silently breaking any scanned URL that happens to
-        // match our own filter lists (adblock / blocked / blockDomainsByUrl) —
-        // common on adult/pirate/stream domains. Only sub-resources are
-        // blockable. Continue the main-frame document untouched: its own URL
-        // doesn't generate a rule (it's first-party), and main-frame redirects
-        // are captured via framenavigated, not by aborting here. isNavigationRequest
-        // is true for sub-frame docs too, so the mainFrame() check keeps ad
-        // iframes blockable.
+        // Never BLOCK the top-level document (the scanned page OR a main-frame
+        // redirect target). Aborting it makes the navigation never commit (page
+        // stays at about:blank → navigation timeout), silently breaking any
+        // scanned URL that matches our own filter lists (adblock / blocked /
+        // blockDomainsByUrl) — common on adult/pirate/stream domains. This flag
+        // ONLY guards the abort paths below; the request still flows through the
+        // match logic, so a main-frame redirect destination (e.g. a
+        // filecrypt → ad-domain hop) is still captured via filterRegex/dig/whois.
+        // isNavigationRequest is true for sub-frame docs too, so the mainFrame()
+        // check keeps ad iframes blockable.
         let isMainFrameDoc = false;
         try { isMainFrameDoc = request.isNavigationRequest() && request.frame() === page.mainFrame(); } catch (_) {}
-        if (isMainFrameDoc) {
-          if (forceDebug) {
-            console.log(formatLogMessage('debug', `${messageColors.highlight('[req]')}[frame: main] allowing top-level document (never blocked): ${checkedUrl}`));
-          }
-          try { request.continue(); } catch (_) {}
-          return;
-        }
 
         // Check against ALL first-party domains (original + all redirects)
         const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
@@ -3717,13 +3710,19 @@ function setupFrameHandling(page, forceDebug) {
               request.resourceType()
             );
 
-            if (result.blocked) {
+            if (result.blocked && !isMainFrameDoc) {
               adblockStats.blocked++;
               if (forceDebug) {
                 console.log(formatLogMessage('debug', `${messageColors.blocked('[adblock]')} ${checkedUrl} (${result.reason})`));
               }
               request.abort('blockedbyclient');
               return;
+            }
+            if (result.blocked && isMainFrameDoc && forceDebug) {
+              // Matched a filter rule but it's the page we're scanning (or a
+              // main-frame redirect target) — allow it (blocking the top-level
+              // document aborts navigation). It still flows through the matcher.
+              console.log(formatLogMessage('debug', `${messageColors.highlight('[adblock]')} top-level document ${checkedUrl} matched (${result.reason}) — allowed (never block the scanned page)`));
             }
             adblockStats.allowed++;
           } catch (err) { /* Silently continue on adblock errors */ }
@@ -3778,7 +3777,7 @@ function setupFrameHandling(page, forceDebug) {
         // check so domain-based blocks short-circuit without paying the
         // per-URL regex scan. Same abort reason as the static path so
         // request.failure() observers see consistent metadata.
-        if (reqDomain && _dynamicallyBlockedDomains.size > 0 && matchesDynamicBlock(reqDomain)) {
+        if (reqDomain && _dynamicallyBlockedDomains.size > 0 && matchesDynamicBlock(reqDomain) && !isMainFrameDoc) {
           if (forceDebug) {
             console.log(formatLogMessage('debug', `${BLOCK_DOMAINS_BY_URL_TAG} aborting ${reqUrl} (domain ${reqDomain} dynamically blocked)`));
           }
@@ -3793,7 +3792,7 @@ function setupFrameHandling(page, forceDebug) {
             break;
           }
         }
-        if (blockedMatchIndex !== -1) {
+        if (blockedMatchIndex !== -1 && !isMainFrameDoc) {
           // Always track the hit (zero-cost on the un-debug path) so the
           // scan-end summary can show which patterns are doing work vs.
           // which are stale and ready to prune. Keyed by pattern.source --
