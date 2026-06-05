@@ -5812,6 +5812,19 @@ function setupFrameHandling(page, forceDebug) {
        // actually starting — wrongly skipping live domains. c-ares isn't
        // threadpool-bound so it's immune to that contention.
        if (dnsPrecheckEnabled && taskDomain && !/^[\d.:]+$|^\[/.test(taskDomain)) {
+         // Already proven dead earlier THIS run — either a pre-check NXDOMAIN or
+         // a prior URL's navigation hit ERR_NAME_NOT_RESOLVED / ERR_ADDRESS_UNREACHABLE
+         // (recordDeadDomain populates _deadDomains for both). Skip the repeat
+         // instead of paying another fail-open navigation on a multi-URL dead
+         // host (e.g. dlstreams.top?id=39/54/347). In-scan only (NOT persisted):
+         // Chrome resolves via the system resolver, so a nav-level failure could
+         // be a system-resolver glitch on a live host — a false "dead" must not
+         // carry across runs. Cheap: a Map lookup, no DNS resolve.
+         if (_deadDomains.has(taskDomain)) {
+           dnsPrecheckSkips++;
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check: ${taskDomain} already dead this run (${_deadDomains.get(taskDomain)}) — skipping`));
+           return { url: task.url, rules: [], success: false, error: `DNS: ${_deadDomains.get(taskDomain)}`, skipped: true };
+         }
          const cached = dnsNegativeCache.get(taskDomain);
          if (cached && Date.now() - cached.timestamp < DNS_NEGATIVE_CACHE_TTL_MS) {
            dnsPrecheckSkips++;
