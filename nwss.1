@@ -154,6 +154,14 @@ Browser restart interval in URLs processed (1-1000, overrides config/default).
 At end of scan, list hostnames that did not resolve or were unreachable (\fBNXDOMAIN\fR/\fBENODATA\fR plus \fBERR_NAME_NOT_RESOLVED\fR/\fBERR_ADDRESS_UNREACHABLE\fR). Excludes blocks and timeouts, since those mean the domain is alive. Useful for pruning dead URLs.
 
 .TP
+.BI \--block-ads= FILE\fR[,\fIFILE\fR...]
+Block ads/trackers during the scan using EasyList-format filter list(s) \(em network rules like \fB||domain^\fR, \fB/ads/*\fR, \fB||domain^$script\fR. Comma-separated for multiple lists. Cosmetic (\fB##\fR) rules are ignored; the scanned page's own top-level document is never blocked (only sub-resources).
+
+.TP
+.BI \--adblock-engine= js|rust
+Matcher backend for \fB\-\-block-ads\fR (default: \fBjs\fR). \fBjs\fR is the built-in pure-JS matcher (no extra dependencies). \fBrust\fR uses Brave's \fBadblock-rs\fR \(em much faster on large lists, same rules and results, but requires \fBnpm install adblock-rs\fR (needs a Rust toolchain).
+
+.TP
 .BR \-h ", " \--help
 Show help message and exit.
 

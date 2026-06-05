@@ -68,7 +68,8 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--load-extension <path>`   | Load unpacked Chrome extension from directory (can be used multiple times) |
 | `--dns-cache`               | Persist dig/whois results to disk between runs (20hr TTL, 2000-entry cap each, `.digcache`/`.whoiscache`), **plus** the DNS pre-check negative cache (NXDOMAIN/ENODATA only — never resolver errors — 12h TTL, `.dnsnegcache`) so known-dead hosts aren't re-resolved next run. Disk writes are atomic (tmp + rename); corrupt cache files are detected on load with a `[dns-cache]` warn line and reset cleanly. |
 | `--no-dns-precheck`         | Disable per-URL DNS resolution check before page navigation. By default, hosts that dig/whois have already proven live (within the 20hr cache TTL) skip their c-ares pre-check via a positive-resolution index. |
-| `--block-ads=<files>`       | Block ads using EasyList format rules (comma-separated: `easylist.txt,easyprivacy.txt`) |
+| `--block-ads=<files>`       | Block ads/trackers **during the scan** using EasyList-format filter list(s) (`\|\|domain^`, `/ads/*`, etc.). Comma-separated for multiple: `--block-ads=easylist.txt,easyprivacy.txt`. See [Blocking ads during the scan](#blocking-ads-during-the-scan). |
+| `--adblock-engine=<js\|rust>` | Matcher backend for `--block-ads` (default: `js`). `rust` uses Brave's `adblock-rs` (much faster on large lists) and requires `npm i adblock-rs`. |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
 | `--remove-dupes`            | Remove duplicate domains from output (only with `-o`) |
 | `--dry-run`                 | Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules |
@@ -91,6 +92,37 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--test-validation`         | Run domain validation tests and exit |
 | `--clear-cache`             | Clear persistent cache before scanning (improves fresh start performance) |
 | `--ignore-cache`            | Bypass all smart caching functionality during scanning |
+
+### Blocking ads during the scan
+
+`--block-ads` makes the scanner **block** matching requests *during* the scan (separate from capturing rules) — to keep ad/tracker noise out of the page, speed up loads, or test that a list catches what it should.
+
+**Adding lists.** Pass one or more EasyList-format filter lists (same syntax as uBlock Origin / EasyList):
+
+```bash
+# Single list
+node nwss.js --block-ads=easylist.txt
+
+# Multiple lists — comma-separated, no spaces
+node nwss.js --block-ads=easylist.txt,easyprivacy.txt,mylist.txt
+```
+
+Lists are plain-text **network** rules — `||doubleclick.net^`, `/ads/*`, `||example.com^$script`, etc. Element-hiding/cosmetic rules (`##…`) don't apply to request blocking and are ignored. The scanned page's own top-level document is never blocked (only sub-resources), so a site whose own domain is in a list still loads.
+
+**Engine — `js` vs `rust`** (`--adblock-engine`, default `js`):
+
+| Engine | Flag | Backend | When |
+|---|---|---|---|
+| **js** (default) | `--adblock-engine=js` | `lib/adblock.js` — pure-JS, no extra deps | Default; fine for small/medium lists, works everywhere |
+| **rust** | `--adblock-engine=rust` | `lib/adblock-rust.js` — Brave's [`adblock-rs`](https://github.com/brave/adblock-rust) | Large lists (full EasyList + EasyPrivacy + …); much faster matching. Drop-in (same rules, same results). Requires `npm install adblock-rs` (needs a Rust toolchain) |
+
+The two engines are interchangeable — same rule format, same blocking result; `rust` is purely a speed option for big lists. If you pass `--adblock-engine=rust` without `adblock-rs` installed, install it (`npm i adblock-rs`) or drop the flag to use `js`.
+
+```bash
+# Fast matching over big lists with the Rust engine
+npm install adblock-rs
+node nwss.js --block-ads=easylist.txt,easyprivacy.txt --adblock-engine=rust
+```
 
 ---
 
