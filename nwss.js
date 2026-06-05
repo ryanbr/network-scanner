@@ -4694,7 +4694,34 @@ function setupFrameHandling(page, forceDebug) {
           // (all transient) — dropped so a slow-DNS blip can't false-skip the
           // rest of a live host's URLs.
           const deadNav = /ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE/.exec(err.message || '');
-          if (deadNav) recordDeadDomain(currentUrl, deadNav[0]);
+          if (deadNav) {
+            recordDeadDomain(currentUrl, deadNav[0]);
+            // Corroborate-then-persist to the negative cache (.dnsnegcache with
+            // --dns-cache → cross-scan skip; else in-memory). Chrome resolves via
+            // the possibly-flaky SYSTEM resolver, so its ERR_NAME_NOT_RESOLVED may
+            // be a glitch on a LIVE host. Re-confirm via the reliable --dns
+            // resolver and cache ONLY if it ALSO returns a definitive NXDOMAIN.
+            // ERR_ADDRESS_UNREACHABLE is routing (the host resolves), so the
+            // resolve succeeds and it's correctly not cached. Fire-and-forget:
+            // off the critical path; saveDiskCache flushes on exit.
+            if (dnsPrecheckEnabled && deadNav[0] === 'ERR_NAME_NOT_RESOLVED') {
+              let navHost = '';
+              try { navHost = new URL(currentUrl).hostname; } catch {}
+              if (navHost && !/^[\d.:]+$|^\[/.test(navHost) && !dnsNegativeCache.has(navHost)) {
+                dnsResolver.resolveHost(navHost, dnsPrecheckTimeoutMs).then(
+                  () => { /* reliable resolver resolves it — system-resolver glitch, do NOT cache */ },
+                  (e) => {
+                    const code = (e && (e.code || e.message)) || '';
+                    if (isNonExistenceError(code)) {
+                      dnsNegativeCacheSet(navHost, code);
+                      recordDeadDomain(navHost, code);
+                      if (forceDebug) console.log(formatLogMessage('debug', `Dead domain confirmed by --dns resolver (${code}) — caching ${navHost} (skips next run with --dns-cache)`));
+                    }
+                  }
+                ).catch(() => {});
+              }
+            }
+          }
           throw err;
         }
       }
