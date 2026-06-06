@@ -55,6 +55,7 @@ const CSS_BLOCKED_TAG = messageColors.processing('[css_blocked]');
 const EVAL_ON_DOC_TAG = messageColors.processing('[evalOnDoc]');
 const REALTIME_CLEANUP_TAG = messageColors.processing('[realtime_cleanup]');
 const VPN_TAG = messageColors.processing('[vpn]');
+const POPUP_TAG = messageColors.processing('[popup]');
 // Precomputed colored '[SmartCache]' subsystem prefix — paired with the
 // same constant in lib/smart-cache.js so debug lines from both files
 // produce consistently colored output. formatLogMessage only colors the
@@ -1864,7 +1865,19 @@ function setupFrameHandling(page, forceDebug) {
 
   // Declare userDataDir in outer scope for cleanup access
   let userDataDir = null;
-  
+
+  // Browser-level decision (the browser launches once per batch, so this can't
+  // be per-site): only disable Chrome's pop-up blocker when at least one site
+  // actually wants popups captured. A real browser blocks non-gesture
+  // window.open(), so non-popup scans keep the blocker on for stealth.
+  // capture_popups scans turn it off so non-gesture popunders (document-level
+  // onclick / timer SDKs) fire and get captured too — gesture-triggered
+  // popups already work via the synthetic-click path regardless of this flag.
+  const wantPopups = Array.isArray(sites) && sites.some(s => s && s.capture_popups === true);
+  if (wantPopups && forceDebug) {
+    console.log(formatLogMessage('debug', `${POPUP_TAG} capture_popups set — launching with --disable-popup-blocking (non-gesture popunders allowed)`));
+  }
+
   /**
    * Creates a new browser instance with consistent configuration
    * Uses system Chrome and temporary directories to minimize disk usage
@@ -2049,6 +2062,10 @@ function setupFrameHandling(page, forceDebug) {
         '--memory-pressure-off',
         '--max_old_space_size=2048',   // V8 heap limit
         '--disable-prompt-on-repost',  // Fixes form popup on page reload
+        // Disable Chrome's pop-up blocker (chrome://settings/content/popups)
+        // ONLY when a site wants popups captured — lets non-gesture popunders
+        // fire. Gated so non-popup scans keep the blocker on for stealth.
+        ...(wantPopups ? ['--disable-popup-blocking'] : []),
         ...(keepBrowserOpen ? [] : ['--disable-background-networking']),
         '--no-sandbox',
         '--disable-setuid-sandbox',
