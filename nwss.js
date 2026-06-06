@@ -1437,6 +1437,7 @@ if (dumpUrls) {
 // Avoids blocking I/O on every intercepted request in debug/dumpurls mode
 const _logBuffers = new Map();  // filePath -> string[]
 const LOG_FLUSH_INTERVAL = 2000; // Flush every 2 seconds
+const LOG_BUFFER_MAX_RETAINED = 10000; // Cap a file's retry backlog (lines) so a permanently unwritable path can't grow memory unboundedly
 let _logFlushTimer = null;
 
 function bufferedLogWrite(filePath, entry) {
@@ -1449,18 +1450,20 @@ function bufferedLogWrite(filePath, entry) {
 
 function flushLogBuffers() {
   for (const [filePath, entries] of _logBuffers) {
-    if (entries.length > 0) {
-      try {
-        const data = entries.join('');
-        entries.length = 0; // Clear buffer immediately
-        fs.writeFile(filePath, data, { flag: 'a' }, (err) => {
-          if (err) {
-            console.warn(formatLogMessage('warn', `Failed to flush log buffer to ${filePath}: ${err.message}`));
-          }
-        });
-      } catch (err) {
-        console.warn(formatLogMessage('warn', `Failed to flush log buffer to ${filePath}: ${err.message}`));
-      }
+    if (entries.length === 0) continue;
+    try {
+      // Synchronous append on purpose: the batched 2s flush is small, and a
+      // blocking append cannot overlap the next timer tick (it holds the event
+      // loop for its duration) — eliminating the interleaved concurrent-append
+      // hazard of the old async fs.writeFile({flag:'a'}). Clear ONLY after the
+      // write succeeds, so a transient failure retries next tick instead of
+      // being silently dropped (the old code cleared before the async write
+      // confirmed). Bounded so a permanently unwritable path can't grow memory.
+      fs.appendFileSync(filePath, entries.join(''));
+      entries.length = 0;
+    } catch (err) {
+      console.warn(formatLogMessage('warn', `Failed to flush log buffer to ${filePath}: ${err.message}`));
+      if (entries.length > LOG_BUFFER_MAX_RETAINED) entries.length = 0;
     }
   }
 }
