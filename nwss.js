@@ -1507,21 +1507,29 @@ if (forceDebug && globalComments) {
  * @param {string} url - The URL string to parse.
  * @returns {string} The root domain, or the original hostname if parsing fails (e.g., for IP addresses or invalid URLs), or an empty string on error.
  */
-const _rootDomainCache = new Map();
-function getRootDomain(url) {
-  const cached = _rootDomainCache.get(url);
+// psl.parse memoized by hostname. The request handlers parse the root domain
+// of EVERY request, and a page hits the same few hosts repeatedly (CDN,
+// analytics, ad domains) — so a hostname-keyed memo turns almost all of those
+// into Map hits instead of repeated public-suffix-list lookups. Keyed by
+// hostname (not full URL) so distinct paths/queries on one host share one
+// entry: higher hit rate, fewer + shorter keys than a URL-keyed cache.
+// psl.parse is pure and never throws (malformed input → {domain: null}), so
+// the catch is defensive only.
+const _hostRootCache = new Map();
+function rootDomainForHost(hostname) {
+  if (!hostname) return '';
+  const cached = _hostRootCache.get(hostname);
   if (cached !== undefined) return cached;
-  try {
-    const { hostname } = new URL(url);
-    const parsed = psl.parse(hostname);
-    const result = parsed.domain || hostname;
-    if (_rootDomainCache.size > 5000) _rootDomainCache.clear();
-    _rootDomainCache.set(url, result);
-    return result;
-  } catch {
-    _rootDomainCache.set(url, '');
-    return '';
-  }
+  let result;
+  try { const parsed = psl.parse(hostname); result = parsed.domain || hostname; }
+  catch { result = hostname; }
+  if (_hostRootCache.size > 5000) _hostRootCache.clear();
+  _hostRootCache.set(hostname, result);
+  return result;
+}
+function getRootDomain(url) {
+  try { return rootDomainForHost(new URL(url).hostname); }
+  catch { return ''; }
 }
 
 /**
@@ -3385,8 +3393,7 @@ function setupFrameHandling(page, forceDebug) {
             try {
               const parsedUrl = new URL(checkedUrl);
               fullSubdomain = parsedUrl.hostname;
-              const pslResult = psl.parse(fullSubdomain);
-              checkedRootDomain = pslResult.domain || fullSubdomain;
+              checkedRootDomain = rootDomainForHost(fullSubdomain);
             } catch (_) { return; }
             if (!checkedRootDomain) return;
 
@@ -3661,8 +3668,7 @@ function setupFrameHandling(page, forceDebug) {
         try {
           const parsedUrl = new URL(checkedUrl);
           fullSubdomain = parsedUrl.hostname;
-          const pslResult = psl.parse(fullSubdomain);
-          checkedRootDomain = pslResult.domain || fullSubdomain;
+          checkedRootDomain = rootDomainForHost(fullSubdomain);
         } catch (e) {}
 
         // Never BLOCK the top-level document (the scanned page OR a main-frame
@@ -3681,22 +3687,21 @@ function setupFrameHandling(page, forceDebug) {
         // Check against ALL first-party domains (original + all redirects)
         const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
         
-        // Block infinite iframe loops - safely access frame URL
-        const frameUrl = (() => {
-          try {
-            const frame = request.frame();
-            return frame ? frame.url() : '';
-          } catch (err) {
-            return '';
+        // Block a specific infinite iframe loop (dmzjmp ad network). Gate on
+        // the cheap checkedUrl string test first so the per-request
+        // frame().url() lookup runs only for the rare candidate request
+        // instead of on every request. Equivalent to the old combined test:
+        // a frameUrl containing the substring is necessarily non-empty.
+        if (checkedUrl.includes('go.dmzjmp.com/api/models')) {
+          let frameUrl = '';
+          try { const frame = request.frame(); frameUrl = frame ? frame.url() : ''; } catch (_) {}
+          if (frameUrl.includes('creative.dmzjmp.com')) {
+            if (forceDebug) {
+              console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${checkedUrl}`));
+            }
+            request.abort();
+            return;
           }
-        })();
-        if (frameUrl && frameUrl.includes('creative.dmzjmp.com') && 
-            checkedUrl.includes('go.dmzjmp.com/api/models')) {
-          if (forceDebug) {
-            console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${checkedUrl}`));
-          }
-          request.abort();
-          return;
         }
 
         // Enhanced debug logging to show which frame the request came from
