@@ -3686,23 +3686,6 @@ function setupFrameHandling(page, forceDebug) {
 
         // Check against ALL first-party domains (original + all redirects)
         const isFirstParty = checkedRootDomain && firstPartyDomains.has(checkedRootDomain);
-        
-        // Block a specific infinite iframe loop (dmzjmp ad network). Gate on
-        // the cheap checkedUrl string test first so the per-request
-        // frame().url() lookup runs only for the rare candidate request
-        // instead of on every request. Equivalent to the old combined test:
-        // a frameUrl containing the substring is necessarily non-empty.
-        if (checkedUrl.includes('go.dmzjmp.com/api/models')) {
-          let frameUrl = '';
-          try { const frame = request.frame(); frameUrl = frame ? frame.url() : ''; } catch (_) {}
-          if (frameUrl.includes('creative.dmzjmp.com')) {
-            if (forceDebug) {
-              console.log(formatLogMessage('debug', `Blocking potential infinite iframe loop: ${checkedUrl}`));
-            }
-            request.abort();
-            return;
-          }
-        }
 
         // Enhanced debug logging to show which frame the request came from
         if (forceDebug) {
