@@ -719,6 +719,9 @@ if (blockAdsIndex !== -1) {
 
   adblockEnabled = true;
   const engine = adblockEngineName === 'rust' ? adblockRust : adblockJs;
+  // Only ever assigned the os.tmpdir() path below — never a user file — so the
+  // unlink in finally can never touch the caller's own lists.
+  let combinedTmpFile = null;
   try {
     if (engine === adblockRust) {
       // Rust wrapper accepts an array directly — no temp file needed.
@@ -727,15 +730,22 @@ if (blockAdsIndex !== -1) {
       // JS engine takes a single path; concat to a temp file when multiple lists.
       let rulesFile = rulesFiles[0];
       if (rulesFiles.length > 1) {
-        rulesFile = path.join(os.tmpdir(), `nwss-adblock-combined-${Date.now()}.txt`);
+        combinedTmpFile = path.join(os.tmpdir(), `nwss-adblock-combined-${Date.now()}.txt`);
+        rulesFile = combinedTmpFile;
         const combined = rulesFiles.map(f => fs.readFileSync(f, 'utf-8')).join('\n');
         fs.writeFileSync(rulesFile, combined);
       }
+      // parseAdblockRules reads the file synchronously and in full before
+      // returning, so the temp copy is safe to remove immediately afterwards.
       adblockMatcher = engine.parseAdblockRules(rulesFile, { enableLogging: forceDebug });
     }
   } catch (err) {
     console.log(`Error: Failed to load adblock engine '${adblockEngineName}': ${err.message}`);
     process.exit(1);
+  } finally {
+    if (combinedTmpFile) {
+      try { fs.unlinkSync(combinedTmpFile); } catch { /* best effort — OS reaps tmpdir */ }
+    }
   }
   const stats = adblockMatcher.getStats();
   const ruleDesc = stats.total != null
@@ -5353,7 +5363,7 @@ function setupFrameHandling(page, forceDebug) {
           const safeUrl = currentUrl.replace(/https?:\/\//, '').replace(/[^a-zA-Z0-9]/g, '_').substring(0, 80);
           const filename = `screenshots/${safeUrl}-${timestamp}.png`;
           try {
-            if (!fs.existsSync('screenshots')) fs.mkdirSync('screenshots', { recursive: true });
+            fs.mkdirSync('screenshots', { recursive: true }); // recursive:true is a no-op if it already exists
             await page.screenshot({ path: filename, type: 'png', fullPage: true });
             console.log(formatLogMessage('info', `Screenshot saved: ${filename}`));
           } catch (screenshotErr) {
