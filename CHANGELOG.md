@@ -2,6 +2,34 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [3.3.0] - 2026-06-06
+
+### Added
+- **DNS dead-domain skip + corroborated persistence** — within a scan, once a host resolves NXDOMAIN/ENODATA it is remembered and repeat URLs on that host are skipped without re-resolving. With `--dns-cache`, a host that *also* fails navigation (`ERR_NAME_NOT_RESOLVED` / `ERR_ADDRESS_UNREACHABLE`) is corroborated and persisted to the negative cache (`.dnsnegcache`, 12h TTL) so it is skipped on the next run too. Only definitive non-existence is cached — resolver errors fail open and never poison a live host.
+- **`acceptInsecureCerts` on browser launch** — TLS/cert errors (expired, self-signed, name-mismatch) no longer abort navigation, so streaming/pirate domains with broken certs are still scanned.
+- **`--disable-popup-blocking` when a site uses `capture_popups`** — Chrome's pop-up blocker (`chrome://settings/content/popups`) is turned off only for popup-capture scans, so non-gesture popunders (document-level `onclick` / timer SDKs) fire and get captured too. Non-popup scans keep the blocker on (stealthier — a real browser blocks non-gesture `window.open()`); gesture-triggered popups already worked via the synthetic-click path.
+
+### Changed
+- **The main-frame document is never blocked** — the scanned page (and any main-frame redirect target) is exempt from adblock / `blocked` / `blockDomainsByUrl` aborts. Aborting it made the navigation never commit (`about:blank` → timeout), silently breaking scanned URLs that matched our own filter lists (common on adult/pirate/stream domains). The request still flows through the matcher, so a main-frame redirect destination (e.g. a filecrypt → ad-domain hop) is still captured; sub-frame / ad iframes stay blockable.
+- **Navigation timeouts are recovered, not discarded** — on a nav timeout the scanner retries leniently and proceeds with the partially-loaded page instead of dropping the URL (a page still at `about:blank` is still treated as a failure).
+- **whois disk-cache TTL raised to 36h** (dig stays 20h) — registrar data is stable and whois servers rate-limit aggressively, so a longer TTL cuts repeat queries; dig keeps its 20h TTL.
+- **VPN is Linux-only with a clear guard** — `vpn` / `openvpn` on macOS/Windows now returns an explicit "Linux-only" error instead of cryptic `ip` / `/proc` failures.
+
+### Performance
+- **`psl.parse` memoized by hostname** in the request hot path — both per-request handlers (main page + popup capture) parsed the root domain of *every* request, while a page hammers the same handful of hosts (CDN, analytics, ad domains). A hostname-keyed memo turns almost all of those into `Map` hits, replacing the URL-keyed cache (fewer + shorter keys, far higher hit rate).
+- **Lower per-request overhead** — the iframe-loop guard's `frame().url()` lookup is now gated behind a cheap URL string test instead of running on every request.
+- **Removed redundant disk I/O** — a leaked adblock combined-list temp file in `tmpdir` is now cleaned up, and a redundant `existsSync` before each forced screenshot's recursive `mkdir` was dropped.
+
+### Fixed
+- **Periodic debug/`--dumpurls` log flush is now synchronous** — the 2s timer used async `fs.writeFile({flag:'a'})` with no in-flight guard, so two ticks could append to the same file concurrently and interleave lines, and it cleared the buffer *before* the write confirmed (silently dropping entries on a failed write). It now uses `appendFileSync`, clears only after a successful write (transient failures retry next tick), and is bounded so a permanently-unwritable path can't grow memory.
+- **Dead-domain skip works without `--show-dead-domains`** — the in-scan skip recorded into the dead set only when the report flag was on, which made the skip dead code; recording is now unconditional and the flag gates only the end-of-scan report. Transient DNS errors were also dropped from the dead-domain match so only `ERR_NAME_NOT_RESOLVED` / `ERR_ADDRESS_UNREACHABLE` mark a host dead.
+
+### Removed
+- **Hardcoded `dmzjmp` iframe-loop guard** — the domain-specific abort for a `creative.dmzjmp.com` frame requesting `go.dmzjmp.com/api/models` (added mid-2025 to stop a runaway request loop) has not recurred and was removed from the request hot path; the per-URL timeout remains the backstop. Recoverable from git history — prefer a config-driven `iframe_loop_guards` entry if it ever returns.
+
+### Documentation
+- **README + man page now document `--block-ads` and `--adblock-engine`** — blocking ads/trackers *during* the scan with EasyList-format list(s) (comma-separated), and the `js` (default, native parser) vs `rust` (Brave `adblock-rs`) matcher backends.
+
 ## [3.2.0] - 2026-06-04
 
 ### Added
