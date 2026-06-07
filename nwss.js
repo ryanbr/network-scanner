@@ -9,7 +9,7 @@ const fs = require('fs');
 const os = require('os');
 const psl = require('psl');
 const path = require('path');
-const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonExistenceError } = require('./lib/dns');
+const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonExistenceError, dohTemplatesForResolvers } = require('./lib/dns');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
@@ -442,6 +442,30 @@ const dnsResolver = createRotatingResolver({ servers: dnsServersOverride, forceD
 // system /etc/resolv.conf, which on a flaky setup times out and silently drops
 // dig-gated domains). Only when --dns is explicitly set.
 if (dnsServersOverride.length > 0) setDigResolvers(dnsServersOverride);
+// Pin Chrome's NAVIGATION resolver to the same providers via DoH. Chrome
+// ignores --dns for page loads and reads /etc/resolv.conf directly, so a broken
+// system resolver (e.g. one returning REFUSED) can ERR_NAME_NOT_RESOLVED a
+// domain the pre-check already resolved. Mapping --dns to the matching DoH
+// endpoint makes navigation use the pinned provider instead of resolv.conf.
+// 'automatic' mode (not 'secure') so Chrome still falls back to system DNS if
+// DoH is unreachable rather than failing the whole batch. Empty templates when
+// --dns is absent or maps to no known DoH provider — Chrome keeps system DNS.
+//
+// Applied ONLY to direct connections (see createBrowser): when a proxy or VPN
+// is active, the exit/tunnel does the resolution (remote DNS / pushed DNS), so
+// pinning local DoH would be redundant and could resolve geo-split domains to
+// the wrong region. In those modes Chrome defers to the proxy/VPN as before.
+const chromeDoh = dnsServersOverride.length > 0
+  ? dohTemplatesForResolvers(dnsServersOverride)
+  : { templates: '', mapped: [], unmapped: [] };
+const anyVpnConfigured = Array.isArray(sites) && sites.some(s => s && (s.vpn || s.openvpn));
+if (dnsServersOverride.length > 0 && !silentMode) {
+  if (chromeDoh.templates) {
+    console.log(formatLogMessage('info', `Chrome navigation will use DoH (automatic) on direct connections: ${chromeDoh.templates}${anyVpnConfigured ? ' — VPN configured, so it defers to VPN resolution' : ' — deferred to proxy resolution on proxied sites'}`));
+  } else {
+    console.warn(formatLogMessage('warn', `--dns servers (${chromeDoh.unmapped.join(', ')}) have no known DoH endpoint — Chrome navigation stays on system resolv.conf; only the pre-check and dig are pinned. Known: 8.8.8.8/8.8.4.4, 1.1.1.1/1.0.0.1, 9.9.9.9, 208.67.222.222.`));
+  }
+}
 // Circuit breaker: if resolver errors dominate, suspend the pre-check for a
 // cooldown so a refusal storm doesn't keep hammering a broken resolver (sites
 // still load — a suspended pre-check just proceeds to navigation).
@@ -1985,6 +2009,18 @@ function setupFrameHandling(page, forceDebug) {
         '--use-mock-keychain',
         '--disable-client-side-phishing-detection',
         '--enable-features=NetworkService',
+        // DoH for Chrome's navigation resolver when --dns maps to a known
+        // provider — but ONLY on direct connections. A proxied launch carries
+        // a --proxy-server in extraArgs and does its own (remote) DNS; a VPN
+        // tunnels resolution. In both cases local DoH is redundant and could
+        // resolve geo-split domains to the wrong region, so it's skipped and
+        // Chrome defers to the proxy/VPN. 'automatic' keeps a system-DNS
+        // fallback if DoH is unreachable. Flags omitted when not applicable.
+        ...((chromeDoh.templates
+             && !anyVpnConfigured
+             && !extraArgs.some(a => typeof a === 'string' && a.startsWith('--proxy-server')))
+          ? ['--dns-over-https-mode=automatic', `--dns-over-https-templates=${chromeDoh.templates}`]
+          : []),
         // Disk space controls - minimal cache for scanning workloads
         `--disk-cache-size=${CACHE_LIMITS.DISK_CACHE_SIZE}`,
         `--media-cache-size=${CACHE_LIMITS.MEDIA_CACHE_SIZE}`,
