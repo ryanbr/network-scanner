@@ -347,6 +347,14 @@ Integer. Number of random content-zone clicks per load, capped at 20 (default: 3
 Boolean. Higher click fidelity: denser mouse approach (15 steps), sub-pixel hand-tremor micro-moves during the press, and a small mouseup drift so the mousedown and mouseup coordinates differ. For sites that score click realism. Costs roughly 80-120ms per click (default: false).
 
 .TP
+.B click_elements
+Array of CSS selectors. After the page loads, click each selector's first match \fBin order\fR \(em reaching content via organic navigation/gesture instead of a direct deep-load (which some sites JS-redirect away). Example: \fB["a[href*='/movie/']", ".play"]\fR clicks a movie link then a play button. The request interceptor stays attached, so the post-click page's requests are matched against \fBfilterRegex\fR/\fBdig\fR as usual; a click that navigates is followed and later selectors query the resulting page. Honors \fBrealistic_click\fR; missing elements are skipped and never fail the scan.
+
+.TP
+.B click_wait
+Milliseconds to wait for navigation/settle after each \fBclick_elements\fR click (default: 5000; capped at half the per-URL timeout).
+
+.TP
 .B delay
 Milliseconds to wait after page load (default: 4000).
 

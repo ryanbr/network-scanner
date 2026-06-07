@@ -65,7 +65,7 @@ const SMART_CACHE_TAG = messageColors.processing('[SmartCache]');
 // log lines (start/completed). Same cyan as the other monitoring tags.
 const CONCURRENCY_TAG = messageColors.processing('[CONCURRENCY]');
 // Enhanced mouse interaction and page simulation
-const { performPageInteraction, createInteractionConfig, computeInteractionCeilingMs, performContentClicks, humanLikeMouseMove } = require('./lib/interaction');
+const { performPageInteraction, createInteractionConfig, computeInteractionCeilingMs, performContentClicks, humanLikeMouseMove, performTargetedClicks } = require('./lib/interaction');
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
 const { createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
 // Domain detection cache for performance optimization
@@ -967,6 +967,9 @@ Advanced Options:
   interact_scrolling: true/false              Enable scrolling simulation (default: true)
   interact_clicks: true/false                 Enable element clicking simulation (default: false)
   interact_typing: true/false                 Enable typing simulation (default: false)
+  click_elements: ["sel1","sel2"]             After load, click these CSS selectors in order (organic nav /
+                                              play button). Honors realistic_click; missing elements skipped
+  click_wait: <milliseconds>                  Settle/navigation wait after each click_elements click (default: 5000)
   cursor_mode: "ghost"                        Use ghost-cursor Bezier mouse (requires: npm i ghost-cursor)
   ghost_cursor_speed: <number>                Ghost-cursor speed multiplier (default: auto)
   ghost_cursor_hesitate: <milliseconds>       Delay before ghost-cursor clicks (default: 50)
@@ -4814,6 +4817,25 @@ function setupFrameHandling(page, forceDebug) {
           throw err;
         }
       }
+      }
+
+      // Targeted clicks: after load, click configured CSS selectors in order
+      // (e.g. a movie link, then a play button) to reach content via organic
+      // navigation/gesture instead of a direct deep-load (which some sites
+      // JS-redirect away). The request interceptor stays attached, so the
+      // post-click page's requests flow into the same filterRegex/dig matching.
+      // Reuses realistic_click for a genuine trusted gesture. Runs before the
+      // delay/interact phase so those operate on the resulting page.
+      if (Array.isArray(siteConfig.click_elements) && siteConfig.click_elements.length > 0 && page && !page.isClosed()) {
+        try {
+          await performTargetedClicks(page, siteConfig.click_elements, {
+            realistic: siteConfig.realistic_click === true,
+            waitMs: Math.min(Number(siteConfig.click_wait) || 5000, Math.floor(timeout / 2)),
+            forceDebug
+          });
+        } catch (clickErr) {
+          if (forceDebug) console.log(formatLogMessage('debug', `${INTERACTION_TAG} click_elements phase failed for ${currentUrl}: ${clickErr.message}`));
+        }
       }
 
       const delayMs = siteConfig.delay || TIMEOUTS.DEFAULT_DELAY;
