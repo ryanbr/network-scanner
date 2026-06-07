@@ -458,14 +458,9 @@ if (dnsServersOverride.length > 0) setDigResolvers(dnsServersOverride);
 const chromeDoh = dnsServersOverride.length > 0
   ? dohTemplatesForResolvers(dnsServersOverride)
   : { templates: '', mapped: [], unmapped: [] };
-const anyVpnConfigured = Array.isArray(sites) && sites.some(s => s && (s.vpn || s.openvpn));
-if (dnsServersOverride.length > 0 && !silentMode) {
-  if (chromeDoh.templates) {
-    console.log(formatLogMessage('info', `Chrome navigation will use DoH (automatic) on direct connections: ${chromeDoh.templates}${anyVpnConfigured ? ' — VPN configured, so it defers to VPN resolution' : ' — deferred to proxy resolution on proxied sites'}`));
-  } else {
-    console.warn(formatLogMessage('warn', `--dns servers (${chromeDoh.unmapped.join(', ')}) have no known DoH endpoint — Chrome navigation stays on system resolv.conf; only the pre-check and dig are pinned. Known providers: Google, Cloudflare, Quad9, OpenDNS, AdGuard, CleanBrowsing, DNS.SB, Mullvad.`));
-  }
-}
+// anyVpnConfigured and the DoH startup log live inside the main IIFE below:
+// `sites` is destructured from the config later in module load, so referencing
+// it at this point in top-level evaluation would TDZ-throw.
 // Circuit breaker: if resolver errors dominate, suspend the pre-check for a
 // cooldown so a refusal storm doesn't keep hammering a broken resolver (sites
 // still load — a suspended pre-check just proceeds to navigation).
@@ -1900,6 +1895,18 @@ function setupFrameHandling(page, forceDebug) {
   const wantPopups = Array.isArray(sites) && sites.some(s => s && s.capture_popups === true);
   if (wantPopups && forceDebug) {
     console.log(formatLogMessage('debug', `${POPUP_TAG} capture_popups set — launching with --disable-popup-blocking (non-gesture popunders allowed)`));
+  }
+
+  // DoH gate: any VPN site disables Chrome DoH (the tunnel resolves). Computed
+  // here (not at module top) because `sites` is only initialized by this point.
+  // Read by createBrowser's launch args; the startup log reports the decision.
+  const anyVpnConfigured = Array.isArray(sites) && sites.some(s => s && (s.vpn || s.openvpn));
+  if (dnsServersOverride.length > 0 && !silentMode) {
+    if (chromeDoh.templates) {
+      console.log(formatLogMessage('info', `Chrome navigation will use DoH (automatic) on direct connections: ${chromeDoh.templates}${anyVpnConfigured ? ' — VPN configured, so it defers to VPN resolution' : ' — deferred to proxy resolution on proxied sites'}`));
+    } else {
+      console.warn(formatLogMessage('warn', `--dns servers (${chromeDoh.unmapped.join(', ')}) have no known DoH endpoint — Chrome navigation stays on system resolv.conf; only the pre-check and dig are pinned. Known providers: Google, Cloudflare, Quad9, OpenDNS, AdGuard, CleanBrowsing, DNS.SB, Mullvad.`));
+    }
   }
 
   /**
