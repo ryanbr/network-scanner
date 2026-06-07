@@ -2,6 +2,15 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Added
+- **`--dns` now also pins Chrome's page-navigation resolver via DoH.** Chrome ignores `--dns` for navigation and reads `/etc/resolv.conf` directly, so a broken or filtering system resolver could `ERR_NAME_NOT_RESOLVED` a domain the pre-check had already resolved. When the `--dns` servers map to a known public DoH provider — **Google, Cloudflare, Quad9, OpenDNS, AdGuard, CleanBrowsing, DNS.SB, Mullvad** (incl. malware/family/unfiltered variants) — Chrome is launched with secure-DNS `automatic` mode pointed at that provider, so page navigation resolves through the same resolver as the pre-check. `automatic` (not `secure`) keeps a system-DNS fallback if DoH is unreachable rather than failing the batch. **Applied to direct connections only** — skipped when a proxy (`--proxy-server`) or VPN is active, since the exit/tunnel does the resolution and local DoH would be redundant or resolve geo-split domains to the wrong region. Unmapped resolvers (custom/ISP, per-account providers like NextDNS, IPv6) fall back to system DNS with a warning naming the supported providers.
+- **`--doh-disable`** site/CLI option (`doh_disable` in `.nwssconfig`), default off — opt out of the Chrome-navigation DoH pinning entirely. Chrome then resolves page navigation via the system `resolv.conf` even when `--dns` maps to a known provider, while the pre-check and `dig` still honor `--dns`. For networks where DoH adds latency or is blocked, or when system-path resolution is specifically wanted.
+
+### Fixed
+- **`whois` availability probe is now platform-aware** — the fallback used `which whois` (Unix-only), which on native Windows would false-negative an installed `whois.exe` whose `whois --version` errors (e.g. Sysinternals whois). Uses `where` on Windows, `which` elsewhere. No change on Linux/macOS/WSL.
+
 ## [3.3.0] - 2026-06-06
 
 ### Added

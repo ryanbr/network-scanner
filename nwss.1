@@ -138,12 +138,32 @@ Maximum concurrent site processing (1-50, overrides config/default).
 
 .TP
 .BR \--dns " \fIIP\fR[,\fIIP\fR...]"
-Nameserver(s) for the DNS pre-check AND nettools' dig \(em does not affect Chrome
-navigation or whois. A single address pins all queries to it; several are
-rotated per query (each leading once, the rest as failover) to spread the
-load. Routing dig through these avoids dig timeouts on a flaky system resolver
-silently dropping dig-gated domains. Overrides /etc/resolv.conf. Invalid
-entries are warned and dropped.
+Nameserver(s) for the DNS pre-check, nettools' dig, and \(em when they map to a
+known public DoH provider \(em Chrome's page navigation via DNS-over-HTTPS on
+direct connections (does not affect whois). A single address pins all queries
+to it; several are rotated per query (each leading once, the rest as failover)
+to spread the load. Routing dig through these avoids dig timeouts on a flaky
+system resolver silently dropping dig-gated domains. Overrides
+/etc/resolv.conf. Invalid entries are warned and dropped.
+.IP
+Chrome ignores \fB\--dns\fR for navigation and reads /etc/resolv.conf directly,
+so a broken system resolver could fail a domain the pre-check already resolved.
+When the \fB\--dns\fR servers match a known DoH provider (Google, Cloudflare,
+Quad9, OpenDNS, AdGuard, CleanBrowsing, DNS.SB, Mullvad \(em including
+malware/family/unfiltered variants), Chrome is launched with secure-DNS
+\fIautomatic\fR mode pointed at that provider, so navigation resolves through
+the same resolver. \fIautomatic\fR (not \fIsecure\fR) keeps a system-DNS
+fallback if DoH is unreachable. Skipped under a proxy or VPN (the exit/tunnel
+resolves); unmapped resolvers (custom/ISP, per-account providers, IPv6) fall
+back to system DNS with a warning.
+
+.TP
+.B \--doh-disable
+Opt out of the Chrome-navigation DoH pinning (default: off). Chrome then
+resolves page navigation via the system /etc/resolv.conf even when \fB\--dns\fR
+maps to a known provider; the pre-check and dig still honor \fB\--dns\fR. Use
+when DoH adds latency, is blocked on the network, or system-path resolution is
+specifically wanted.
 
 .TP
 .BR \--cleanup-interval " \fINUMBER\fR"
