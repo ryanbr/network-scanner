@@ -6082,10 +6082,24 @@ function setupFrameHandling(page, forceDebug) {
      const INTERACTION_OVERHEAD_MS = interactionOnForTask
        ? computeInteractionCeilingMs(createInteractionConfig(task.url, task.config))
        : 0;
+     // click_elements runs ONCE after load (before the delay/interact/reload
+     // phases): N selectors, each a settle/nav wait (click_wait, capped at
+     // timeout/2 — mirror the call site) plus ~2s for scroll + the click action
+     // (ghost Bezier travel is the slowest). Budget it so a heavy click chain
+     // can't trip the per-URL ceiling before the work that follows it. Not
+     // multiplied by reloadCount — the click phase is one-time.
+     const clickEls = Array.isArray(task.config.click_elements)
+       ? task.config.click_elements.filter(s => typeof s === 'string' && s.trim())
+       : [];
+     const clickWaitMs = clickEls.length
+       ? Math.min(Number(task.config.click_wait) || 5000, Math.floor((task.config.timeout || 35000) / 2))
+       : 0;
+     const CLICK_ELEMENTS_OVERHEAD_MS = clickEls.length * (clickWaitMs + 2000);
      const PER_URL_TIMEOUT_MS = Math.max(
        75000,
        (task.config.timeout || 35000)
          + ((task.config.delay || 0) + INTERACTION_OVERHEAD_MS) * (1 + reloadCount)
+         + CLICK_ELEMENTS_OVERHEAD_MS
          + 30000
      );
      // Feed the hang-check restart so it never escalates before this URL's own
