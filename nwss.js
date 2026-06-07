@@ -967,8 +967,8 @@ Advanced Options:
   interact_scrolling: true/false              Enable scrolling simulation (default: true)
   interact_clicks: true/false                 Enable element clicking simulation (default: false)
   interact_typing: true/false                 Enable typing simulation (default: false)
-  click_elements: ["sel1","sel2"]             After load, click these CSS selectors in order (organic nav /
-                                              play button). Honors realistic_click + cursor_mode "ghost"; missing skipped
+  click_elements: ["sel1","sel2"]             After load, click these CSS selectors in order, main frame + iframes
+                                              (organic nav / play button). Honors realistic_click + cursor_mode "ghost"; missing skipped
   click_wait: <milliseconds>                  Per-click: max wait for the element to appear + settle/nav after (default: 5000)
   cursor_mode: "ghost"                        Use ghost-cursor Bezier mouse (requires: npm i ghost-cursor)
   ghost_cursor_speed: <number>                Ghost-cursor speed multiplier (default: auto)

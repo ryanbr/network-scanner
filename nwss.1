@@ -348,7 +348,7 @@ Boolean. Higher click fidelity: denser mouse approach (15 steps), sub-pixel hand
 
 .TP
 .B click_elements
-Array of CSS selectors. After the page loads, click each selector's first match \fBin order\fR \(em reaching content via organic navigation/gesture instead of a direct deep-load (which some sites JS-redirect away). Example: \fB["a[href*='/movie/']", ".play"]\fR clicks a movie link then a play button. The request interceptor stays attached, so the post-click page's requests are matched against \fBfilterRegex\fR/\fBdig\fR as usual; a click that navigates is followed and later selectors query the resulting page. Honors \fBrealistic_click\fR and \fBcursor_mode: "ghost"\fR (Bezier travel to the element); missing elements are skipped and never fail the scan.
+Array of CSS selectors. After the page loads, click each selector's first match \fBin order\fR (searched across the main frame and any iframe) \(em reaching content via organic navigation/gesture instead of a direct deep-load (which some sites JS-redirect away). Example: \fB["a[href*='/movie/']", ".play"]\fR clicks a movie link then a play button. The request interceptor stays attached, so the post-click page's requests are matched against \fBfilterRegex\fR/\fBdig\fR as usual; a click that navigates is followed and later selectors query the resulting page. Honors \fBrealistic_click\fR and \fBcursor_mode: "ghost"\fR (Bezier travel to the element); missing elements are skipped and never fail the scan.
 
 .TP
 .B click_wait
