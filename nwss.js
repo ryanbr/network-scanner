@@ -378,7 +378,13 @@ if (dnsCacheMode) enableDiskCache();
 // Filters NXDOMAIN / unresolvable hostnames in <100ms before paying the
 // ~5-15s Puppeteer + Cloudflare detection round-trip on each.
 const dnsPrecheckEnabled = !args.includes('--no-dns-precheck');
-const dnsPrecheckTimeoutMs = 2000;
+// 4s (was 2s): under a concurrent scan the c-ares UDP burst against the pinned
+// resolvers can take >2s to answer — a tight timeout false-counted those as
+// resolver errors and tripped the circuit breaker. A clean NXDOMAIN still
+// returns fast (the resolver answers immediately), so the higher ceiling only
+// costs time when the resolver is genuinely slow — exactly when we want to wait
+// rather than false-fail. Paired with the resolver's concurrency cap below.
+const dnsPrecheckTimeoutMs = 4000;
 
 // --show-dead-domains: collect hostnames that are definitively DEAD (do not
 // exist / unreachable) and print them at the end of the scan so they can be
