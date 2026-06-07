@@ -352,7 +352,7 @@ Array of CSS selectors. After the page loads, click each selector's first match 
 
 .TP
 .B click_wait
-Milliseconds to wait for navigation/settle after each \fBclick_elements\fR click (default: 5000; capped at half the per-URL timeout).
+Per click: maximum time in milliseconds to wait for the element to appear and be visible (\fBwaitForSelector\fR) AND the navigation/settle wait after the click (default: 5000; capped at half the per-URL timeout).
 
 .TP
 .B delay
