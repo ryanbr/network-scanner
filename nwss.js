@@ -5096,6 +5096,21 @@ function setupFrameHandling(page, forceDebug) {
         
       let reloadSuccess = false;
 
+      // page.reload() can't carry a referer; when referrer_headers is set,
+      // re-navigate to the current URL with it so referer-gated embeds keep
+      // serving across the reload:N loop (the initial goto carries the referer,
+      // but reload() drops it). Nav-only scope — subresources keep their normal
+      // page-origin referer (unlike setExtraHTTPHeaders, which would force the
+      // referer onto every request and can break embeds whose subresources
+      // expect own-origin). A static referrer_headers string is identical each
+      // reload; random/mixed modes pick a fresh value per reload.
+      const reloadReferer = siteConfig.referrer_headers
+        ? getReferrerForUrl(currentUrl, siteConfig.referrer_headers, siteConfig.referrer_disable, forceDebug)
+        : '';
+      const reloadOrReferredGoto = (opts) => reloadReferer
+        ? page.goto(page.url(), { ...opts, referer: reloadReferer })
+        : page.reload(opts);
+
   // Skip force reload if browser seems unhealthy
   const skipForceReload = i > 2; // After 2 attempts, skip force reload
       
@@ -5118,7 +5133,7 @@ function setupFrameHandling(page, forceDebug) {
           await raceWithTimer(page.setCacheEnabled(false), 'Cache disable timeout', 8000);
 
             // Use networkidle2 for force reload to better detect when page is actually loaded
-            await page.reload({ waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) });
+            await reloadOrReferredGoto({ waitUntil: 'networkidle2', timeout: Math.min(timeout, 15000) });
 
           // Timeout-protected cache enable
           await raceWithTimer(page.setCacheEnabled(true), 'Cache enable timeout', 8000);
@@ -5157,7 +5172,7 @@ function setupFrameHandling(page, forceDebug) {
         ? { waitUntil: 'domcontentloaded', timeout: 10000 }  // Simpler after failures
         : { waitUntil: 'networkidle2', timeout: 15000 };     // Full wait first time
       
-      await page.reload(reloadOptions);
+      await reloadOrReferredGoto(reloadOptions);
             
           if (forceDebug) console.log(formatLogMessage('debug', `Standard reload #${i} completed for ${currentUrl}`));
         } catch (standardReloadErr) {
