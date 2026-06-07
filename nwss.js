@@ -241,6 +241,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         resource_cleanup_interval: ['--cleanup-interval'],
         dns: ['--dns'],
         dns_cache: ['--dns-cache'],
+        doh_disable: ['--doh-disable'],
         cache_requests: ['--cache-requests'],
         dumpurls: ['--dumpurls'],
         remove_tempfiles: ['--remove-tempfiles'],
@@ -455,6 +456,12 @@ if (dnsServersOverride.length > 0) setDigResolvers(dnsServersOverride);
 // is active, the exit/tunnel does the resolution (remote DNS / pushed DNS), so
 // pinning local DoH would be redundant and could resolve geo-split domains to
 // the wrong region. In those modes Chrome defers to the proxy/VPN as before.
+// --doh-disable (default false) opts out of the Chrome DoH pinning entirely —
+// navigation falls back to system resolv.conf even when --dns maps to a known
+// provider. The pre-check and dig still honor --dns. Use it if DoH adds
+// unwanted latency, is blocked on the network, or you specifically want Chrome
+// to resolve via the system path.
+const dohDisabled = args.includes('--doh-disable');
 const chromeDoh = dnsServersOverride.length > 0
   ? dohTemplatesForResolvers(dnsServersOverride)
   : { templates: '', mapped: [], unmapped: [] };
@@ -837,8 +844,12 @@ General Options:
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
-  --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check AND nettools' dig (not Chrome nav / whois).
-                                 One pins all queries to it; several rotate per query. Overrides /etc/resolv.conf.
+  --dns <ip[,ip,...]>            Resolver(s) for the DNS pre-check, nettools' dig, and — when they map to a
+                                 known DoH provider — Chrome's page navigation via DoH on direct connections
+                                 (skipped under proxy/VPN; not whois). Overrides /etc/resolv.conf.
+                                 One pins all queries to it; several rotate per query.
+  --doh-disable                  Opt out of the Chrome-navigation DoH pinning (default: off). Chrome then
+                                 resolves via system resolv.conf; --dns still pins the pre-check and dig.
   --dns-cache                    Persist dig/whois results to disk between runs (dig 20h / whois 36h TTL, 2000-entry cap each),
                                  plus the DNS pre-check negative cache (NXDOMAIN only, 12h TTL, .dnsnegcache)
   --no-dns-precheck              Disable per-URL DNS resolution check before page navigation.
@@ -1902,7 +1913,9 @@ function setupFrameHandling(page, forceDebug) {
   // Read by createBrowser's launch args; the startup log reports the decision.
   const anyVpnConfigured = Array.isArray(sites) && sites.some(s => s && (s.vpn || s.openvpn));
   if (dnsServersOverride.length > 0 && !silentMode) {
-    if (chromeDoh.templates) {
+    if (dohDisabled) {
+      console.log(formatLogMessage('info', `Chrome DoH disabled via --doh-disable — navigation uses system resolv.conf; --dns still pins the pre-check and dig.`));
+    } else if (chromeDoh.templates) {
       console.log(formatLogMessage('info', `Chrome navigation will use DoH (automatic) on direct connections: ${chromeDoh.templates}${anyVpnConfigured ? ' — VPN configured, so it defers to VPN resolution' : ' — deferred to proxy resolution on proxied sites'}`));
     } else {
       console.warn(formatLogMessage('warn', `--dns servers (${chromeDoh.unmapped.join(', ')}) have no known DoH endpoint — Chrome navigation stays on system resolv.conf; only the pre-check and dig are pinned. Known providers: Google, Cloudflare, Quad9, OpenDNS, AdGuard, CleanBrowsing, DNS.SB, Mullvad.`));
@@ -2024,6 +2037,7 @@ function setupFrameHandling(page, forceDebug) {
         // Chrome defers to the proxy/VPN. 'automatic' keeps a system-DNS
         // fallback if DoH is unreachable. Flags omitted when not applicable.
         ...((chromeDoh.templates
+             && !dohDisabled
              && !anyVpnConfigured
              && !extraArgs.some(a => typeof a === 'string' && a.startsWith('--proxy-server')))
           ? ['--dns-over-https-mode=automatic', `--dns-over-https-templates=${chromeDoh.templates}`]
