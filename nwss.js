@@ -968,7 +968,7 @@ Advanced Options:
   interact_clicks: true/false                 Enable element clicking simulation (default: false)
   interact_typing: true/false                 Enable typing simulation (default: false)
   click_elements: ["sel1","sel2"]             After load, click these CSS selectors in order (organic nav /
-                                              play button). Honors realistic_click; missing elements skipped
+                                              play button). Honors realistic_click + cursor_mode "ghost"; missing skipped
   click_wait: <milliseconds>                  Settle/navigation wait after each click_elements click (default: 5000)
   cursor_mode: "ghost"                        Use ghost-cursor Bezier mouse (requires: npm i ghost-cursor)
   ghost_cursor_speed: <number>                Ghost-cursor speed multiplier (default: auto)
@@ -4827,10 +4827,30 @@ function setupFrameHandling(page, forceDebug) {
       // Reuses realistic_click for a genuine trusted gesture. Runs before the
       // delay/interact phase so those operate on the resulting page.
       if (Array.isArray(siteConfig.click_elements) && siteConfig.click_elements.length > 0 && page && !page.isClosed()) {
+        // If ghost-cursor is enabled for this site (cursor_mode:"ghost" or
+        // --ghost-cursor), route the targeted clicks through it — Bezier travel
+        // to the element + realistic press — matching the interact phase.
+        // Injected so interaction.js needn't require ghost-cursor.js (circular).
+        // Falls back to performTargetedClicks' humanClick/el.click when ghost is
+        // off or the package isn't installed (resolveGhostCursorConfig → null).
+        let ghostClicker = null;
+        const tcGhostCfg = resolveGhostCursorConfig(siteConfig, globalGhostCursor, forceDebug);
+        if (tcGhostCfg) {
+          const tcCursor = createGhostCursor(page, { forceDebug });
+          if (tcCursor) {
+            ghostClicker = (x, y) => ghostClick(tcCursor, { x, y }, {
+              hesitate: tcGhostCfg.hesitate,
+              page,
+              realistic: siteConfig.realistic_click === true,
+              forceDebug
+            });
+          }
+        }
         try {
           await performTargetedClicks(page, siteConfig.click_elements, {
             realistic: siteConfig.realistic_click === true,
             waitMs: Math.min(Number(siteConfig.click_wait) || 5000, Math.floor(timeout / 2)),
+            ghostClick: ghostClicker,
             forceDebug
           });
         } catch (clickErr) {
