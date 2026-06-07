@@ -2531,10 +2531,18 @@ function setupFrameHandling(page, forceDebug) {
       page.setDefaultNavigationTimeout(Math.min(timeout, TIMEOUTS.DEFAULT_NAVIGATION));
       // Aggressive timeouts prevent hanging in Puppeteer 23.x while maintaining speed
       
-      page.on('console', (msg) => {
-        if (forceDebug && msg.type() === 'error') console.log(formatLogMessage('debug', `Console error: ${msg.text()}`));
-      });
-      
+      // Only attach a console listener under --debug. Registering ANY 'console'
+      // listener makes Puppeteer enable the CDP Runtime domain, which arms
+      // console-based automation/DevTools traps (e.g. disable-devtool logs an
+      // object with a getter and detects the inspector reading it → redirects
+      // away). The body is a no-op without forceDebug, so attaching it
+      // unconditionally armed that trap for zero benefit.
+      if (forceDebug) {
+        page.on('console', (msg) => {
+          if (msg.type() === 'error') console.log(formatLogMessage('debug', `Console error: ${msg.text()}`));
+        });
+      }
+
       // Add page crash handler
       page.on('error', (err) => {
         if (forceDebug) console.log(formatLogMessage('debug', `Page crashed: ${err.message}`));
