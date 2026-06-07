@@ -3430,12 +3430,18 @@ function setupFrameHandling(page, forceDebug) {
         // (normalizeSiteConfig now coerces interact: 1 → true with a warning,
         // so by the time we get here both should be booleans — but keep the
         // diagnostic accurate for the truly-missing case.)
+        const hasClickElements = Array.isArray(siteConfig.click_elements) && siteConfig.click_elements.length > 0;
         const interactOn = siteConfig.interact === true;
         const clicksOn = siteConfig.interact_clicks === true;
-        if (!interactOn && !clicksOn) {
-          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but neither 'interact' nor 'interact_clicks' is — set BOTH to true to fire user-gesture clicks; without them, only popups opened via in-page redirects will capture`));
+        if (hasClickElements && (!interactOn || !clicksOn)) {
+          // click_elements fires its own trusted gesture clicks, so popups it
+          // triggers capture regardless of interact/interact_clicks. Don't warn
+          // "no clicks fire" — surface the random-click coverage gap instead.
+          console.log(formatLogMessage('debug', `[popup] capture_popups: click_elements supplies targeted gesture clicks (popups they trigger WILL capture). interact=${interactOn}, interact_clicks=${clicksOn} — enable both for random content-zone click coverage of overlay popunders too`));
+        } else if (!interactOn && !clicksOn) {
+          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but neither 'interact' nor 'interact_clicks' is — set BOTH to true to fire user-gesture clicks; without them, only popups opened via in-page redirects (or click_elements) will capture`));
         } else if (!interactOn) {
-          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but 'interact' is not — set interact: true to enable the interaction loop (interact_clicks is already set); without it, no fake clicks fire`));
+          console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but 'interact' is not — set interact: true to enable the interaction loop (interact_clicks is already set); without it, no random fake clicks fire`));
         } else if (!clicksOn) {
           console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but 'interact_clicks' is not — set interact_clicks: true to enable element-targeted clicks; without it, only random content-zone clicks fire and may miss overlay-based popunders`));
         }
