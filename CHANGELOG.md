@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [3.4.0] - 2026-06-13
 
 ### Added
 - **`redirect_first_party` site option** (default `true`) — by default a redirect's destination domains (and chain hops) are registered first-party so the landed site's own resources aren't captured as third-party. Set `false` to keep redirect targets **third-party**, so `filterRegex`/`dig` apply to them under `thirdParty: true` — e.g. capturing the end domain of an ad/cloak redirect chain (which Chrome reaches via the `ERR_TOO_MANY_REDIRECTS` curl-resolve recovery). The originally-scanned domain stays first-party either way.
