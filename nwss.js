@@ -4519,46 +4519,69 @@ function setupFrameHandling(page, forceDebug) {
             }
           } else if (navErr.message.includes('ERR_TOO_MANY_REDIRECTS')) {
             // Redirect-cloaking chain exceeded Chrome's ~20-hop per-navigation
-            // ceiling, so goto() rejected. Headless Chrome gets served an endless
-            // HTTP-30x loop, but curl (no JS) follows the chain to the page where
-            // the cloak hands off to a JS/meta hop. Resolve that endpoint with
-            // curl, then navigate to IT — a fresh, SHORT navigation that reaches
-            // the real end site (verified: lands on the final player page and
-            // captures its ad/tracker calls). Falls back to the original URL
-            // (keeping whatever chain requests the interceptor already captured)
-            // when curl is unavailable or can't resolve it.
-            let resolvedUrl = '';
-            // Gate: curl runs DIRECT from the scanner host — it does not honor a
-            // per-site proxy/VPN. Skip the curl-resolve on proxied/VPN'd scans so
-            // it can't leak the real IP or resolve the chain from the wrong
-            // network (the cloaker may serve a different chain there). Those scans
-            // fall back to the captured chain requests.
-            const curlResolveOk = !needsProxy(siteConfig) && !anyVpnConfigured && validateCurlAvailability().isAvailable;
-            if (curlResolveOk) {
+            // ceiling, so goto() rejected. Two recovery paths — they cover
+            // opposite cases run-to-run, so try both:
+            //   1. Browser ride-through (free): a JS/meta hop on a committed
+            //      intermediate page resets Chrome's counter and carries the page
+            //      to the end site on its own. Check if it already happened, else
+            //      wait briefly for it.
+            //   2. curl-resolve (fallback, only if the page parked on
+            //      chrome-error): curl follows the chain (it gets the real chain,
+            //      not headless Chrome's endless loop) to the JS-handoff page;
+            //      navigating there directly is a SHORT hop that reaches the end
+            //      site. Skipped under proxy/VPN — curl runs DIRECT from the host
+            //      and would leak the real IP / resolve from the wrong network.
+            // If neither reaches a real page, keep the chain requests already
+            // captured (grouped under the original URL, never chrome-error).
+            let landedUrl = '';
+            const isRealPage = (u) => !!u && /^https?:\/\//.test(u) && !u.startsWith('chrome-error://') && u !== currentUrl;
+
+            // 1) Browser ride-through — may have completed during goto(); if not,
+            //    wait for the next navigation(s) to carry it through.
+            try { if (!page.isClosed() && isRealPage(page.url())) landedUrl = page.url(); } catch {}
+            for (let r = 0; r < 3 && !landedUrl; r++) {
               try {
-                const curlUa = USER_AGENT_COLLECTIONS.get((siteConfig.userAgent || 'chrome').toLowerCase())
-                  || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
-                const cr = await runProcess('curl', ['-sL', '--max-redirs', '50', '--max-time', '20', '-o', '/dev/null', '-A', curlUa, '-w', '%{url_effective}', currentUrl], { timeout: 22000, maxStdout: 4096 });
-                const u = (cr.stdout || '').trim();
-                if (cr.code === 0 && /^https?:\/\//.test(u) && u !== currentUrl) resolvedUrl = u;
-              } catch (_) { /* curl failed — fall through to chain captures */ }
+                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 });
+                if (!page.isClosed() && isRealPage(page.url())) landedUrl = page.url();
+              } catch { break; } // no further navigation — stop waiting
             }
-            if (resolvedUrl) {
-              if (forceDebug) console.log(formatLogMessage('debug', `Too many redirects — curl resolved the chain to ${resolvedUrl}; navigating there directly`));
-              try {
-                navigationResult = await navigateWithRedirectHandling(page, resolvedUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage);
-              } catch (_) {
-                // The end page is often a streaming/embed doc that never reaches
-                // DOM-ready (goto times out) — but it DID navigate and its
-                // requests fired. Proceed with the page's current URL so those
-                // captures aren't discarded.
-                let landed = currentUrl;
-                try { if (!page.isClosed()) { const u = page.url(); if (u && !u.startsWith('chrome-error://')) landed = u; } } catch {}
-                navigationResult = { finalUrl: landed, redirected: landed !== currentUrl, redirectChain: [currentUrl, landed], originalUrl: currentUrl, redirectDomains: [], httpStatus: null, cfRay: null };
+            if (landedUrl && forceDebug) console.log(formatLogMessage('debug', `Too many redirects — browser rode through to ${landedUrl} for ${currentUrl}`));
+
+            // 2) curl-resolve fallback — only if still parked (no ride-through).
+            if (!landedUrl) {
+              const curlResolveOk = !needsProxy(siteConfig) && !anyVpnConfigured && validateCurlAvailability().isAvailable;
+              if (curlResolveOk) {
+                let resolvedUrl = '';
+                try {
+                  const curlUa = USER_AGENT_COLLECTIONS.get((siteConfig.userAgent || 'chrome').toLowerCase())
+                    || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+                  const cr = await runProcess('curl', ['-sL', '--max-redirs', '50', '--max-time', '20', '-o', '/dev/null', '-A', curlUa, '-w', '%{url_effective}', currentUrl], { timeout: 22000, maxStdout: 4096 });
+                  const u = (cr.stdout || '').trim();
+                  if (cr.code === 0 && /^https?:\/\//.test(u) && u !== currentUrl) resolvedUrl = u;
+                } catch (_) { /* curl failed */ }
+                if (resolvedUrl) {
+                  if (forceDebug) console.log(formatLogMessage('debug', `Too many redirects — curl resolved the chain to ${resolvedUrl}; navigating there directly for ${currentUrl}`));
+                  // Navigate to the resolved endpoint; the streaming/embed end page
+                  // often never reaches DOM-ready, so the goto may throw — either
+                  // way it navigated, so adopt page.url().
+                  try { navigationResult = await navigateWithRedirectHandling(page, resolvedUrl, siteConfig, gotoOptions, forceDebug, formatLogMessage); } catch (_) { /* timed out — use page.url() below */ }
+                  try { if (!page.isClosed() && page.url() && !page.url().startsWith('chrome-error://')) landedUrl = page.url(); } catch {}
+                } else if (forceDebug) {
+                  console.log(formatLogMessage('debug', `Too many redirects — no ride-through and curl could not resolve; keeping chain captures for ${currentUrl}`));
+                }
+              } else if (forceDebug) {
+                const why = (needsProxy(siteConfig) || anyVpnConfigured) ? 'proxy/VPN active' : 'curl unavailable';
+                console.log(formatLogMessage('debug', `Too many redirects — no ride-through and curl-resolve skipped (${why}); keeping chain captures for ${currentUrl}`));
               }
-            } else {
-              if (forceDebug) console.log(formatLogMessage('debug', `Too many redirects — curl could not resolve the chain; keeping captured chain requests for ${currentUrl}`));
-              navigationResult = { finalUrl: currentUrl, redirected: false, redirectChain: [currentUrl], originalUrl: currentUrl, redirectDomains: [], httpStatus: null, cfRay: null };
+            }
+
+            // navigateWithRedirectHandling may already have set navigationResult
+            // (clean curl path). Otherwise build a partial from where we landed —
+            // the end site if we rode through / curl'd, else the original URL with
+            // the chain requests already captured.
+            if (!navigationResult) {
+              const fu = landedUrl || currentUrl;
+              navigationResult = { finalUrl: fu, redirected: fu !== currentUrl, redirectChain: [currentUrl, fu], originalUrl: currentUrl, redirectDomains: [], httpStatus: null, cfRay: null };
             }
           } else {
             throw navErr;
