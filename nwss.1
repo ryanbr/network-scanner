@@ -379,6 +379,10 @@ Boolean. Allow first-party request matching (default: false).
 Boolean. Allow third-party request matching (default: true).
 
 .TP
+.B redirect_first_party
+Boolean (default: true). Whether redirect-destination domains (and chain hops) are treated as first-party. Set to \fBfalse\fR to keep redirect targets \fBthird-party\fR so \fBfilterRegex\fR/\fBdig\fR can match them under \fBthirdParty: true\fR \(em e.g. capturing the end domain of an ad/cloak redirect. The originally-scanned domain stays first-party either way; note this also un-excludes the redirect target's own same-domain resources.
+
+.TP
 .B fingerprint_protection
 Boolean or \fB"random"\fR. Enable browser fingerprint spoofing.
 

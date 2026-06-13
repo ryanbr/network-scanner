@@ -931,6 +931,9 @@ Redirect Handling Options:
   source: true/false                           Save page source HTML after load
   firstParty: true/false                       Allow first-party matches (default: false)
   thirdParty: true/false                       Allow third-party matches (default: true)
+  redirect_first_party: true/false             Treat redirect-destination domains as first-party (default: true).
+                                              false keeps redirect targets third-party so filterRegex/dig can match
+                                              them (e.g. capturing an ad/cloak redirect's end domain)
   screenshot: true/false/\"force\"                Capture screenshot (true=on failure, \"force\"=always)
   headful: true/false                          Launch browser with GUI for this site
   fingerprint_protection: true/false/"random" Enable fingerprint spoofing: true/false/"random"
@@ -4602,17 +4605,26 @@ function setupFrameHandling(page, forceDebug) {
           redirectHistory.add(currentUrl);
           redirectHistory.add(finalUrl);
 
-          // Add redirect destination to first-party domains immediately
-          if (finalDomain) {
-            firstPartyDomains.add(finalDomain);
-          }
-          
-          // Also add any intermediate redirect domains as first-party
-          if (redirectDomains && redirectDomains.length > 0) {
-            redirectDomains.forEach(domain => {
-              const rootDomain = safeGetDomain(`http://${domain}`, false);
-              if (rootDomain) firstPartyDomains.add(rootDomain);
-            });
+          // Add redirect destination (and intermediates) to first-party domains
+          // so the landed site's own resources aren't captured as third-party.
+          // Opt out with redirect_first_party:false — then redirect targets stay
+          // THIRD-PARTY and become eligible for filterRegex/dig under
+          // thirdParty:true (e.g. capturing an ad/cloak redirect's end domain).
+          // The originally-scanned domain (added earlier) stays first-party.
+          const redirectsAreFirstParty = siteConfig.redirect_first_party !== false;
+          if (redirectsAreFirstParty) {
+            if (finalDomain) {
+              firstPartyDomains.add(finalDomain);
+            }
+            // Also add any intermediate redirect domains as first-party
+            if (redirectDomains && redirectDomains.length > 0) {
+              redirectDomains.forEach(domain => {
+                const rootDomain = safeGetDomain(`http://${domain}`, false);
+                if (rootDomain) firstPartyDomains.add(rootDomain);
+              });
+            }
+          } else if (forceDebug) {
+            console.log(formatLogMessage('debug', `redirect_first_party:false — keeping redirect target ${finalDomain} third-party for ${currentUrl}`));
           }
           
           if (originalDomain !== finalDomain) {
