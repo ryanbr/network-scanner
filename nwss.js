@@ -4513,6 +4513,23 @@ function setupFrameHandling(page, forceDebug) {
               if (forceDebug) console.log(formatLogMessage('debug', `Navigation timeout — proceeding with partially-loaded page for ${currentUrl}`));
               navigationResult = { finalUrl: partialUrl, redirected: false, redirectChain: [currentUrl], originalUrl: currentUrl, redirectDomains: [], httpStatus: null, cfRay: null };
             }
+          } else if (navErr.message.includes('ERR_TOO_MANY_REDIRECTS')) {
+            // Redirect-cloaking chain exceeded Chrome's ~20-hop per-navigation
+            // ceiling. The interceptor already captured every hop before goto()
+            // rejected, so DON'T discard them (the old `throw` path did). Some
+            // chains slip in a JS/meta hop that resets Chrome's counter and rides
+            // through to the end site (seen in headful) — give ONE brief chance
+            // for that continuation. Headless on a pure HTTP-30x cloak just parks
+            // on chrome-error; we then proceed with the chain captures and group
+            // under the original URL (never chrome-error).
+            let settledUrl = '';
+            try {
+              await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 8000 });
+              if (!page.isClosed()) { const u = page.url(); if (u && !u.startsWith('chrome-error://')) settledUrl = u; }
+            } catch { /* no continuation — keep the chain captures */ }
+            const partialUrl = settledUrl || currentUrl;
+            if (forceDebug) console.log(formatLogMessage('debug', `Too many redirects — ${settledUrl ? 'rode through to ' + settledUrl : 'kept redirect-chain captures'} for ${currentUrl}`));
+            navigationResult = { finalUrl: partialUrl, redirected: !!settledUrl, redirectChain: [currentUrl], originalUrl: currentUrl, redirectDomains: [], httpStatus: null, cfRay: null };
           } else {
             throw navErr;
           }
