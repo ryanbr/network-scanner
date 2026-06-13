@@ -4548,8 +4548,11 @@ function setupFrameHandling(page, forceDebug) {
             if (landedUrl && forceDebug) console.log(formatLogMessage('debug', `Too many redirects — browser rode through to ${landedUrl} for ${currentUrl}`));
 
             // 2) curl-resolve fallback — only if still parked (no ride-through).
+            //    Opt-in via the site's `curl` option: if you didn't enable curl
+            //    in the config, the scanner won't shell out to it here either
+            //    (consistent with the content-analysis `curl` gate).
             if (!landedUrl) {
-              const curlResolveOk = !needsProxy(siteConfig) && !anyVpnConfigured && validateCurlAvailability().isAvailable;
+              const curlResolveOk = siteConfig.curl === true && !needsProxy(siteConfig) && !anyVpnConfigured && validateCurlAvailability().isAvailable;
               if (curlResolveOk) {
                 let resolvedUrl = '';
                 try {
@@ -4570,7 +4573,9 @@ function setupFrameHandling(page, forceDebug) {
                   console.log(formatLogMessage('debug', `Too many redirects — no ride-through and curl could not resolve; keeping chain captures for ${currentUrl}`));
                 }
               } else if (forceDebug) {
-                const why = (needsProxy(siteConfig) || anyVpnConfigured) ? 'proxy/VPN active' : 'curl unavailable';
+                const why = siteConfig.curl !== true ? 'curl not enabled (curl:false)'
+                  : (needsProxy(siteConfig) || anyVpnConfigured) ? 'proxy/VPN active'
+                  : 'curl unavailable';
                 console.log(formatLogMessage('debug', `Too many redirects — no ride-through and curl-resolve skipped (${why}); keeping chain captures for ${currentUrl}`));
               }
             }
