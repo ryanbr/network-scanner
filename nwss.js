@@ -4964,6 +4964,13 @@ function setupFrameHandling(page, forceDebug) {
       const actualDelay = siteConfig.delay_uncapped === true
         ? Math.min(delayMs, Math.floor(timeout / 2))
         : Math.min(delayMs, TIMEOUTS.NETWORK_IDLE);
+      // Surface the clamp — otherwise `delay: 48000` silently running as 29000
+      // (timeout/2) looks like the flag was ignored. The per-URL budget already
+      // reserves the full `delay`, so the lever to honor it is a larger timeout.
+      if (forceDebug && actualDelay < delayMs) {
+        const ceiling = siteConfig.delay_uncapped === true ? 'timeout/2; raise timeout to lift' : 'default 2s cap; set delay_uncapped:true to lift';
+        console.log(formatLogMessage('debug', `delay ${delayMs}ms clamped to ${actualDelay}ms (${ceiling}) for ${currentUrl}`));
+      }
 
       // Build delay promise (networkIdle + delay + optional flowProxy delay)
       const delayPromise = (async () => {
