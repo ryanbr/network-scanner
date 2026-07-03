@@ -141,6 +141,10 @@ Maximum concurrent site processing (1-50, overrides config/default).
 Cap concurrent \fBdig\fR subprocesses (default 6; 0 or negative disables the cap). Under a high \fB\--max-concurrent\fR the scanner can otherwise fire that many simultaneous lookups at the same resolvers, provoking rate-limit drops (and straining WSL2's UDP-through-NAT path). Only genuine cache-miss lookups contend for a slot; cache hits and deduplicated lookups bypass it. Also settable as \fBdig_max_concurrent\fR in \fB.nwssconfig\fR.
 
 .TP
+.BR \--dig-retry-failed " [\fINUMBER\fR]"
+When a \fBdig\fR lookup exhausts its normal UDP failover + TCP fallback without an answer, make \fINUMBER\fR additional TCP attempts, each after a ~3s backoff, before giving up (bare flag or \fBdig_retry_failed: true\fR defaults to 2; 0 disables; capped at 5). For bursty/flaky resolvers where a fresh attempt a few seconds later succeeds. The recovered result flows through the normal match path (so it is captured this run); extra latency applies only to already-failing lookups. Off by default. Also settable as \fBdig_retry_failed\fR in \fB.nwssconfig\fR.
+
+.TP
 .BR \--dns " \fIIP\fR[,\fIIP\fR...]"
 Nameserver(s) for the DNS pre-check, nettools' dig, and \(em when they map to a
 known public DoH provider \(em Chrome's page navigation via DNS-over-HTTPS on

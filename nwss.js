@@ -35,7 +35,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -242,6 +242,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         resource_cleanup_interval: ['--cleanup-interval'],
         dns: ['--dns'],
         dig_max_concurrent: ['--dig-max-concurrent'],
+        dig_retry_failed: ['--dig-retry-failed'],
         dns_cache: ['--dns-cache'],
         doh_disable: ['--doh-disable'],
         cache_requests: ['--cache-requests'],
@@ -461,6 +462,22 @@ if (digMaxConcurrentIndex !== -1 && args[digMaxConcurrentIndex + 1]) {
   if (Number.isFinite(dmc)) setDigConcurrency(dmc);
   else console.warn(`⚠ Invalid --dig-max-concurrent value: ${args[digMaxConcurrentIndex + 1]}. Using default: 6.`);
 }
+// Opt-in extra dig retries on total failure (bursty flaky resolvers). Accepts a
+// count of extra TCP attempts; the bare flag (or `dig_retry_failed: true` in
+// .nwssconfig, which injects the flag with no value) defaults to 2.
+let digExtraRetryCount = 0; // remembered so the nettools drain + per-URL budget can make room for the extra retry latency
+const digRetryFailedIndex = args.findIndex(arg => arg === '--dig-retry-failed');
+if (digRetryFailedIndex !== -1) {
+  const next = args[digRetryFailedIndex + 1];
+  const n = /^\d+$/.test(next || '') ? parseInt(next, 10) : 2;
+  digExtraRetryCount = Math.min(Math.max(n, 0), 5); // mirror setDigExtraRetries' cap
+  setDigExtraRetries(n);
+}
+// Each extra retry adds ~a 3s backoff + up to an 8s TCP attempt; budget 12s
+// apiece (with margin) so a late-firing dig's retries can finish before the
+// end-of-URL drain snapshots matchedDomains, and so the per-URL timeout leaves
+// room for that drain. Zero when the feature is off — no effect on normal runs.
+const DIG_RETRY_OVERHEAD_MS = digExtraRetryCount * 12000;
 // Pin Chrome's NAVIGATION resolver to the same providers via DoH. Chrome
 // ignores --dns for page loads and reads /etc/resolv.conf directly, so a broken
 // system resolver (e.g. one returning REFUSED) can ERR_NAME_NOT_RESOLVED a
@@ -858,6 +875,7 @@ General Options:
   --version                      Show script version
   --max-concurrent <number>      Maximum concurrent site processing (1-50, overrides config/default)
   --dig-max-concurrent <number>  Cap concurrent dig subprocesses (default 6, 0 = uncapped); paces DNS bursts under high --max-concurrent
+  --dig-retry-failed [number]    On total dig failure, do N extra TCP attempts with a longer backoff before giving up (default 2, 0 = off); for bursty/flaky resolvers
   --cleanup-interval <number>    Browser restart interval in URLs processed (1-1000, overrides config/default)
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
 
@@ -2415,7 +2433,11 @@ function setupFrameHandling(page, forceDebug) {
       if (pendingNetTools.length === 0) return;
       await Promise.race([
         Promise.all(pendingNetTools),
-        fastTimeout(TIMEOUTS.NETTOOLS_DRAIN_TIMEOUT)
+        // +DIG_RETRY_OVERHEAD_MS so an in-flight dig_retry_failed lookup can
+        // finish and be captured; the race still resolves immediately once all
+        // handlers complete, so the higher ceiling only costs time when a dig is
+        // genuinely still retrying.
+        fastTimeout(TIMEOUTS.NETTOOLS_DRAIN_TIMEOUT + DIG_RETRY_OVERHEAD_MS)
       ]);
     };
 
@@ -6211,6 +6233,7 @@ function setupFrameHandling(page, forceDebug) {
        (task.config.timeout || 35000)
          + ((task.config.delay || 0) + INTERACTION_OVERHEAD_MS) * (1 + reloadCount)
          + CLICK_ELEMENTS_OVERHEAD_MS
+         + DIG_RETRY_OVERHEAD_MS  // room for the extended nettools drain under --dig-retry-failed
          + 30000
      );
      // Feed the hang-check restart so it never escalates before this URL's own
