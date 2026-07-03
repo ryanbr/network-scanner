@@ -6847,6 +6847,15 @@ function setupFrameHandling(page, forceDebug) {
         console.log(messageColors.info('  Fresh whois:') + ` ${dnsStats.freshWhois.join(', ')}`);
       }
     }
+    // Surface flaky-resolver damage: dig lookups that failed every attempt
+    // (UDP failover + TCP fallback). These are dig-gated matches that may have
+    // been missed this run purely because the resolver dropped the query — not
+    // dead hosts. Warn-level so it's visible without --debug; a non-zero count
+    // is the signal to add a local caching resolver / raise --dig-max-concurrent
+    // pacing. Failures aren't cached, so a re-run retries them.
+    if (dnsStats.digFailures > 0) {
+      console.warn(formatLogMessage('warn', `${dnsStats.digFailures} dig lookup(s) failed after UDP+TCP (flaky resolver) — dig-gated matches may have been missed; not cached, a re-run retries them`));
+    }
   }
   
   // Run the same cleanup the SIGINT/SIGTERM emergency handler does, so normal
