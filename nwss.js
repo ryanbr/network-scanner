@@ -35,7 +35,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries, setDigRetryBackoff } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries, setDigRetryBackoff, loadDnsIgnore } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -435,6 +435,14 @@ if (dnsCacheMode) {
   // any exit path, mirroring nettools' dig/whois flush.
   loadDiskCache(DNS_NEGATIVE_CACHE_FILE, dnsNegativeCache, DNS_NEGATIVE_CACHE_TTL_MS, DNS_NEGATIVE_CACHE_MAX);
   process.on('exit', () => saveDiskCache(DNS_NEGATIVE_CACHE_FILE, dnsNegativeCache, DNS_NEGATIVE_CACHE_TTL_MS, DNS_NEGATIVE_CACHE_MAX));
+}
+// Load the user-maintained .dnsignore (domains to skip dig confirmation on).
+// Independent of --dns-cache; no-op when the file is absent.
+{
+  const dnsIgnoreCount = loadDnsIgnore();
+  if (dnsIgnoreCount > 0 && !silentMode) {
+    console.log(formatLogMessage('debug', `[dnsignore] Loaded ${dnsIgnoreCount} domain(s) to skip dig confirmation on`));
+  }
 }
 let dnsPrecheckSkips = 0;          // URLs skipped because hostname is NXDOMAIN-cached
 let dnsPositiveSkips = 0;          // URLs skipped because dig/whois cache proves resolution

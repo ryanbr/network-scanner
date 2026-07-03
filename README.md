@@ -288,6 +288,8 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `dig_subdomain`      | Boolean | `false` | Use subdomain for dig lookup instead of root domain |
 | `digRecordType`      | String | `"A"` | DNS record type for dig (A, CNAME, MX, etc.) |
 
+**`.dnsignore`** — an optional user-maintained file in the project root (one domain per line; `#` comments and blanks ignored). Any dig-gated candidate that equals, or is a subdomain of, a listed entry is **skipped before the dig runs** — no lookup, no `SERVFAIL`/failure line, not captured. Use it to silence known-dead cloak/ad domains that were captured while live, added to your list, and taken down since (they `SERVFAIL` every run because pages still reference them). Unlike `ignoreDomains` (which runs the dig, then drops the capture), this skips the dig itself. Gitignored; absent = no-op.
+
 ### Content Analysis Options
 
 | Field                | Values | Default | Description |
