@@ -35,7 +35,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -241,6 +241,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         cleanup_interval: ['--cleanup-interval'],
         resource_cleanup_interval: ['--cleanup-interval'],
         dns: ['--dns'],
+        dig_max_concurrent: ['--dig-max-concurrent'],
         dns_cache: ['--dns-cache'],
         doh_disable: ['--doh-disable'],
         cache_requests: ['--cache-requests'],
@@ -450,6 +451,16 @@ const dnsResolver = createRotatingResolver({ servers: dnsServersOverride, forceD
 // system /etc/resolv.conf, which on a flaky setup times out and silently drops
 // dig-gated domains). Only when --dns is explicitly set.
 if (dnsServersOverride.length > 0) setDigResolvers(dnsServersOverride);
+// Cap concurrent `dig` subprocesses so a high --max-concurrent doesn't burst
+// that many simultaneous lookups at the same resolvers (rate-limit drops, rough
+// on WSL2 UDP-through-NAT). Only genuine cache-miss lookups contend for a slot.
+// dig_max_concurrent (default 6); 0/negative = uncapped.
+const digMaxConcurrentIndex = args.findIndex(arg => arg === '--dig-max-concurrent');
+if (digMaxConcurrentIndex !== -1 && args[digMaxConcurrentIndex + 1]) {
+  const dmc = parseInt(args[digMaxConcurrentIndex + 1], 10);
+  if (Number.isFinite(dmc)) setDigConcurrency(dmc);
+  else console.warn(`⚠ Invalid --dig-max-concurrent value: ${args[digMaxConcurrentIndex + 1]}. Using default: 6.`);
+}
 // Pin Chrome's NAVIGATION resolver to the same providers via DoH. Chrome
 // ignores --dns for page loads and reads /etc/resolv.conf directly, so a broken
 // system resolver (e.g. one returning REFUSED) can ERR_NAME_NOT_RESOLVED a
@@ -846,6 +857,7 @@ General Options:
   --help, -h                     Show this help menu
   --version                      Show script version
   --max-concurrent <number>      Maximum concurrent site processing (1-50, overrides config/default)
+  --dig-max-concurrent <number>  Cap concurrent dig subprocesses (default 6, 0 = uncapped); paces DNS bursts under high --max-concurrent
   --cleanup-interval <number>    Browser restart interval in URLs processed (1-1000, overrides config/default)
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
 

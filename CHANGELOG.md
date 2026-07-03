@@ -4,6 +4,9 @@ All notable changes to the Network Scanner (nwss.js) project.
 
 ## [Unreleased]
 
+### Added
+- **`--dig-max-concurrent <n>` (`dig_max_concurrent` in `.nwssconfig`), default `6`** — caps how many `dig` subprocesses run at once. A high `--max-concurrent` (e.g. 15) otherwise lets the scanner fire that many simultaneous lookups at the same handful of public resolvers; the burst gets rate-limited / dropped (and is rough on WSL2's UDP-through-NAT path), which is a common cause of `dig` timeouts on Cloudflare-fronted ad domains. A counting semaphore (mirroring the DNS pre-check's) paces the burst — excess lookups queue and drain as slots free. Only genuine **cache-miss** lookups contend for a slot: in-memory/disk-cache hits and single-flight-deduped callers bypass it entirely, and the cap is bounded by `--max-concurrent`, not the total URL count, so it never backs up a large batch. Set `0` (or negative) to disable the cap.
+
 ### Fixed
 - **`dig` lookups fall back to TCP after UDP fails** — on flaky links (notably WSL2's UDP-through-NAT path, where datagrams to public resolvers vanish silently and a bare retry then succeeds) a single failed UDP burst made the whole lookup fail, and since transient failures aren't cached the domain silently dropped out of `dig`/`dig-or` matching for that run. Each lookup now appends a **TCP fallback** as its last attempt (`+tcp`, which retransmits through the NAT where UDP is dropped), preceded by a short 400ms backoff on the already-failing path to let a transient burst clear. UDP is still tried first (fast on a healthy link), so successful lookups are unaffected; the fallback only runs after UDP has failed. Applies to both the system-resolver path and the pinned `--dns` failover.
 

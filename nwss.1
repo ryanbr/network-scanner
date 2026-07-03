@@ -137,6 +137,10 @@ Remove Chrome/Puppeteer temporary files before exit.
 Maximum concurrent site processing (1-50, overrides config/default).
 
 .TP
+.BR \--dig-max-concurrent " \fINUMBER\fR"
+Cap concurrent \fBdig\fR subprocesses (default 6; 0 or negative disables the cap). Under a high \fB\--max-concurrent\fR the scanner can otherwise fire that many simultaneous lookups at the same resolvers, provoking rate-limit drops (and straining WSL2's UDP-through-NAT path). Only genuine cache-miss lookups contend for a slot; cache hits and deduplicated lookups bypass it. Also settable as \fBdig_max_concurrent\fR in \fB.nwssconfig\fR.
+
+.TP
 .BR \--dns " \fIIP\fR[,\fIIP\fR...]"
 Nameserver(s) for the DNS pre-check, nettools' dig, and \(em when they map to a
 known public DoH provider \(em Chrome's page navigation via DNS-over-HTTPS on
