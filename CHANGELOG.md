@@ -2,6 +2,11 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Fixed
+- **`dig` lookups fall back to TCP after UDP fails** — on flaky links (notably WSL2's UDP-through-NAT path, where datagrams to public resolvers vanish silently and a bare retry then succeeds) a single failed UDP burst made the whole lookup fail, and since transient failures aren't cached the domain silently dropped out of `dig`/`dig-or` matching for that run. Each lookup now appends a **TCP fallback** as its last attempt (`+tcp`, which retransmits through the NAT where UDP is dropped), preceded by a short 400ms backoff on the already-failing path to let a transient burst clear. UDP is still tried first (fast on a healthy link), so successful lookups are unaffected; the fallback only runs after UDP has failed. Applies to both the system-resolver path and the pinned `--dns` failover.
+
 ## [3.4.0] - 2026-06-13
 
 ### Added
