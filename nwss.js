@@ -6880,6 +6880,9 @@ function setupFrameHandling(page, forceDebug) {
     // pacing. Failures aren't cached, so a re-run retries them.
     if (dnsStats.digFailures > 0) {
       console.warn(formatLogMessage('warn', `${dnsStats.digFailures} dig lookup(s) failed after UDP+TCP (flaky resolver) — dig-gated matches may have been missed; not cached, a re-run retries them`));
+      if (dnsStats.digFailedSamples && dnsStats.digFailedSamples.length > 0) {
+        console.warn(messageColors.warn('  Failed dig:') + ` ${dnsStats.digFailedSamples.join(', ')}`);
+      }
     }
   }
   
