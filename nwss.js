@@ -35,7 +35,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries, setDigRetryBackoff } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -243,6 +243,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         dns: ['--dns'],
         dig_max_concurrent: ['--dig-max-concurrent'],
         dig_retry_failed: ['--dig-retry-failed'],
+        dig_retry_backoff: ['--dig-retry-backoff'],
         dns_cache: ['--dns-cache'],
         doh_disable: ['--doh-disable'],
         cache_requests: ['--cache-requests'],
@@ -473,11 +474,20 @@ if (digRetryFailedIndex !== -1) {
   digExtraRetryCount = Math.min(Math.max(n, 0), 5); // mirror setDigExtraRetries' cap
   setDigExtraRetries(n);
 }
-// Each extra retry adds ~a 3s backoff + up to an 8s TCP attempt; budget 12s
-// apiece (with margin) so a late-firing dig's retries can finish before the
-// end-of-URL drain snapshots matchedDomains, and so the per-URL timeout leaves
-// room for that drain. Zero when the feature is off — no effect on normal runs.
-const DIG_RETRY_OVERHEAD_MS = digExtraRetryCount * 12000;
+// Backoff between extra retries (dig_retry_backoff) — widen to outlast longer
+// resolver bursts. Default 3s; capped 60s. Only meaningful with dig_retry_failed.
+let digRetryBackoffMs = 3000;
+const digRetryBackoffIndex = args.findIndex(arg => arg === '--dig-retry-backoff');
+if (digRetryBackoffIndex !== -1 && args[digRetryBackoffIndex + 1]) {
+  const b = parseInt(args[digRetryBackoffIndex + 1], 10);
+  if (Number.isFinite(b) && b >= 0) { digRetryBackoffMs = Math.min(b, 60000); setDigRetryBackoff(b); }
+  else console.warn(`⚠ Invalid --dig-retry-backoff value: ${args[digRetryBackoffIndex + 1]}. Using default: 3000ms.`);
+}
+// Each extra retry adds ~its backoff + up to an 8s TCP attempt (+1s margin), so
+// budget scales with the configured backoff — a late-firing dig's retries must
+// finish before the end-of-URL drain snapshots matchedDomains, and the per-URL
+// timeout must leave room for that drain. Zero when the feature is off.
+const DIG_RETRY_OVERHEAD_MS = digExtraRetryCount * (digRetryBackoffMs + 9000);
 // Pin Chrome's NAVIGATION resolver to the same providers via DoH. Chrome
 // ignores --dns for page loads and reads /etc/resolv.conf directly, so a broken
 // system resolver (e.g. one returning REFUSED) can ERR_NAME_NOT_RESOLVED a
@@ -876,6 +886,7 @@ General Options:
   --max-concurrent <number>      Maximum concurrent site processing (1-50, overrides config/default)
   --dig-max-concurrent <number>  Cap concurrent dig subprocesses (default 6, 0 = uncapped); paces DNS bursts under high --max-concurrent
   --dig-retry-failed [number]    On total dig failure, do N extra TCP attempts with a longer backoff before giving up (default 2, 0 = off); for bursty/flaky resolvers
+  --dig-retry-backoff <ms>       Backoff before each --dig-retry-failed attempt (default 3000, capped 60000); raise to outlast longer resolver bursts
   --cleanup-interval <number>    Browser restart interval in URLs processed (1-1000, overrides config/default)
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
 

@@ -142,7 +142,11 @@ Cap concurrent \fBdig\fR subprocesses (default 6; 0 or negative disables the cap
 
 .TP
 .BR \--dig-retry-failed " [\fINUMBER\fR]"
-When a \fBdig\fR lookup exhausts its normal UDP failover + TCP fallback without an answer, make \fINUMBER\fR additional TCP attempts, each after a ~3s backoff, before giving up (bare flag or \fBdig_retry_failed: true\fR defaults to 2; 0 disables; capped at 5). For bursty/flaky resolvers where a fresh attempt a few seconds later succeeds. The recovered result flows through the normal match path (so it is captured this run); extra latency applies only to already-failing lookups. Off by default. Also settable as \fBdig_retry_failed\fR in \fB.nwssconfig\fR.
+When a \fBdig\fR lookup exhausts its normal UDP failover + TCP fallback without an answer, make \fINUMBER\fR additional TCP attempts, each after a backoff (see \fB\--dig-retry-backoff\fR), before giving up (bare flag or \fBdig_retry_failed: true\fR defaults to 2; 0 disables; capped at 5). For bursty/flaky resolvers where a fresh attempt seconds later succeeds. The recovered result flows through the normal match path (so it is captured this run); extra latency applies only to already-failing lookups. Off by default. Also settable as \fBdig_retry_failed\fR in \fB.nwssconfig\fR.
+
+.TP
+.BR \--dig-retry-backoff " \fIMS\fR"
+Milliseconds to wait before each \fB\--dig-retry-failed\fR attempt (default 3000; capped at 60000). Raise it to outlast longer resolver bursts \(em a short pause only clears a brief drop, a longer one waits out a resolver that stays flaky for tens of seconds. The end-of-URL nettools drain and per-URL timeout budgets scale with this value so a late-completing retry is still captured. Only meaningful alongside \fB\--dig-retry-failed\fR. Also settable as \fBdig_retry_backoff\fR in \fB.nwssconfig\fR.
 
 .TP
 .BR \--dns " \fIIP\fR[,\fIIP\fR...]"
