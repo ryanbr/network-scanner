@@ -13,7 +13,7 @@ const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonE
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
-const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND } = require('./lib/fingerprint');
+const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
@@ -3002,14 +3002,16 @@ function setupFrameHandling(page, forceDebug) {
           // lib/fingerprint's CHROME_BUILD, the same source the JS
           // getHighEntropyValues spoof uses, so HTTP and JS can't disagree.
           const browserUa = USER_AGENT_COLLECTIONS.get(userAgentKey) || '';
-          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '148';
+          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '150';
           const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
 
           const chHeaders = {
-            // Brand list order + grease string match real Chrome of this major
-            // exactly (deterministic GREASE): Chromium, Google Chrome, <grease>.
-            // Same order/grease the JS brands spoof uses, so HTTP and JS agree.
-            'Sec-CH-UA': `"Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}", "${CHROME_GREASE_BRAND}";v="99"`,
+            // Brand list order + grease match real Chrome of this major exactly
+            // (deterministic GREASE). For major 150 the order is <grease>,
+            // Chromium, Google Chrome — same order/grease/version the JS brands
+            // spoof uses (lib/fingerprint), so HTTP and JS agree. Recompute the
+            // order when bumping the major (see CHROME_GREASE_* module header).
+            'Sec-CH-UA': `"${CHROME_GREASE_BRAND}";v="${CHROME_GREASE_VERSION}", "Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}"`,
             'Sec-CH-UA-Platform': `"${platform}"`,
             'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
             'Sec-CH-UA-Mobile': '?0',
@@ -3018,7 +3020,7 @@ function setupFrameHandling(page, forceDebug) {
             'Sec-CH-UA-WoW64': '?0',
             'Sec-CH-UA-Model': '""',
             'Sec-CH-UA-Full-Version': `"${fullVer}"`,
-            'Sec-CH-UA-Full-Version-List': `"Chromium";v="${fullVer}", "Google Chrome";v="${fullVer}", "${CHROME_GREASE_BRAND}";v="99.0.0.0"`,
+            'Sec-CH-UA-Full-Version-List': `"${CHROME_GREASE_BRAND}";v="${CHROME_GREASE_VERSION}.0.0.0", "Chromium";v="${fullVer}", "Google Chrome";v="${fullVer}"`,
             // Real Chrome (128+) sends this for desktop; pairs with the
             // formFactors value in fingerprint.js's getHighEntropyValues spoof.
             'Sec-CH-UA-Form-Factors': '"Desktop"'
@@ -4569,7 +4571,7 @@ function setupFrameHandling(page, forceDebug) {
                 let resolvedUrl = '';
                 try {
                   const curlUa = USER_AGENT_COLLECTIONS.get((siteConfig.userAgent || 'chrome').toLowerCase())
-                    || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36';
+                    || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
                   const cr = await runProcess('curl', ['-sL', '--max-redirs', '50', '--max-time', '20', '-o', '/dev/null', '-A', curlUa, '-w', '%{url_effective}', currentUrl], { timeout: 22000, maxStdout: 4096 });
                   const u = (cr.stdout || '').trim();
                   if (cr.code === 0 && /^https?:\/\//.test(u) && u !== currentUrl) resolvedUrl = u;
