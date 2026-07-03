@@ -6124,10 +6124,10 @@ function setupFrameHandling(page, forceDebug) {
            return { url: task.url, rules: [], success: false, error: `DNS: ${cached.error}`, skipped: true };
          }
          // Positive-resolution shortcut: dig or whois has already proven this
-         // hostname live within their 20h cache TTL (populated either by an
+         // hostname live within their 36h cache TTL (populated either by an
          // earlier URL this run or by --dns-cache disk-load from a prior run).
          // Order matters -- negative cache (5min TTL, fresher data) wins
-         // first, then this 20h-TTL positive index, then the actual resolve.
+         // first, then this 36h-TTL positive index, then the actual resolve.
          if (domainKnownToResolve(taskDomain)) {
            dnsPositiveSkips++;
            dnsPositiveSkippedHosts.add(taskDomain);
