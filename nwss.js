@@ -6890,9 +6890,13 @@ function setupFrameHandling(page, forceDebug) {
     // is the signal to add a local caching resolver / raise --dig-max-concurrent
     // pacing. Failures aren't cached, so a re-run retries them.
     if (dnsStats.digFailures > 0) {
-      console.warn(formatLogMessage('warn', `${dnsStats.digFailures} dig lookup(s) failed after UDP+TCP (flaky resolver) — dig-gated matches may have been missed; not cached, a re-run retries them`));
+      console.warn(formatLogMessage('warn', `${dnsStats.digFailures} dig lookup(s) exhausted UDP+TCP without an answer — not cached, a re-run retries them`));
       if (dnsStats.digFailedSamples && dnsStats.digFailedSamples.length > 0) {
         console.warn(messageColors.warn('  Failed dig:') + ` ${dnsStats.digFailedSamples.join(', ')}`);
+        // Legend so the reason codes are actionable: SERVFAIL/REFUSED point at
+        // the domain (dead/broken NS — no capture lost, retries won't help),
+        // timeout points at the link (worth --dig-retry-failed / a caching resolver).
+        console.warn(messageColors.warn('  ') + `SERVFAIL/REFUSED = likely dead domain (no capture lost); timeout = flaky link (worth --dig-retry-failed)`);
       }
     }
   }
