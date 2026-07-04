@@ -35,7 +35,7 @@ const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore
 // Graceful exit
 const { handleBrowserExit, cleanupChromeTempFiles, cleanupUserDataDir } = require('./lib/browserexit');
 // Whois & Dig
-const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries, setDigRetryBackoff, loadDnsIgnore } = require('./lib/nettools');
+const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvailability, validateDigAvailability, enableDiskCache, getDnsCacheStats, domainKnownToResolve, loadDiskCache, saveDiskCache, setDigResolvers, setDigConcurrency, setDigExtraRetries, setDigRetryBackoff, loadDnsIgnore, appendDnsIgnore } = require('./lib/nettools');
 // CDP functionality
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
@@ -244,6 +244,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         dig_max_concurrent: ['--dig-max-concurrent'],
         dig_retry_failed: ['--dig-retry-failed'],
         dig_retry_backoff: ['--dig-retry-backoff'],
+        dnsignore_auto: ['--dnsignore-auto'],
         dns_cache: ['--dns-cache'],
         doh_disable: ['--doh-disable'],
         cache_requests: ['--cache-requests'],
@@ -444,6 +445,9 @@ if (dnsCacheMode) {
     console.log(formatLogMessage('debug', `[dnsignore] Loaded ${dnsIgnoreCount} domain(s) to skip dig confirmation on`));
   }
 }
+// --dnsignore-auto: after the run, auto-append newly-detected dead domains
+// (SERVFAIL/REFUSED only — never timeout) to .dnsignore, deduped.
+const dnsIgnoreAuto = args.includes('--dnsignore-auto');
 let dnsPrecheckSkips = 0;          // URLs skipped because hostname is NXDOMAIN-cached
 let dnsPositiveSkips = 0;          // URLs skipped because dig/whois cache proves resolution
 const dnsPositiveSkippedHosts = new Set(); // unique hostnames that triggered the positive skip path
@@ -895,6 +899,7 @@ General Options:
   --dig-max-concurrent <number>  Cap concurrent dig subprocesses (default 6, 0 = uncapped); paces DNS bursts under high --max-concurrent
   --dig-retry-failed [number]    On total dig failure, do N extra TCP attempts with a longer backoff before giving up (default 2, 0 = off); for bursty/flaky resolvers
   --dig-retry-backoff <ms>       Backoff before each --dig-retry-failed attempt (default 3000, capped 60000); raise to outlast longer resolver bursts
+  --dnsignore-auto               After the run, auto-append newly-detected dead domains (SERVFAIL/REFUSED only, never timeout) to .dnsignore, deduped
   --cleanup-interval <number>    Browser restart interval in URLs processed (1-1000, overrides config/default)
   --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
 
@@ -6905,6 +6910,16 @@ function setupFrameHandling(page, forceDebug) {
         // the domain (dead/broken NS — no capture lost, retries won't help),
         // timeout points at the link (worth --dig-retry-failed / a caching resolver).
         console.warn(messageColors.warn('  ') + `SERVFAIL/REFUSED = likely dead domain (no capture lost); timeout = flaky link (worth --dig-retry-failed)`);
+      }
+    }
+    // --dnsignore-auto: append newly-detected dead (SERVFAIL/REFUSED) domains to
+    // .dnsignore so they're skipped next run. Deduped; timeouts never added.
+    if (dnsIgnoreAuto) {
+      const r = appendDnsIgnore();
+      if (r.added > 0 && !silentMode) {
+        console.log(formatLogMessage('info', `[dnsignore] Auto-added ${r.added} dead domain(s) to .dnsignore: ${r.domains.join(', ')}`));
+      } else if (r.error && !silentMode) {
+        console.warn(formatLogMessage('warn', `[dnsignore] Auto-add failed: ${r.error}`));
       }
     }
   }
