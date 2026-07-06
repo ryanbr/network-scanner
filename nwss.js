@@ -293,8 +293,12 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
           : settings[key.replace(/-/g, '_')] !== undefined ? settings[key.replace(/-/g, '_')]
           : undefined;
         if (value === undefined) continue;
-        // Skip if any variant of the flag is already in CLI args
-        if (flags.some(f => originalArgs.includes(f))) continue;
+        // Skip if any variant of the flag is already in CLI args. Exact-token
+        // match: `originalArgs.includes('--dns')` also matched inside
+        // `--dns-cache`, so a config's `dns` was silently dropped when
+        // `--dns-cache` was on the CLI. Split the snapshot into tokens instead.
+        const originalTokens = originalArgs.split(/\s+/);
+        if (flags.some(f => originalTokens.includes(f))) continue;
 
         if (typeof value === 'boolean') {
           if (value) args.push(flags[flags.length - 1]);
@@ -1208,7 +1212,10 @@ function getCompiledRegex(pattern) {
   let compiled = _compiledRegexCache.get(pattern);
   if (!compiled) {
     compiled = new RegExp(pattern.replace(/^\/(.*)\/$/, '$1'));
-    if (_compiledRegexCache.size > 2000) _compiledRegexCache.clear();
+    // Evict the single oldest entry (Map preserves insertion order → FIFO)
+    // instead of .clear() — a full wipe at 2000 forces every live pattern to
+    // recompile at once (cache stampede).
+    if (_compiledRegexCache.size > 2000) _compiledRegexCache.delete(_compiledRegexCache.keys().next().value);
     _compiledRegexCache.set(pattern, compiled);
   }
   return compiled;
@@ -6533,15 +6540,14 @@ function setupFrameHandling(page, forceDebug) {
   // === POST-SCAN PROCESSING ===
   // Clean up first-party domains and validate results
   if (!dryRunMode) {
-    // Always run post-processing for both firstParty cleanup and ignoreDomains safety net
+    // Run post-processing ALWAYS (not only when a site has firstParty:false) —
+    // it also applies the ignoreDomains safety net + dedup, which a config with
+    // no firstParty:false sites still needs. Guarding it skipped that sweep.
     const sitesWithFirstPartyDisabled = sites.filter(site => site.firstParty === false);
-    if (sitesWithFirstPartyDisabled.length > 0) {
-      if (forceDebug) {
-        console.log(formatLogMessage('debug', `Running post-scan processing for ${sitesWithFirstPartyDisabled.length} sites with firstParty: false`));
-      }
-    // Always run post-processing for ignoreDomains safety net
-    results = processResults(results, sites, { forceDebug, silentMode, ignoreDomains });
+    if (forceDebug && sitesWithFirstPartyDisabled.length > 0) {
+      console.log(formatLogMessage('debug', `Running post-scan processing for ${sitesWithFirstPartyDisabled.length} sites with firstParty: false`));
     }
+    results = processResults(results, sites, { forceDebug, silentMode, ignoreDomains });
   }
 
   // Handle dry run output file writing
@@ -6748,7 +6754,6 @@ function setupFrameHandling(page, forceDebug) {
         if (!silentMode) {
           // Report compression results and file sizes
           results.successful.forEach(({ original, compressed }) => {
-            const originalSize = fs.statSync(compressed).size; // compressed file size
             console.log(messageColors.success('✅ Compressed:') + ` ${path.basename(original)} → ${path.basename(compressed)}`);
           });
           // Report any compression failures
