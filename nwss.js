@@ -232,7 +232,12 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
 
     if (configFilename && nwssConfig.configs && nwssConfig.configs[configFilename]) {
       const settings = nwssConfig.configs[configFilename];
-      const originalArgs = args.join(' ');
+      // Snapshot the CLI args BEFORE the loop below starts pushing onto
+      // `args` — the checks must test what the user actually typed. Kept as
+      // an array: the old join(' ') + split(/\s+/) round-trip fragmented any
+      // arg containing whitespace (e.g. --eval-on-doc "a --debug b") into
+      // tokens that could spuriously match a flag.
+      const originalTokens = args.slice();
 
       // Map settings keys to CLI flags — only inject if not already in args
       const settingsMap = {
@@ -294,11 +299,12 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
           : undefined;
         if (value === undefined) continue;
         // Skip if any variant of the flag is already in CLI args. Exact-token
-        // match: `originalArgs.includes('--dns')` also matched inside
-        // `--dns-cache`, so a config's `dns` was silently dropped when
-        // `--dns-cache` was on the CLI. Split the snapshot into tokens instead.
-        const originalTokens = originalArgs.split(/\s+/);
-        if (flags.some(f => originalTokens.includes(f))) continue;
+        // match: `args.join(' ').includes('--dns')` also matched inside
+        // `--dns-cache`, so a config's `dns` was silently dropped whenever
+        // `--dns-cache` was on the CLI. `--flag=value` counts as present too
+        // (--localhost and --block-ads accept that form) so a config value
+        // isn't appended as a duplicate that the arg parser then ignores.
+        if (flags.some(f => originalTokens.some(t => t === f || t.startsWith(f + '=')))) continue;
 
         if (typeof value === 'boolean') {
           if (value) args.push(flags[flags.length - 1]);
