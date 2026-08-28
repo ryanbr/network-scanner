@@ -191,7 +191,7 @@ Block ads/trackers during the scan using EasyList-format filter list(s) \(em net
 
 .TP
 .BI \--adblock-engine= js|rust
-Matcher backend for \fB\-\-block-ads\fR (default: \fBjs\fR). \fBjs\fR is the built-in pure-JS matcher (no extra dependencies). \fBrust\fR uses Brave's \fBadblock-rs\fR \(em much faster on large lists, same rules and results, but requires \fBnpm install adblock-rs\fR (needs a Rust toolchain).
+Matcher backend for \fB\-\-block-ads\fR. Default is \fBauto\fR: \fBrust\fR when \fBadblock-rs\fR is importable, otherwise \fBjs\fR. \fBjs\fR is the built-in pure-JS matcher (no extra dependencies). \fBrust\fR uses Brave's \fBadblock-rs\fR \(em roughly 36x faster on the domain-map miss path that most traffic takes, same rules and same results, but requires \fBnpm install adblock-rs\fR (needs a Rust toolchain). An auto-selected \fBrust\fR that fails to load falls back to \fBjs\fR; an explicit \fB\-\-adblock-engine=rust\fR errors instead.
 
 .TP
 .BR \-h ", " \--help

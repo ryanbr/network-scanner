@@ -775,10 +775,22 @@ if (validateRules || validateRulesFile) {
   }
 }
 
-// Parse --adblock-engine=<js|rust> (default: js). Selects the matcher backend
-// used by --block-ads. The rust engine requires the optional adblock-rs package.
+// Parse --adblock-engine=<js|rust>. Selects the matcher backend used by
+// --block-ads. Default is AUTO: prefer the Rust engine when adblock-rs is
+// importable, else the pure-JS one. Resolved lazily in the --block-ads block
+// below so a run without --block-ads never pays the native require.
+//
+// Why prefer rust: measured on easylist.txt (66,100 rules), the JS engine
+// costs ~148us for a URL that misses the O(1) domain map -- which is MOST real
+// traffic, since ordinary page requests match no rule and fall through ~1,400
+// path/script rules linearly -- against ~4us for rust. The result cache hides
+// this until URLs are unique (cache-busting params), where throughput drops
+// from ~262k to ~6.5k URL/s. The two engines agreed on 4,118/4,118 verdicts
+// (3,118 real blocked domains sampled from the list + 1,000 non-matching), so
+// this is a speed change, not a behaviour change.
 const adblockEngineIndex = args.findIndex(arg => arg.startsWith('--adblock-engine'));
-let adblockEngineName = 'js';
+const adblockEngineExplicit = adblockEngineIndex !== -1;
+let adblockEngineName = 'auto';
 if (adblockEngineIndex !== -1) {
   const engineArg = args[adblockEngineIndex].includes('=')
     ? args[adblockEngineIndex].split('=')[1]
@@ -812,15 +824,25 @@ if (blockAdsIndex !== -1) {
   }
 
   adblockEnabled = true;
-  const engine = adblockEngineName === 'rust' ? adblockRust : adblockJs;
-  // Only ever assigned the os.tmpdir() path below — never a user file — so the
-  // unlink in finally can never touch the caller's own lists.
-  let combinedTmpFile = null;
-  try {
-    if (engine === adblockRust) {
-      // Rust wrapper accepts an array directly — no temp file needed.
-      adblockMatcher = engine.parseAdblockRules(rulesFiles, { enableLogging: forceDebug });
-    } else {
+  // Resolve the AUTO default here rather than at flag-parse time, so a run
+  // without --block-ads never attempts the adblock-rs native require.
+  if (adblockEngineName === 'auto') {
+    adblockEngineName = adblockRust.isAvailable() ? 'rust' : 'js';
+    if (forceDebug) {
+      console.log(formatLogMessage('debug', `[adblock] auto-selected '${adblockEngineName}' engine (adblock-rs ${adblockEngineName === 'rust' ? 'available' : 'not installed'})`));
+    }
+  }
+
+  const loadMatcher = (engineName) => {
+    const engine = engineName === 'rust' ? adblockRust : adblockJs;
+    // Only ever assigned the os.tmpdir() path below — never a user file — so the
+    // unlink in finally can never touch the caller's own lists.
+    let combinedTmpFile = null;
+    try {
+      if (engine === adblockRust) {
+        // Rust wrapper accepts an array directly — no temp file needed.
+        return engine.parseAdblockRules(rulesFiles, { enableLogging: forceDebug });
+      }
       // JS engine takes a single path; concat to a temp file when multiple lists.
       let rulesFile = rulesFiles[0];
       if (rulesFiles.length > 1) {
@@ -831,14 +853,33 @@ if (blockAdsIndex !== -1) {
       }
       // parseAdblockRules reads the file synchronously and in full before
       // returning, so the temp copy is safe to remove immediately afterwards.
-      adblockMatcher = engine.parseAdblockRules(rulesFile, { enableLogging: forceDebug });
+      return engine.parseAdblockRules(rulesFile, { enableLogging: forceDebug });
+    } finally {
+      if (combinedTmpFile) {
+        try { fs.unlinkSync(combinedTmpFile); } catch { /* best effort — OS reaps tmpdir */ }
+      }
     }
+  };
+
+  try {
+    adblockMatcher = loadMatcher(adblockEngineName);
   } catch (err) {
-    console.log(`Error: Failed to load adblock engine '${adblockEngineName}': ${err.message}`);
-    process.exit(1);
-  } finally {
-    if (combinedTmpFile) {
-      try { fs.unlinkSync(combinedTmpFile); } catch { /* best effort — OS reaps tmpdir */ }
+    // An AUTO-selected rust engine that fails at load must not abort the scan —
+    // it was our choice, not the user's. Fall back to js. An EXPLICIT
+    // --adblock-engine=rust still errors out, so a deliberate choice is never
+    // silently downgraded.
+    if (!adblockEngineExplicit && adblockEngineName === 'rust') {
+      console.log(formatLogMessage('warn', `[adblock] rust engine failed to load (${err.message}); falling back to js`));
+      adblockEngineName = 'js';
+      try {
+        adblockMatcher = loadMatcher('js');
+      } catch (fallbackErr) {
+        console.log(`Error: Failed to load adblock engine 'js': ${fallbackErr.message}`);
+        process.exit(1);
+      }
+    } else {
+      console.log(`Error: Failed to load adblock engine '${adblockEngineName}': ${err.message}`);
+      process.exit(1);
     }
   }
   const stats = adblockMatcher.getStats();

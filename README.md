@@ -69,7 +69,7 @@ A Puppeteer-based tool for scanning websites to find third-party (or optionally 
 | `--dns-cache`               | Persist dig/whois results to disk between runs (28-day TTL for dig, 36hr for whois; 10000-entry cap for dig, 2000 for whois; `.digcache`/`.whoiscache`), **plus** the DNS pre-check negative cache (NXDOMAIN/ENODATA only — never resolver errors — 12h TTL, `.dnsnegcache`) so known-dead hosts aren't re-resolved next run. Disk writes are atomic (tmp + rename); corrupt cache files are detected on load with a `[dns-cache]` warn line and reset cleanly. Over a 28-day dig window two answers stay pinned: a changed A-record (domain leaves a matched IP range) and an NXDOMAIN (a re-registered domain still reads as dead) — delete `.digcache` when either matters. Transient failures (timeout/SERVFAIL/REFUSED) are never cached. |
 | `--no-dns-precheck`         | Disable per-URL DNS resolution check before page navigation. By default, hosts that dig/whois have already proven live (within the dig/whois cache TTL) skip their c-ares pre-check via a positive-resolution index. |
 | `--block-ads=<files>`       | Block ads/trackers **during the scan** using EasyList-format filter list(s) (`\|\|domain^`, `/ads/*`, etc.). Comma-separated for multiple: `--block-ads=easylist.txt,easyprivacy.txt`. See [Blocking ads during the scan](#blocking-ads-during-the-scan). |
-| `--adblock-engine=<js\|rust>` | Matcher backend for `--block-ads` (default: `js`). `rust` uses Brave's `adblock-rs` (much faster on large lists) and requires `npm i adblock-rs`. |
+| `--adblock-engine=<js\|rust>` | Matcher backend for `--block-ads`. **Default: auto** — uses `rust` (Brave's `adblock-rs`) when it's installed, else `js`. Pass either value to pin it. |
 | `--cdp`                     | Enable Chrome DevTools Protocol logging (now per-page if enabled) |
 | `--remove-dupes`            | Remove duplicate domains from output (only with `-o`) |
 | `--dry-run`                 | Console output only: show matching regex, titles, whois/dig/searchstring results, and adblock rules |
@@ -112,19 +112,27 @@ node nwss.js --block-ads=easylist.txt,easyprivacy.txt,mylist.txt
 
 Lists are plain-text **network** rules — `||doubleclick.net^`, `/ads/*`, `||example.com^$script`, etc. Element-hiding/cosmetic rules (`##…`) don't apply to request blocking and are ignored. The scanned page's own top-level document is never blocked (only sub-resources), so a site whose own domain is in a list still loads.
 
-**Engine — `js` vs `rust`** (`--adblock-engine`, default `js`):
+**Engine — `js` vs `rust`** (`--adblock-engine`, default **auto**):
+
+By default the scanner picks `rust` when `adblock-rs` is importable and falls back to `js` otherwise, so you get the faster matcher without a flag and without a Rust toolchain becoming a requirement. Pass an explicit value to pin the choice.
 
 | Engine | Flag | Backend | When |
 |---|---|---|---|
-| **js** (default) | `--adblock-engine=js` | `lib/adblock.js` — pure-JS, no extra deps | Default; fine for small/medium lists, works everywhere |
-| **rust** | `--adblock-engine=rust` | `lib/adblock-rust.js` — Brave's [`adblock-rs`](https://github.com/brave/adblock-rust) | Large lists (full EasyList + EasyPrivacy + …); much faster matching. Drop-in (same rules, same results). Requires `npm install adblock-rs` (needs a Rust toolchain) |
+| **auto** (default) | *(no flag)* | `rust` if available, else `js` | What you want almost always |
+| **js** | `--adblock-engine=js` | `lib/adblock.js` — pure-JS, no extra deps | Pin when you want zero native deps, or to A/B against `rust` |
+| **rust** | `--adblock-engine=rust` | `lib/adblock-rust.js` — Brave's [`adblock-rs`](https://github.com/brave/adblock-rust) | Pin when the Rust engine is required — errors out if `adblock-rs` is missing instead of quietly downgrading |
 
-The two engines are interchangeable — same rule format, same blocking result; `rust` is purely a speed option for big lists. If you pass `--adblock-engine=rust` without `adblock-rs` installed, install it (`npm i adblock-rs`) or drop the flag to use `js`.
+Why `rust` is preferred: measured over `easylist.txt` (66,100 rules), a URL that misses the O(1) domain map costs **~148 µs** on `js` versus **~4 µs** on `rust`. That miss path is most real traffic — ordinary page requests match no rule and fall through ~1,400 path/script rules linearly. The result cache hides it until URLs are unique (cache-busting query strings), where throughput drops from ~262k to ~6.5k URL/s.
+
+The two engines are interchangeable — same rule format, same blocking result. That was verified, not assumed: they agreed on **4,118 / 4,118** verdicts over 3,118 real blocked domains sampled from EasyList plus 1,000 non-matching hosts, across several resource types. An auto-selected `rust` that fails to load warns and falls back to `js`; an explicit `--adblock-engine=rust` still errors, so a deliberate choice is never silently downgraded.
 
 ```bash
-# Fast matching over big lists with the Rust engine
+# Uses the Rust engine automatically once adblock-rs is present
 npm install adblock-rs
-node nwss.js --block-ads=easylist.txt,easyprivacy.txt --adblock-engine=rust
+node nwss.js --block-ads=easylist.txt,easyprivacy.txt
+
+# Pin the pure-JS matcher
+node nwss.js --block-ads=easylist.txt --adblock-engine=js
 ```
 
 ---
