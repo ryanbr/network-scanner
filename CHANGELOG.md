@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [3.5.0] - 2026-08-28
 
 ### Added
 - **`.dnsignore` — skip dig confirmation on known-dead domains.** A user-maintained file in the project root (one domain per line; `#` comments and blanks ignored), loaded at startup. A dig-gated candidate that **equals, or is a subdomain of**, any listed entry (so `xptidujgjktk.com` also covers `www.xptidujgjktk.com`) is skipped **before any lookup** — no `dig`, no `SERVFAIL`/failure count, not captured. Purpose: kill the repeat noise from cloak/ad domains that were captured while live, added to your list, and have since been taken down (they `SERVFAIL` every run because the pages still reference them). Distinct from `ignoreDomains`, which runs the dig and only drops the *capture* — this skips the dig itself. Gitignored (per-clone user data); absent file is a no-op.
