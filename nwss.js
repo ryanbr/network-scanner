@@ -56,6 +56,7 @@ const CSS_BLOCKED_TAG = messageColors.processing('[css_blocked]');
 const EVAL_ON_DOC_TAG = messageColors.processing('[evalOnDoc]');
 const REALTIME_CLEANUP_TAG = messageColors.processing('[realtime_cleanup]');
 const VPN_TAG = messageColors.processing('[vpn]');
+const ADBLOCK_TAG = messageColors.processing('[adblock]');
 const POPUP_TAG = messageColors.processing('[popup]');
 // Precomputed colored '[SmartCache]' subsystem prefix — paired with the
 // same constant in lib/smart-cache.js so debug lines from both files
@@ -829,7 +830,11 @@ if (blockAdsIndex !== -1) {
   if (adblockEngineName === 'auto') {
     adblockEngineName = adblockRust.isAvailable() ? 'rust' : 'js';
     if (forceDebug) {
-      console.log(formatLogMessage('debug', `[adblock] auto-selected '${adblockEngineName}' engine (adblock-rs ${adblockEngineName === 'rust' ? 'available' : 'not installed'})`));
+      // "unavailable" rather than "not installed": isAvailable() is also
+      // false for a module that IS present but fails to load (ABI mismatch
+      // after a Node upgrade, broken native build), and claiming it is missing
+      // would send someone off to reinstall something they already have.
+      console.log(formatLogMessage('debug', `${ADBLOCK_TAG} auto-selected '${adblockEngineName}' engine (adblock-rs ${adblockEngineName === 'rust' ? 'available' : 'unavailable'})`));
     }
   }
 
@@ -869,7 +874,7 @@ if (blockAdsIndex !== -1) {
     // --adblock-engine=rust still errors out, so a deliberate choice is never
     // silently downgraded.
     if (!adblockEngineExplicit && adblockEngineName === 'rust') {
-      console.log(formatLogMessage('warn', `[adblock] rust engine failed to load (${err.message}); falling back to js`));
+      console.log(formatLogMessage('warn', `${ADBLOCK_TAG} rust engine failed to load (${err.message}); falling back to js`));
       adblockEngineName = 'js';
       try {
         adblockMatcher = loadMatcher('js');
@@ -913,8 +918,9 @@ Request Blocking:
   --block-ads=<file>             Block ads/trackers using EasyList format rules (||domain.com^, /ads/*, etc)
                                  Works at request-level for maximum performance
                                  Supports comma-separated lists: --block-ads=easylist.txt,easyprivacy.txt
-  --adblock-engine=<js|rust>     Matcher backend for --block-ads (default: js)
-                                 'rust' uses Brave's adblock-rs (faster on large lists; needs: npm i adblock-rs)
+  --adblock-engine=<js|rust>     Matcher backend for --block-ads (default: auto)
+                                 auto = 'rust' when adblock-rs is installed, else 'js'
+                                 'rust' uses Brave's adblock-rs (much faster on large lists; needs: npm i adblock-rs)
 
 Per-config settings file (.nwssconfig):
   Place a .nwssconfig file in the project root to define per-config settings.
