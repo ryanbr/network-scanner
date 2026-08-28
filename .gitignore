@@ -8,6 +8,36 @@ node_modules/
 .dnsignore
 .nwssconfig
 
-# Local scan-output artifacts (one-off test runs)
+# Local scan configs. Anchored + hyphenated so the tracked `config.json`
+# (the documented default config) is never matched -- only `config-<name>.json`
+# variants, which is what the two entries above already established.
+/config-*.json
+
+# Scan output artifacts (one-off runs). Anchored to the repo root so a
+# same-named file inside lib/ or scripts/ is never silently ignored.
 eztvoutput
 eztvoutput-*
+/out
+/outt
+/output
+/output-in
+/output_*
+/oneurl
+/multiurl*
+/headful
+/non-headful
+/wrr-out
+/logs/
+
+# Filter lists downloaded for --block-ads. Large, regenerated on demand,
+# and upstream-owned -- not ours to vendor.
+/easylist.txt
+/easyprivacy.txt
+
+# Unpacked Chrome extensions loaded via --load-extension (machine-local).
+/extensions/
+
+# Editor scratch
+*.swp
+*.swo
+*~
