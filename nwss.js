@@ -80,7 +80,7 @@ const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, write
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Pre-load cookie seeding (per-site `cookies` config)
-const { applySiteCookies, removeCookies } = require('./lib/cookies');
+const { applySiteCookies, retainSeeded, removeCookies } = require('./lib/cookies');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
@@ -3060,6 +3060,10 @@ function setupFrameHandling(page, forceDebug) {
       // Remember what was set: cookies live on the shared browser context, so
       // the finally below removes them to keep them inside THIS url entry.
       seededCookies = (await applySiteCookies(page, siteConfig, currentUrl, forceDebug)).cookies || [];
+      // Claim them for this URL only. processUrl runs concurrently on a SHARED
+      // browser context, so the finally must not delete a cookie another
+      // in-flight URL is still using; the refcount decides who actually clears.
+      retainSeeded(seededCookies);
 
       // --- Apply proxy authentication if configured ---
       if (needsProxy(siteConfig)) {
