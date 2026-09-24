@@ -3130,7 +3130,14 @@ function setupFrameHandling(page, forceDebug) {
           // lib/fingerprint's CHROME_BUILD, the same source the JS
           // getHighEntropyValues spoof uses, so HTTP and JS can't disagree.
           const browserUa = USER_AGENT_COLLECTIONS.get(userAgentKey) || '';
-          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1] || '150';
+          // Fall back to the 'chrome' collection entry rather than a literal:
+          // this was hardcoded '150' and went stale the moment the spoof moved
+          // to 151, which would have paired major 150 with CHROME_BUILD 7922.174
+          // (a 151 build) -- an impossible version. Unreachable today, since the
+          // block only runs for chrome UAs and those always match, but a stale
+          // constant here fails silently if that guard ever changes.
+          const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1]
+            || ((USER_AGENT_COLLECTIONS.get('chrome') || '').match(/Chrome\/(\d+)/) || [])[1];
           const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
 
           const chHeaders = {
