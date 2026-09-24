@@ -80,7 +80,7 @@ const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, write
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Pre-load cookie seeding (per-site `cookies` config)
-const { applySiteCookies } = require('./lib/cookies');
+const { applySiteCookies, removeCookies } = require('./lib/cookies');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
@@ -2499,6 +2499,9 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     let page = null;
+    // Hoisted so the finally below can undo it: cookies seeded for this URL are
+    // removed there, and a const inside the try is not in scope in the finally.
+    let seededCookies = [];
     let cdpSession = null;
     let cdpSessionManager = null;
     // Use Map to track domains and their resource types for --adblock-rules or --dry-run
@@ -3054,7 +3057,9 @@ function setupFrameHandling(page, forceDebug) {
       // Deliberately after clear_sitedata: that wipes cookies, so seeding first
       // would throw them away. Sites that gate on a cookie read it during the
       // initial document load, so this has to land before page.goto().
-      await applySiteCookies(page, siteConfig, currentUrl, forceDebug);
+      // Remember what was set: cookies live on the shared browser context, so
+      // the finally below removes them to keep them inside THIS url entry.
+      seededCookies = (await applySiteCookies(page, siteConfig, currentUrl, forceDebug)).cookies || [];
 
       // --- Apply proxy authentication if configured ---
       if (needsProxy(siteConfig)) {
@@ -5687,6 +5692,15 @@ function setupFrameHandling(page, forceDebug) {
       };
     } finally {
       // Guaranteed resource cleanup - this runs regardless of success or failure
+
+      // Scope seeded cookies to this url entry. One browser serves the whole
+      // run and no per-site context is created, so a cookie set here would
+      // otherwise be inherited by any LATER site on the same host that never
+      // asked for it -- changing what that page serves, silently. Runs in the
+      // finally so a failed/timed-out URL cannot leak them either.
+      if (page && seededCookies && seededCookies.length) {
+        try { await removeCookies(page, seededCookies, forceDebug); } catch (_) {}
+      }
 
       // Flip the popup-capture race-window guard first so any in-flight
       // 'targetcreated' handler that resolves after this point sees the

@@ -511,7 +511,7 @@ Object or array. Cookies set \fBbefore\fR the page loads, for sites that gate co
 .br
 Short form \fB{"consent": "granted", "ab": "b"}\fR scopes each cookie to the site's own host at path \fB/\fR. Long form \fB[{"name": "sid", "value": "abc", "domain": ".example.com", "path": "/", "secure": true, "httpOnly": false, "sameSite": "Lax", "expires": 1790000000}]\fR gives full control; only \fBname\fR is required. Non-string values (numbers, booleans) are stringified. \fBsameSite\fR accepts any casing, and \fBNone\fR implies \fBsecure\fR because Chrome silently drops the cookie otherwise. \fBexpires\fR is \fBseconds\fR since the epoch, not milliseconds: a past value makes the browser discard the cookie immediately and a millisecond value is clamped, so both are warned about, as are unrecognised per-cookie keys.
 .br
-Applied after \fBclear_sitedata\fR (which would otherwise wipe them) and re-seeded before each reload, so every load sees the cookie. An invalid entry is reported and skipped rather than aborting the scan.
+Applied after \fBclear_sitedata\fR (which would otherwise wipe them) and re-seeded before each reload, so every load sees the cookie. Seeded cookies are removed once the URL finishes: one browser serves the whole run and no per-site context is created, so without that a later site on the same host would silently inherit them and be served a different page. An invalid entry is reported and skipped rather than aborting the scan.
 
 .TP
 .B clear_sitedata
