@@ -312,6 +312,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | Field                | Values | Default | Description |
 |:---------------------|:-------|:-------:|:------------|
 | `goto_options`       | Object | `{"waitUntil": "load"}` | Custom page.goto() options |
+| `cookies`            | Object or Array | – | Cookies set **before** the page loads — for sites that gate on a cookie during the initial document load. Short form `{"consent": "granted"}` scopes to the site's own host at path `/`; long form `[{"name":…,"value":…,"domain":…,"path":…,"secure":…,"httpOnly":…,"sameSite":"Strict\|Lax\|None","expires":…}]` gives full control. Non-string values are stringified. Applied after `clear_sitedata` and re-seeded before each reload, so the cookie is present on every load |
 | `clear_sitedata`     | Boolean | `false` | Clear all cookies, cache, storage before each load |
 | `forcereload`        | Boolean or Array | `false` | Force cache-clearing reload for all URLs (`true`) or specific domains (`["domain1.com"]`) |
 | `isBrave`            | Boolean | `false` | Spoof Brave browser detection |

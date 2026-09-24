@@ -2,6 +2,11 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Added
+- **Per-site `cookies` — set cookies BEFORE the page loads.** Sites that gate content on a cookie read it during the initial document load (consent walls, A/B buckets, "seen the interstitial" flags, paywall meters); setting a cookie after navigation is too late, because the gate has already decided. Cookies are now applied to the browser context before `page.goto()`, so they ride on the very first request. Two forms: short `"cookies": {"consent": "granted", "ab_bucket": "b"}`, which scopes each cookie to the site's own host at path `/`; and long `"cookies": [{"name": "sid", "value": "abc", "domain": ".example.com", "path": "/", "secure": true, "httpOnly": false, "sameSite": "Lax", "expires": 1790000000}]` for full control, where only `name` is required. Non-string values are stringified, since a JSON config naturally carries `"n": 1`. `sameSite` accepts any casing and `None` implies `secure` (Chrome drops the cookie silently otherwise). Cookie names and values are rejected if they carry control characters or the delimiters that would let a value break out into another cookie or header — the same guard class as the CR/LF header filter in `lib/curl.js`. Ordering matters and is handled: seeding runs **after** `clear_sitedata` (which would otherwise wipe it) and is **re-applied before each reload**, so load #2 measures the same gated page as load #1 rather than an un-authenticated one. Invalid entries are reported and skipped rather than aborting the scan, and `--validate-config` checks the shape through the same normalizer the runtime uses, so the two cannot disagree. New module `lib/cookies.js`. Verified end-to-end against a local gate server: the first document request already carried all four cookies and the cookie-gated resource was fetched.
+
 ## [3.5.0] - 2026-08-28
 
 ### Added

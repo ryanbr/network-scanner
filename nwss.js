@@ -79,6 +79,8 @@ const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy, prepa
 const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
+// Pre-load cookie seeding (per-site `cookies` config)
+const { applySiteCookies } = require('./lib/cookies');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
@@ -1029,6 +1031,11 @@ Redirect Handling Options:
   delay_uncapped: true/false                   Honor 'delay' up to half the per-URL timeout instead of the 2s default cap. Use for sites with setTimeout-deferred lazy ad/tracker loaders that fire well past the standard post-networkidle window
   reload: <number>                             Reload page n times after load (default: 1)
   forcereload: true/false or ["domain1.com", "domain2.com"]  Force cache-clearing reload for all URLs or specific domains
+  cookies: {"name": "value"} or [{...}]        Set cookies BEFORE the page loads, for sites that gate on a cookie at load time.
+                                               Short form scopes each cookie to the site's own host, path "/".
+                                               Long form takes name/value plus optional domain, path, secure,
+                                               httpOnly, sameSite (Strict|Lax|None) and expires. Re-seeded after
+                                               clear_sitedata so reloads see them too.
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
   clear_sitedata_full_on_reload: true/false    With clear_sitedata: true, also clear heavy storage (IndexedDB, WebSQL, service workers) between reloads — quick mode (cookies+cache+local/session storage) is the default for reloads; this flag promotes them to full clears at ~100-500ms latency cost per reload. Use for sites with IndexedDB/service-worker-backed session caps. Off by default.
   subDomains: 1/0                              Output full subdomains (default: 0)
@@ -3042,6 +3049,12 @@ function setupFrameHandling(page, forceDebug) {
           if (forceDebug) console.log(formatLogMessage('debug', `${CLEAR_SITEDATA_TAG} Failed for ${currentUrl}: ${clearErr.message}`));
         }
       }
+
+      // --- Seed cookies BEFORE navigation (siteConfig.cookies) ---
+      // Deliberately after clear_sitedata: that wipes cookies, so seeding first
+      // would throw them away. Sites that gate on a cookie read it during the
+      // initial document load, so this has to land before page.goto().
+      await applySiteCookies(page, siteConfig, currentUrl, forceDebug);
 
       // --- Apply proxy authentication if configured ---
       if (needsProxy(siteConfig)) {
@@ -5363,6 +5376,10 @@ function setupFrameHandling(page, forceDebug) {
           } catch (reloadClearErr) {
             if (forceDebug) console.log(formatLogMessage('debug', `${CLEAR_SITEDATA_TAG} Before reload failed for ${currentUrl}`));
           }
+          // The clear above removed the cookies seeded for the first load, so
+          // re-seed them -- otherwise the reload hits the gate
+          // un-authenticated and measures something different from load #1.
+          await applySiteCookies(page, siteConfig, currentUrl, forceDebug);
         }
         
       let reloadSuccess = false;
