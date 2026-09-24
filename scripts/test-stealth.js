@@ -290,7 +290,11 @@ function formatResult(target, result) {
         oscpu: typeof navigator.oscpu !== 'undefined',
         buildID: typeof navigator.buildID !== 'undefined',
         plugins: navigator.plugins.length,
-        mimeTypes: navigator.mimeTypes.length
+        mimeTypes: navigator.mimeTypes.length,
+        // Collection TYPES, not just lengths: a plain array passes a length
+        // check but fails `instanceof`, which is false on no real browser.
+        pluginsIsPluginArray: (() => { try { return navigator.plugins instanceof PluginArray; } catch (e) { return false; } })(),
+        mimeIsMimeTypeArray: (() => { try { return navigator.mimeTypes instanceof MimeTypeArray; } catch (e) { return false; } })()
       }));
 
       const isFirefox = /Firefox\//.test(f.ua);
@@ -318,6 +322,9 @@ function formatResult(target, result) {
       // A PDF plugin with no PDF mime type (or the reverse) is incoherent.
       if (f.plugins > 0 && f.mimeTypes === 0) issues.push(`${f.plugins} plugins but 0 mimeTypes`);
       if (f.plugins === 0 && f.mimeTypes > 0) issues.push(`0 plugins but ${f.mimeTypes} mimeTypes`);
+      // Type integrity of the collections, checked regardless of length.
+      if (!f.pluginsIsPluginArray) issues.push('navigator.plugins is not a PluginArray');
+      if (!f.mimeIsMimeTypeArray) issues.push('navigator.mimeTypes is not a MimeTypeArray');
 
       collected.push({ name: 'self-consistency', url: 'about:blank', ok: true, durationMs: 0,
         result: { passed: issues.length === 0 ? 1 : 0, failed: issues.length, warn: 0,
