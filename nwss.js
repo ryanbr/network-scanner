@@ -5379,7 +5379,9 @@ function setupFrameHandling(page, forceDebug) {
           // The clear above removed the cookies seeded for the first load, so
           // re-seed them -- otherwise the reload hits the gate
           // un-authenticated and measures something different from load #1.
-          await applySiteCookies(page, siteConfig, currentUrl, forceDebug);
+          // reportErrors=false: the initial seed already logged any config
+          // problem, and repeating it once per reload is just noise.
+          await applySiteCookies(page, siteConfig, currentUrl, forceDebug, false);
         }
         
       let reloadSuccess = false;
