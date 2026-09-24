@@ -514,6 +514,16 @@ Short form \fB{"consent": "granted", "ab": "b"}\fR scopes each cookie to the sit
 Applied after \fBclear_sitedata\fR (which would otherwise wipe them) and re-seeded before each reload, so every load sees the cookie. Seeded cookies are removed once the URL finishes: one browser serves the whole run and no per-site context is created, so without that a later site on the same host would silently inherit them and be served a different page. An invalid entry is reported and skipped rather than aborting the scan.
 
 .TP
+.B local_storage, session_storage
+Object or array. Entries written to \fBlocalStorage\fR / \fBsessionStorage\fR \fBbefore\fR the page loads \(em the sibling of \fBcookies\fR, for gates that read Web Storage instead of a cookie (terms-accepted flags, CMP consent state, markers that suppress an interstitial).
+.br
+Short form \fB{"rta_terms_accepted": true}\fR, or long form \fB[{"name": "consent", "value": "granted"}]\fR for keys awkward as JSON object keys. Values are stringified the way \fBsetItem()\fR requires: numbers and booleans via \fBString()\fR, objects and arrays via \fBJSON.stringify\fR, so \fB{"cmp": {"ok": true}}\fR stores the JSON rather than \fB[object Object]\fR. Unrecognised per-entry keys, duplicate names and oversized values are reported.
+.br
+Web Storage is origin-scoped and only reachable from a document on that origin, so unlike a cookie it cannot be planted on the browser context before navigating. Seeding installs an \fBevaluateOnNewDocument\fR hook that runs before any of the page's own scripts on every document, which means reloads and \fBclear_sitedata\fR need no re-seeding. That hook also runs in child frames, so the entries are written only in the \fBtop\fR document \(em a cross-origin frame never receives them. The match is on \fBhostname\fR rather than origin: an \fBhttp\fR \(-> \fBhttps\fR upgrade (or a port change) is a different origin but the same site, and matching on origin meant a target that redirected elsewhere was never seeded at all. Teardown therefore clears both the configured origin and the one the page landed on.
+.br
+Seeded \fBlocalStorage\fR is removed once the URL finishes, reference-counted so a URL that finishes early cannot tear down a key a concurrent same-host URL still needs; without that, a later site on the same origin would silently inherit it. \fBsessionStorage\fR needs no teardown because it is scoped to the page.
+
+.TP
 .B clear_sitedata
 Boolean. Clear all cookies, cache, and storage before each page load (default: false).
 

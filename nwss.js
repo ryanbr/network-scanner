@@ -82,6 +82,13 @@ const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, write
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Pre-load cookie seeding (per-site `cookies` config)
 const { applySiteCookies, retainSeeded, removeCookies } = require('./lib/cookies');
+// Aliased: lib/storage.js exports its own retainSeeded for the localStorage
+// refcount, which would otherwise shadow the cookie one.
+const {
+  applySiteStorage,
+  retainSeeded: retainSeededStorage,
+  removeStorage
+} = require('./lib/storage');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
@@ -1037,6 +1044,15 @@ Redirect Handling Options:
                                                Long form takes name/value plus optional domain, path, secure,
                                                httpOnly, sameSite (Strict|Lax|None) and expires. Re-seeded after
                                                clear_sitedata so reloads see them too.
+  local_storage: {"name": "value"} or [{...}]   Write localStorage entries BEFORE the page loads, for gates that
+                                               read Web Storage instead of a cookie. Numbers/booleans are
+                                               stringified; objects/arrays are JSON.stringify'd. Runs before the
+                                               page's own scripts on every document, so reloads and
+                                               clear_sitedata need no re-seed. Written only in the top document,
+                                               matched on hostname (so an http->https redirect is still seeded).
+                                               Removed when the URL ends.
+  session_storage: {"name": "value"} or [{...}]  As local_storage, but sessionStorage (no teardown needed --
+                                               it dies with the page).
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
   clear_sitedata_full_on_reload: true/false    With clear_sitedata: true, also clear heavy storage (IndexedDB, WebSQL, service workers) between reloads — quick mode (cookies+cache+local/session storage) is the default for reloads; this flag promotes them to full clears at ~100-500ms latency cost per reload. Use for sites with IndexedDB/service-worker-backed session caps. Off by default.
   subDomains: 1/0                              Output full subdomains (default: 0)
@@ -2503,6 +2519,11 @@ function setupFrameHandling(page, forceDebug) {
     // Hoisted so the finally below can undo it: cookies seeded for this URL are
     // removed there, and a const inside the try is not in scope in the finally.
     let seededCookies = [];
+    // Same reason: the finally removes the localStorage entries seeded for this
+    // URL, and needs the origin they were scoped to. sessionStorage is absent on
+    // purpose -- it dies with the page, so there is nothing to undo.
+    let seededLocalStorage = [];
+    let seededStorageScope = null;
     let cdpSession = null;
     let cdpSessionManager = null;
     // Use Map to track domains and their resource types for --adblock-rules or --dry-run
@@ -3065,6 +3086,23 @@ function setupFrameHandling(page, forceDebug) {
       // browser context, so the finally must not delete a cookie another
       // in-flight URL is still using; the refcount decides who actually clears.
       retainSeeded(seededCookies);
+
+      // --- Seed Web Storage BEFORE navigation (local_storage/session_storage) ---
+      // Installs an evaluateOnNewDocument hook rather than writing storage
+      // directly: storage is only reachable from a document on the origin, so it
+      // cannot be planted on the context the way a cookie can. The hook runs
+      // before the page's own scripts on every document, so reload/forcereload
+      // need no re-seed -- unlike cookies, which clear_sitedata wipes.
+      {
+        const seeded = await applySiteStorage(page, siteConfig, currentUrl, forceDebug);
+        seededLocalStorage = seeded.localItems || [];
+        seededStorageScope = seeded.scope || null;
+        // Claim localStorage keys for this URL only; the refcount decides who
+        // actually clears them, since concurrent same-host URLs share them.
+        if (seededLocalStorage.length && seededStorageScope) {
+          retainSeededStorage(seededStorageScope.host, seededLocalStorage);
+        }
+      }
 
       // --- Apply proxy authentication if configured ---
       if (needsProxy(siteConfig)) {
@@ -5725,6 +5763,17 @@ function setupFrameHandling(page, forceDebug) {
       // finally so a failed/timed-out URL cannot leak them either.
       if (page && seededCookies && seededCookies.length) {
         try { await removeCookies(page, seededCookies, forceDebug); } catch (_) {}
+      }
+
+      // Same scoping for seeded localStorage: it persists per-origin in the
+      // userDataDir for the whole run, so a later site on the same host would
+      // silently inherit it. Runs while the page is still open (it closes
+      // further down this finally) so CDP still has a live target. Deliberately
+      // NOT gated on page.isClosed(): removeStorage drops the refcount before it
+      // touches the browser, and skipping the call on a dead page would retain
+      // the key forever so no later URL could ever release it.
+      if (seededLocalStorage && seededLocalStorage.length && seededStorageScope) {
+        try { await removeStorage(page, seededLocalStorage, seededStorageScope, forceDebug); } catch (_) {}
       }
 
       // Flip the popup-capture race-window guard first so any in-flight
