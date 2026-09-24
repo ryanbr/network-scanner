@@ -3895,9 +3895,17 @@ function setupFrameHandling(page, forceDebug) {
           });
         };
 
-        browser.on('targetcreated', onTargetCreated);
+        // Bind to browserInstance, NOT the shared `browser`. They are the same
+        // object at call time (processUrl is only ever passed the live browser),
+        // but a restart reassigns `browser` mid-call for any task still in
+        // flight -- a batch-timeout orphan (the Promise.all keeps running) or a
+        // grace-timeout orphan that was deliberately abandoned. Using the shared
+        // ref there attached the listener to the REPLACEMENT browser while this
+        // URL's page lived on the old one, and an intervening second restart
+        // made off() miss the browser on() had used, leaking the listener.
+        browserInstance.on('targetcreated', onTargetCreated);
         popupCleanups.push(() => {
-          try { browser.off('targetcreated', onTargetCreated); } catch (_) {}
+          try { browserInstance.off('targetcreated', onTargetCreated); } catch (_) {}
         });
       }
 
@@ -5344,7 +5352,12 @@ function setupFrameHandling(page, forceDebug) {
       for (let i = 1; i <= totalReloads; i++) {
   // Check browser health before attempting reload
   try {
-    const browserHealthy = await isQuicklyResponsive(browser, 2000);
+    // browserInstance, not the shared `browser`: after a restart the shared ref
+    // points at a fresh, healthy browser, so an in-flight URL whose own browser
+    // was just killed read "healthy" and ploughed through every remaining
+    // reload instead of breaking out (and the converse -- a momentarily busy
+    // replacement aborting reloads for a URL that was fine).
+    const browserHealthy = await isQuicklyResponsive(browserInstance, 2000);
     if (!browserHealthy) {
       if (forceDebug) {
         console.log(formatLogMessage('debug', `Browser unresponsive before reload #${i}, skipping remaining reloads`));
@@ -6231,7 +6244,25 @@ function setupFrameHandling(page, forceDebug) {
  // once per URL no matter which return/throw path is taken — that turns HANG
  // CHECK's signal from "did the batch finish?" into "did any URL finish?",
  // which is what 30-second tick granularity actually needs.
- const batchTasks = currentBatch.map(task => originalLimit(async () => {
+ // Per-task result stash. The batch timeout below abandons the Promise.all and
+ // synthesises an all-failed batch, which used to throw away the rules of every
+ // URL that had ALREADY finished successfully -- up to batchSize-1 URLs (batches
+ // run to 80) discarded because one straggler hit the 10-min ceiling.
+ //
+ // Worse than the lost rules: those synthesised 'Batch timeout' errors then fed
+ // the domainTimeoutCounts loop below, so a host got +batchSize timeout strikes
+ // for ONE hung URL. Past DOMAIN_TIMEOUT_THRESHOLD (3) every remaining URL on
+ // that host is skipped for the rest of the scan -- and since a site's `url`
+ // array is normally all one host, a single hang blackholed the whole site.
+ // Measured on a 6-URL/2-batch repro with one stalling URL: 0 of 6 URLs
+ // survived; with this stash, 5 of 6 (only the genuinely hung one failed).
+ //
+ // Recording each result as it settles lets the timeout branch keep the
+ // completed work and synthesise failures only for the URLs that never
+ // finished. Orphans that settle after the timeout write here harmlessly: the
+ // array is per-batch and is no longer read by then.
+ const settledResults = new Array(currentBatch.length);
+ const batchTasks = currentBatch.map((task, taskIndex) => originalLimit(async () => {
    try {
      // Short-circuit queued URLs once any URL in this batch has triggered a
      // restart. Without this, the 80-URL batch in the user's hang trace
@@ -6443,9 +6474,20 @@ function setupFrameHandling(page, forceDebug) {
      // `processedUrlCount += batchSize` that ran after the whole batch.
      processedUrlCount++;
    }
+ }).then(result => {
+   // Fulfilment only -- no onRejected arm, so a throwing task still rejects
+   // Promise.all exactly as before (and its .catch below stays the safety net).
+   settledResults[taskIndex] = result;
+   return result;
  }));
  
  let batchResults;
+ // Set by the batch-timeout branch, which restarts the browser itself. Without
+ // it the synthesised all-failed batch pushed criticalRestartCount to batchSize,
+ // clearing restartThreshold (max(3, batchSize/2)) for any batch of 3+, so the
+ // emergency restart below killed the browser the timeout branch had JUST built
+ // and made a third. Same double-restart the hang-fallback reset guards against.
+ let batchRestartAlreadyDone = false;
  try {
    // Same orphan-promise pattern as the health-check race above: if the
    // 10-min batch timeout wins, the still-running Promise.all keeps going
@@ -6470,12 +6512,26 @@ function setupFrameHandling(page, forceDebug) {
        const timeoutProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
        browser = await createBrowser(timeoutProxyArgs);
        urlsSinceLastCleanup = 0;
+       batchRestartAlreadyDone = true;
+       // The browser this flag was asking for now exists, so clear it for the
+       // same reason the emergency path does -- otherwise the hang-fallback
+       // restart fires a second back-to-back restart on this batch boundary.
+       forceRestartFlag = false;
      } catch (restartErr) {
        throw restartErr;
      }
-     batchResults = currentBatch.map(task => ({
-       success: false, error: 'Batch timeout', needsImmediateRestart: true, url: task.url
-     }));
+     // Keep whatever already finished; only the URLs still in flight become
+     // Batch timeout failures. `undefined` (not falsiness) is the test -- a task
+     // can legitimately resolve an object that spreads to {}.
+     batchResults = currentBatch.map((task, i) => (
+       settledResults[i] !== undefined ? settledResults[i] : {
+         success: false, error: 'Batch timeout', needsImmediateRestart: true, url: task.url
+       }
+     ));
+     const recoveredCount = settledResults.filter(r => r !== undefined).length;
+     if (recoveredCount > 0 && !silentMode) {
+       console.log(formatLogMessage('info', `${TIMEOUT_TAG} Recovered ${recoveredCount}/${currentBatch.length} completed URL(s) from the hung batch`));
+     }
    } else {
      throw timeoutError;
    }
@@ -6557,7 +6613,7 @@ function setupFrameHandling(page, forceDebug) {
     urlsSinceLastCleanup += batchSize;
 
     // Force browser restart if any URL had critical errors
-    if (needsImmediateRestart && isNotLastBatch) {
+    if (needsImmediateRestart && isNotLastBatch && !batchRestartAlreadyDone) {
       if (!silentMode) {
         console.log(`\n${messageColors.fileOp('🔄 Emergency browser restart:')} Critical browser errors detected`);
       }
