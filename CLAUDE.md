@@ -21,7 +21,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
   - `wireguard_vpn.js` / `openvpn_vpn.js` — VPN routing
   - `adblock.js` — Adblock filter parsing and validation (native JS engine)
   - `adblock-rust.js` — Drop-in adblock.js replacement backed by Brave's `adblock-rs` Rust engine; same matcher shape (`shouldBlock`, `getStats`, `rules`) so callers swap with one `require()`
-  - `cookies.js` / `storage.js` — Pre-navigation seeding of cookies and `localStorage`/`sessionStorage`, for gates that decide during the first document load. Both scope what they set to the `url` entry and reference-count teardown so concurrent same-host URLs can't tear down each other's state. `storage.js` seeds via `evaluateOnNewDocument` (storage is only reachable from a document on the origin) and matches on hostname, not origin, so an http→https redirect still gets seeded
+  - `cookies.js` / `storage.js` — Pre-navigation seeding of cookies and `localStorage`/`sessionStorage`, for gates that decide during the first document load. Both scope what they set to the `url` entry and reference-count teardown so concurrent same-host URLs can't tear down each other's state. `storage.js` seeds via `evaluateOnNewDocument` (storage is only reachable from a document on the origin) and matches on the registrable domain (via `psl`), not the origin or the exact hostname, so an http→https upgrade, a port change or a redirect to another subdomain still gets seeded, while a different registrable domain is refused
   - `validate_rules.js` — Domain and rule format validation
   - `colorize.js` — Console output formatting and colors
   - `domain-cache.js` — Domain detection cache for performance

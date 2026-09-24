@@ -1049,8 +1049,10 @@ Redirect Handling Options:
                                                stringified; objects/arrays are JSON.stringify'd. Runs before the
                                                page's own scripts on every document, so reloads and
                                                clear_sitedata need no re-seed. Written only in the top document,
-                                               matched on hostname (so an http->https redirect is still seeded).
-                                               Removed when the URL ends.
+                                               matched on the registrable domain, so an http->https upgrade,
+                                               a port change or a redirect to another subdomain still seeds
+                                               (a different registrable domain does not). Removed when the
+                                               URL ends.
   session_storage: {"name": "value"} or [{...}]  As local_storage, but sessionStorage (no teardown needed --
                                                it dies with the page).
   clear_sitedata: true/false                   Clear all cookies, cache, storage before each load (default: false)
@@ -3100,7 +3102,7 @@ function setupFrameHandling(page, forceDebug) {
         // Claim localStorage keys for this URL only; the refcount decides who
         // actually clears them, since concurrent same-host URLs share them.
         if (seededLocalStorage.length && seededStorageScope) {
-          retainSeededStorage(seededStorageScope.host, seededLocalStorage);
+          retainSeededStorage(seededStorageScope.site, seededLocalStorage, seededStorageScope.origin);
         }
       }
 
