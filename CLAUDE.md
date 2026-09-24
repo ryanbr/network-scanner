@@ -76,6 +76,13 @@ reports what they concluded. Use it to A/B a stealth change — run before the
 edit, run after, diff. Found 3 real bugs that 5 rounds of static review
 missed (PHANTOM/SELENIUM own-goal, PluginArray instanceof, Plugin toString).
 
+A self-consistency check runs first for whichever `--ua` is selected (offline,
+`about:blank`): it flags Chromium-only APIs surviving a non-Chrome UA,
+Firefox-only props on the wrong family, platform/vendor disagreeing with the UA,
+and plugins/mimeTypes mismatches. Run it per family — the third-party targets
+are built to detect headless *Chrome*, so under `--ua=firefox` their red cells
+mostly mean "doesn't look like Chrome" and real contradictions hide in the noise.
+
 ```bash
 node scripts/test-stealth.js                  # all targets, human-readable
 node scripts/test-stealth.js sannysoft        # one target

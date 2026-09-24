@@ -262,6 +262,77 @@ function formatResult(target, result) {
   // exit code without restructuring the loop).
   const collected = [];
 
+  // --- Self-consistency check (runs for whatever --ua is selected) ---
+  //
+  // The bot-detection targets below are built to catch headless CHROME, so a
+  // non-Chrome --ua scores their checks as "doesn't look like Chrome" and the
+  // real contradictions hide in the noise. This check instead asks whether the
+  // spoofed identity is coherent with ITSELF, which is what a detector actually
+  // exploits: two bugs found this way were window.chrome being built under a
+  // Firefox/Safari UA, and Firefox reporting 5 PDF plugins with 0 mimeTypes.
+  // Cheap, offline (about:blank), and independent of any third-party page.
+  if (!NO_SPOOF) {
+    const page = await browser.newPage();
+    try {
+      await applyAllFingerprintSpoofing(page,
+        { userAgent: UA_FLAG, fingerprint_protection: 'random' }, false, 'https://example.com');
+      await page.goto('about:blank');
+      const f = await page.evaluate(() => ({
+        ua: navigator.userAgent,
+        platform: navigator.platform,
+        vendor: navigator.vendor,
+        chromeObj: typeof window.chrome !== 'undefined',
+        uaData: typeof navigator.userAgentData !== 'undefined',
+        perfMemory: typeof performance.memory !== 'undefined',
+        deviceMemory: typeof navigator.deviceMemory !== 'undefined',
+        connection: typeof navigator.connection !== 'undefined',
+        scheduling: typeof navigator.scheduling !== 'undefined',
+        oscpu: typeof navigator.oscpu !== 'undefined',
+        buildID: typeof navigator.buildID !== 'undefined',
+        plugins: navigator.plugins.length,
+        mimeTypes: navigator.mimeTypes.length
+      }));
+
+      const isFirefox = /Firefox\//.test(f.ua);
+      const isSafari = /Version\/.*Safari/.test(f.ua) && !/Chrome\//.test(f.ua);
+      const isChrome = /Chrome\//.test(f.ua);
+      const uaOS = /Windows/.test(f.ua) ? 'Windows' : /Macintosh/.test(f.ua) ? 'Mac' : /Linux/.test(f.ua) ? 'Linux' : '?';
+      const issues = [];
+
+      // Chromium-only APIs must not survive a non-Chrome UA.
+      if (!isChrome) {
+        for (const [k, label] of [['chromeObj', 'window.chrome'], ['uaData', 'navigator.userAgentData'],
+                                  ['perfMemory', 'performance.memory'], ['deviceMemory', 'navigator.deviceMemory'],
+                                  ['connection', 'navigator.connection'], ['scheduling', 'navigator.scheduling']]) {
+          if (f[k]) issues.push(`${label} present under a non-Chrome UA`);
+        }
+      }
+      // Firefox-only props must be present for Firefox and absent elsewhere.
+      if (isFirefox && !f.oscpu) issues.push('UA claims Firefox but navigator.oscpu is absent');
+      if (isFirefox && !f.buildID) issues.push('UA claims Firefox but navigator.buildID is absent');
+      if (!isFirefox && f.oscpu) issues.push('navigator.oscpu present but UA is not Firefox');
+      // OS and vendor must track the UA.
+      if (uaOS === 'Windows' && !/Win/.test(f.platform)) issues.push(`UA says Windows but platform=${f.platform}`);
+      if (uaOS === 'Mac' && !/Mac/.test(f.platform)) issues.push(`UA says Mac but platform=${f.platform}`);
+      if (isSafari && f.vendor !== 'Apple Computer, Inc.') issues.push(`UA claims Safari but vendor=${JSON.stringify(f.vendor)}`);
+      // A PDF plugin with no PDF mime type (or the reverse) is incoherent.
+      if (f.plugins > 0 && f.mimeTypes === 0) issues.push(`${f.plugins} plugins but 0 mimeTypes`);
+      if (f.plugins === 0 && f.mimeTypes > 0) issues.push(`0 plugins but ${f.mimeTypes} mimeTypes`);
+
+      collected.push({ name: 'self-consistency', url: 'about:blank', ok: true, durationMs: 0,
+        result: { passed: issues.length === 0 ? 1 : 0, failed: issues.length, warn: 0,
+                  total: 1, failures: issues, warnings: [] } });
+      if (FORMAT !== 'json') {
+        console.log(`\nself-consistency (--ua=${UA_FLAG}): ${issues.length === 0 ? 'OK' : issues.length + ' issue(s)'}`);
+        issues.forEach(i => console.log(`  - ${i}`));
+      }
+    } catch (err) {
+      collected.push({ name: 'self-consistency', url: 'about:blank', ok: false, durationMs: 0, error: err.message });
+    } finally {
+      try { await page.close(); } catch (_) {}
+    }
+  }
+
   try {
     for (const target of targetsToRun) {
       const page = await browser.newPage();
