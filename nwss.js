@@ -26,6 +26,7 @@ const {
   getCacheStats,
   clearDetectionCache,
   parallelChallengeDetection,
+  getAggregateStats: getCloudflareAggregateStats,
   cleanup: cleanupCloudflareCache
 } = require('./lib/cloudflare');
 // FP Bypass
@@ -7002,6 +7003,43 @@ function setupFrameHandling(page, forceDebug) {
         console.log(messageColors.info('  Fresh whois:') + ` ${dnsStats.freshWhois.join(', ')}`);
       }
     }
+    // Cloudflare outcome summary. lib/cloudflare.js tallies these on EVERY url
+    // regardless of debug mode, explicitly so this can be printed without
+    // threading per-URL results back through the orchestration layer -- but
+    // nothing ever called getAggregateStats(), so the numbers were collected
+    // and discarded. Printed at info level (not --debug) for the same reason
+    // the dig-failure report below is: a run where challenges were hit, or
+    // where some timed out, is something you want to see by default. Quiet when
+    // no URL met Cloudflare, matching that report's print-only-when-non-zero
+    // convention. reset:true so a long-lived process starts clean next scan.
+    if (!silentMode) {
+      try {
+        const cf = getCloudflareAggregateStats({ reset: true });
+        const outcomes = (cf && cf.byOutcome) || {};
+        // `total` counts every URL that went THROUGH Cloudflare handling, not
+        // every URL that met a challenge -- a plain page still lands here with
+        // outcome 'no_indicators'. Reporting total as "challenged" printed
+        // "1 URL(s) challenged" for a page with no Cloudflare at all. Subtract
+        // the outcomes that mean "nothing to do" so the line stays quiet on a
+        // clean run, and label from the module's own outcome keys rather than
+        // inventing names that can drift from buildOutcomeString().
+        const quiet = (outcomes['no_indicators'] || 0) + (outcomes['skipped(non-http)'] || 0);
+        const notable = (cf ? cf.total : 0) - quiet;
+        if (notable > 0) {
+          const detail = Object.entries(outcomes)
+            .filter(([k]) => k !== 'no_indicators' && k !== 'skipped(non-http)')
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, n]) => `${k} ${n}`)
+            .join(', ');
+          console.log(messageColors.info(`Cloudflare: ${notable} of ${cf.total} URL(s) met Cloudflare`) +
+            (detail ? ` — ${detail}` : '') +
+            ` (handling avg ${cf.avgDurationMs}ms, max ${cf.maxDurationMs}ms)`);
+        }
+      } catch (cfStatsErr) {
+        if (forceDebug) console.log(formatLogMessage('debug', `Cloudflare stats summary failed: ${cfStatsErr.message}`));
+      }
+    }
+
     // Surface flaky-resolver damage: dig lookups that failed every attempt
     // (UDP failover + TCP fallback). These are dig-gated matches that may have
     // been missed this run purely because the resolver dropped the query — not
