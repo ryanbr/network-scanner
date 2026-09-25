@@ -1014,12 +1014,13 @@ Per-site config.json options:
   
 Redirect Handling Options:
   max_redirects: 10                          Cap on redirects nwss TRACKS, not whether they are followed --
-                                             Chrome follows them regardless. The chain counts the original
-                                             URL, so N tracks N-1: 0 and 1 both track none, 2 tracks one,
-                                             default 10 tracks nine. A tracked destination joins first-party
-                                             (unless redirect_first_party: false) and updates the final URL
-                                             for output; untracked stays third-party, so it remains eligible
-                                             for filterRegex/dig capture.
+                                             Chrome follows them regardless. 0 tracks none, 1 tracks one,
+                                             default 10 tracks ten. Counts committed navigations, so a
+                                             server-side 30x chain is ONE hop however long it is (Chrome
+                                             commits once); JS/meta redirects count separately. A tracked
+                                             destination joins first-party (unless redirect_first_party:
+                                             false) and updates the final URL for output; untracked stays
+                                             third-party, so it remains eligible for filterRegex/dig.
   js_redirect_timeout: 5000                  Milliseconds to wait for JavaScript redirects (default: 5000)
   detect_js_patterns: true/false             Analyze page source for redirect patterns (default: true)
   redirect_timeout_multiplier: 1.5          Increase timeout for redirected URLs (default: 1.5)

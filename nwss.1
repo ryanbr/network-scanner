@@ -597,7 +597,7 @@ Integer. Per-popup capture window in milliseconds before the popup is auto-close
 .B max_redirects
 Number. Cap on how many redirects nwss \fBtracks\fR (default: 10) \(em \fBnot\fR whether redirects are followed, which Chrome does natively regardless of this value.
 .br
-The chain is seeded with the original URL, so a value of \fIN\fR tracks \fIN\fR\-1 redirects: \fB0\fR and \fB1\fR both track none, \fB2\fR tracks one, and the default \fB10\fR tracks nine.
+\fB0\fR tracks none, \fB1\fR tracks one, and the default \fB10\fR tracks ten. The count is of \fIcommitted navigations\fR, so a server-side 30x chain counts as a single hop however many times it bounces \(em Chrome commits once \(em while JavaScript and meta-refresh redirects each count separately.
 .br
 Tracking is what decides classification: a tracked destination is added to the first-party set (unless \fBredirect_first_party: false\fR) and updates the final URL used for output attribution, while an untracked destination stays \fBthird-party\fR and therefore remains eligible for \fBfilterRegex\fR/\fBdig\fR capture.
 
