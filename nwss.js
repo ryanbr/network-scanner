@@ -4164,8 +4164,15 @@ function setupFrameHandling(page, forceDebug) {
                   const evenBlockedRegexPattern = re.source;
                   const resourceType = request.resourceType();
 
-                  // Apply same filtering logic as unblocked requests
-                  if (!allowedResourceTypesSet || allowedResourceTypesSet.has(resourceType)) {
+                  // Apply same filtering logic as unblocked requests. The
+                  // `size === 0` arm is what makes that comment true: the main
+                  // matcher gates on `allowedResourceTypesSet.size > 0`, so an
+                  // empty set there means "no filtering", while this path had no
+                  // size check and so treated an empty set as "match nothing" --
+                  // the two disagreed for `resourceTypes: []` plus
+                  // `even_blocked: true`.
+                  if (!allowedResourceTypesSet || allowedResourceTypesSet.size === 0 ||
+                      allowedResourceTypesSet.has(resourceType)) {
                     if (dryRunMode) {
                       addDryRunMatch(matchedDomains, {
                         regex: evenBlockedRegexPattern,

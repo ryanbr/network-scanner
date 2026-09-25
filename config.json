@@ -51,7 +51,6 @@
   {
     "url": "https://www.tomshardware.com/",
     "filterRegex": "anotherstrng",
-    "resourceTypes": ["all"],
     "reload": 2,
     "timeout": 25000,
     "delay": 15000,
@@ -62,7 +61,6 @@
   {
     "url": ["https://www.tomshardware.com/", "https://www.anandtech.com/"],
     "filterRegex": "morestrings",
-    "resourceTypes": ["all"],
     "reload": 2,
     "timeout": 25000,
     "delay": 15000,
