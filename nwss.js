@@ -1029,7 +1029,7 @@ Redirect Handling Options:
   grep: true/false                             Use grep instead of JavaScript for pattern matching (default: false)
                                                Note: requires curl=true, uses system grep command for faster searches
   blocked: "regex" or ["regex1", "regex2"]    Regex patterns to block requests
-  css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
+  css_blocked: "#sel" or ["#selector", ".class"]  CSS selectors to hide elements
   resourceTypes: "script" or ["script", "stylesheet"]  Only process requests of these resource types (default: all)
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
@@ -1104,12 +1104,12 @@ FlowProxy Protection Options:
 Advanced Options:
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
   cdp: true/false                            Enable CDP logging for this site Inject fetch/XHR interceptor in page
-  cdp_specific: ["domain1.com", "domain2.com"] Enable CDP logging only for specific domains in the URL list
+  cdp_specific: "d.com" or ["d1.com", "d2.com"]  Enable CDP logging only for specific domains in the URL list
   interact_duration: <milliseconds>           Duration of interaction simulation (default: 2000)
   interact_scrolling: true/false              Enable scrolling simulation (default: true)
   interact_clicks: true/false                 Enable element clicking simulation (default: false)
   interact_typing: true/false                 Enable typing simulation (default: false)
-  click_elements: ["sel1","sel2"]             After load, click these CSS selectors in order, main frame + iframes
+  click_elements: "sel" or ["sel1","sel2"]    After load, click these CSS selectors in order, main frame + iframes
                                               (organic nav / play button). Honors realistic_click + cursor_mode "ghost"; missing skipped
   click_wait: <milliseconds>                  Per-click: max wait for the element to appear + settle/nav after (default: 5000)
   cursor_mode: "ghost"                        Use ghost-cursor Bezier mouse (requires: npm i ghost-cursor)

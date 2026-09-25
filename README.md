@@ -320,8 +320,8 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `isBrave`            | Boolean | `false` | Spoof Brave browser detection |
 | `evaluateOnNewDocument` | Boolean | `false` | Inject fetch/XHR interceptor in page |
 | `cdp`                | Boolean | `false` | Enable CDP logging for this site |
-| `cdp_specific`       | Array | - | Enable CDP logging only for specific domains in the URL list |
-| `css_blocked`        | Array | - | CSS selectors to hide elements |
+| `cdp_specific`       | String or Array | - | Enable CDP logging only for specific domains in the URL list. A bare string is treated as one domain |
+| `css_blocked`        | String or Array | - | CSS selectors to hide elements. A bare string is treated as one selector |
 | `source`             | Boolean | `false` | Save page source HTML after load |
 | `screenshot`         | Boolean | `false` | Capture screenshot on load failure |
 | `headful`            | Boolean | `false` | Launch browser with GUI for this site |
@@ -333,7 +333,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `interact_click_count` | Integer | `3` | Number of random content-zone clicks per load (capped at 20). Default 3 = primary + 2 backups, since ad SDKs sometimes suppress the 1st/2nd click as warmup |
 | `realistic_click`    | Boolean | `false` | Higher click fidelity: denser mouse approach (15 steps), ±1px hand-tremor micro-moves during the press, and ±1.5px mouseup drift (so mousedown≠mouseup coords) — for sites that score click realism. Costs ~80–120ms/click |
 | `interact_typing`    | Boolean | `false` | Enable typing simulation |
-| `click_elements`     | String[] | - | After load, click these CSS selectors **in order**, searched across the **main frame and any iframe** — reach content via organic navigation/gesture instead of a direct load (e.g. `["a[href*='/movie/']", ".play"]` to click a link then a play button). The request interceptor stays attached, so the post-click page's requests are matched against `filterRegex`/`dig` as usual. A click that navigates is followed; later selectors query the resulting page. Honors `realistic_click` and `cursor_mode: "ghost"` (Bezier travel to the element); missing elements are skipped (never fails the scan) |
+| `click_elements`     | String or String[] | - | After load, click these CSS selectors **in order**, searched across the **main frame and any iframe** — reach content via organic navigation/gesture instead of a direct load (e.g. `["a[href*='/movie/']", ".play"]` to click a link then a play button). The request interceptor stays attached, so the post-click page's requests are matched against `filterRegex`/`dig` as usual. A click that navigates is followed; later selectors query the resulting page. Honors `realistic_click` and `cursor_mode: "ghost"` (Bezier travel to the element); missing elements are skipped (never fails the scan) |
 | `click_wait`         | Integer | `5000` | Per click: max time (ms) to wait for the element to appear/be visible (`waitForSelector`) **and** the settle/navigation wait after it; capped at half the per-URL timeout |
 | `interact_intensity` | String | `"medium"` | Interaction simulation intensity: "low", "medium", "high" |
 | `cursor_mode`        | `"ghost"` | - | Use ghost-cursor Bezier mouse movements (requires `npm i ghost-cursor`) |
