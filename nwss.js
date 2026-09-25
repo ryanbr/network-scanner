@@ -1021,7 +1021,13 @@ Redirect Handling Options:
                                              destination joins first-party (unless redirect_first_party:
                                              false) and updates the final URL for output; untracked stays
                                              third-party, so it remains eligible for filterRegex/dig.
-  js_redirect_timeout: 5000                  Milliseconds to wait for JavaScript redirects (default: 5000)
+  js_redirect_timeout: 5000                  Milliseconds to wait for JavaScript redirects (default: 5000).
+                                             Effective spend is a THIRD of this on every URL whether it
+                                             redirects or not. 0 skips the wait entirely -- the fastest
+                                             option. Only redirects landing AFTER navigation settles stop
+                                             being tracked; HTTP 30x and inline location.href redirects
+                                             commit during load and are still tracked. Requests on the
+                                             landed page are captured either way.
   detect_js_patterns: true/false             Analyze page source for redirect patterns (default: true)
   redirect_timeout_multiplier: 1.5          Increase timeout for redirected URLs (default: 1.5)
 

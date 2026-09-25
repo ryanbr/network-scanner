@@ -224,7 +224,7 @@ Example:
 | Field                | Values | Default | Description |
 |:---------------------|:-------|:-------:|:------------|
 | `max_redirects`      | Integer | `10` | Cap on how many redirects nwss **tracks** — *not* whether they are followed, which Chrome does regardless of this value. `0` tracks none, `1` tracks one, the default `10` tracks ten. It counts *committed navigations*, so a server-side 30x chain is a single hop however many times it bounces (Chrome commits once), while JS and meta-refresh redirects each count separately. A tracked destination is added to the first-party set (unless `redirect_first_party: false`) and updates the final URL used for output attribution; an untracked destination stays third-party and so remains eligible for `filterRegex`/`dig` capture |
-| `js_redirect_timeout` | Milliseconds | `5000` | Time to wait for JavaScript redirects |
+| `js_redirect_timeout` | Milliseconds | `5000` | Time to wait for JavaScript redirects. The effective spend is a **third** of this value, on every URL whether it redirects or not (the poll stops at the first quiet check). `0` skips the wait entirely — the cheapest setting. What it gives up is narrower than it sounds: only redirects that land *after* navigation settles stop being tracked, while HTTP 30x and inline `location.href` redirects commit during load and are still caught. The landed page's requests are captured either way |
 | `detect_js_patterns` | Boolean | `true` | Analyze page source for redirect patterns |
 | `redirect_timeout_multiplier` | Number | `1.5` | Increase timeout for redirected URLs |
 

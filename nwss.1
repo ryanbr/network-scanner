@@ -604,6 +604,10 @@ Tracking is what decides classification: a tracked destination is added to the f
 .TP
 .B js_redirect_timeout
 Milliseconds. Time to wait for JavaScript redirects (default: 5000).
+.br
+The effective spend is a \fBthird\fR of this value, on every URL whether it redirects or not: the poll loop stops at its first quiet check, so the configured figure is a ceiling rather than the usual cost.
+.br
+\fB0\fR skips the wait entirely \(em the cheapest setting. What it gives up is narrower than it sounds: only redirects that land \fBafter\fR navigation settles stop being tracked, so the chain, \fBfinalUrl\fR and the first-party promotion miss those. An HTTP 30x, or an inline \fBlocation.href\fR that runs on parse, commits during navigation and is still caught by the frame handler. The landed page loads and its requests are captured either way.
 
 .TP
 .B detect_js_patterns
