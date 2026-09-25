@@ -1037,7 +1037,8 @@ Redirect Handling Options:
   interact_intensity: "low"|"medium"|"high"     Interaction simulation intensity (default: medium)
   delay: <milliseconds>                        Delay after load (default: 6000, capped at 2000ms unless delay_uncapped: true)
   delay_uncapped: true/false                   Honor 'delay' up to half the per-URL timeout instead of the 2s default cap. Use for sites with setTimeout-deferred lazy ad/tracker loaders that fire well past the standard post-networkidle window
-  reload: <number>                             Reload page n times after load (default: 1)
+  reload: <number>                             TOTAL page loads, not extra reloads (default: 1).
+                                               1 = initial load only (no reload); 2 = one reload.
   forcereload: true/false or ["domain1.com", "domain2.com"]  Force cache-clearing reload for all URLs or specific domains
   cookies: {"name": "value"} or [{...}]        Set cookies BEFORE the page loads, for sites that gate on a cookie at load time.
                                                Short form scopes each cookie to the site's own host, path "/".
@@ -1261,16 +1262,36 @@ if (validateConfig) {
       }
     }
 
+    // Print the per-site findings. They were collected into
+    // validation.siteValidations all along and then thrown away, so a failing
+    // config only ever reported "Errors: 0 global, 1 site-specific" with no way
+    // to learn WHICH key was wrong short of reading validate_rules.js.
+    const printSiteFindings = () => {
+      for (const err of validation.globalErrors) {
+        console.log(`${messageColors.error('  ✗')} ${err}`);
+      }
+      for (const sv of (validation.siteValidations || [])) {
+        for (const err of (sv.errors || [])) {
+          console.log(`${messageColors.error('  ✗')} ${err}`);
+        }
+        for (const w of (sv.warnings || [])) {
+          console.log(`${messageColors.warn('  ⚠')} ${w}`);
+        }
+      }
+    };
+
     if (validation.isValid) {
       console.log(`${messageColors.success('✅ Configuration is valid!')}`);
       console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
       if (validation.summary.sitesWithWarnings > 0) {
         console.log(`${messageColors.warn('⚠ Warnings:')} ${validation.summary.sitesWithWarnings} sites have warnings`);
+        printSiteFindings();
       }
       process.exit(0);
     } else {
       console.log(`${messageColors.error('❌ Configuration validation failed!')}`);
       console.log(`${messageColors.error('Errors:')} ${validation.globalErrors.length} global, ${validation.summary.sitesWithErrors} site-specific`);
+      printSiteFindings();
       process.exit(1);
     }
   } catch (validationErr) {

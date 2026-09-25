@@ -200,7 +200,7 @@ Example:
 | `output_regex`       | String | — | Regex applied to each matched URL to build the rule body: capture group 1 (or whole match) becomes `\|\|<capture>` instead of `\|\|host^`. E.g. `^https?:\/\/([^\/]+\/[^\/]+\/)` turns `https://host.com/script/abc.js` into `\|\|host.com/script/`. The capture must include the host. No match → falls back to `\|\|host^`. Adblock-only; domain formats (dnsmasq/pihole/hosts/plain) emit the bare host |
 | `comments`           | String or Array | - | String of comments or references |
 | `resourceTypes`      | Array | `["script", "xhr", "image", "stylesheet"]` | What resource types to monitor |
-| `reload`             | Integer | `1` | Number of times to reload page |
+| `reload`             | Integer | `1` | **Total** page loads, not extra reloads — the initial load counts as the first. `1` (the default) loads once and never reloads; `2` gives one reload |
 | `delay`              | Milliseconds | `4000` | Wait time after loading/reloading |
 | `timeout`            | Milliseconds | `30000` | Timeout for page load |
 | `verbose`            | `0` or `1` | `0` | Enable verbose output per site |
