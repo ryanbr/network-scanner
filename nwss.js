@@ -1210,6 +1210,26 @@ const {
 if (validateConfig) {
   console.log(`\n${messageColors.processing('Validating configuration file...')}`);
   try {
+    // Run the scan-path normaliser FIRST, so --validate-config reports what a
+    // scan would actually report and validates the values a scan would actually
+    // see. It was skipped here entirely, which meant the typo detector and its
+    // "did you mean" suggestions, the boolean coercions and the string->array
+    // coercions -- the messages most worth having BEFORE a scan -- only appeared
+    // once a scan was already underway. A config could therefore print
+    // "Configuration is valid!" while every scan warned about an unknown key
+    // whose value was being ignored (measured: two sites carrying a bogus
+    // 'follow_redirects').
+    //
+    // Mutating in place is safe here: the process exits at the end of this block,
+    // so nothing downstream depends on the un-normalised objects.
+    const normaliserWarnings = [];
+    const normaliserErrors = [];
+    for (let i = 0; i < sites.length; i++) {
+      const { warnings: nWarn, errors: nErr } = normalizeSiteConfig(sites[i], i);
+      normaliserWarnings.push(...nWarn);
+      normaliserErrors.push(...nErr);
+    }
+
     const validation = validateFullConfig(config, { forceDebug, silentMode });
 
     // Validate referrer_headers format
@@ -1267,6 +1287,12 @@ if (validateConfig) {
     // config only ever reported "Errors: 0 global, 1 site-specific" with no way
     // to learn WHICH key was wrong short of reading validate_rules.js.
     const printSiteFindings = () => {
+      for (const err of normaliserErrors) {
+        console.log(`${messageColors.error('  ✗')} ${err}`);
+      }
+      for (const w of normaliserWarnings) {
+        console.log(`${messageColors.warn('  ⚠')} ${w}`);
+      }
       for (const err of validation.globalErrors) {
         console.log(`${messageColors.error('  ✗')} ${err}`);
       }
@@ -1280,17 +1306,18 @@ if (validateConfig) {
       }
     };
 
-    if (validation.isValid) {
+    const configIsValid = validation.isValid && normaliserErrors.length === 0;
+    if (configIsValid) {
       console.log(`${messageColors.success('✅ Configuration is valid!')}`);
       console.log(`${messageColors.info('Summary:')} ${validation.summary.validSites}/${validation.summary.totalSites} sites valid`);
-      if (validation.summary.sitesWithWarnings > 0) {
-        console.log(`${messageColors.warn('⚠ Warnings:')} ${validation.summary.sitesWithWarnings} sites have warnings`);
+      if (validation.summary.sitesWithWarnings > 0 || normaliserWarnings.length > 0) {
+        console.log(`${messageColors.warn('⚠ Warnings:')} ${validation.summary.sitesWithWarnings} site(s) from validation, ${normaliserWarnings.length} from normalisation`);
         printSiteFindings();
       }
       process.exit(0);
     } else {
       console.log(`${messageColors.error('❌ Configuration validation failed!')}`);
-      console.log(`${messageColors.error('Errors:')} ${validation.globalErrors.length} global, ${validation.summary.sitesWithErrors} site-specific`);
+      console.log(`${messageColors.error('Errors:')} ${validation.globalErrors.length} global, ${validation.summary.sitesWithErrors} site-specific, ${normaliserErrors.length} from normalisation`);
       printSiteFindings();
       process.exit(1);
     }
