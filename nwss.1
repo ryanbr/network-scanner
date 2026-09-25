@@ -235,6 +235,9 @@ Bypass all smart caching functionality during scanning.
 Configuration is provided via JSON files. The default configuration file is \fBconfig.json\fR.
 
 .SS Global Configuration Options
+.TP
+.B js_redirect_timeout
+Milliseconds. Default JS-redirect wait for any site that does not set its own \fBjs_redirect_timeout\fR; per-site values take precedence. Exists because that wait costs roughly a third of its value on \fBevery\fR URL whether or not the URL redirects, and the per-site key alone meant repeating the same line for every site in a large config. \fB0\fR disables the wait \(em see the per-site entry for exactly what that gives up.
 
 .TP
 .B ignoreDomains

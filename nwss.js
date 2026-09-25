@@ -998,6 +998,9 @@ Global config.json options:
   ignoreDomainsByUrl: ["regex1", "regex2"]       Regex patterns; if any request URL matches, the request's root domain is ignored for the rest of the scan
   blockDomainsByUrl: ["regex1", "regex2"]        Regex patterns; if any request URL matches, ALL subsequent requests on that root domain (and subdomains) are aborted via Puppeteer for the rest of the scan
   blocked: "regex" or ["regex1", "regex2"]        Global regex patterns to block requests (combined with per-site blocked)
+  js_redirect_timeout: <ms>                       Default JS-redirect wait for sites that don't set their own.
+                                                  Per-site values win. 0 disables the wait (see the per-site
+                                                  entry below: it costs ~a third of this on EVERY url)
   whois_server_mode: "random" or "cycle"      Default server selection mode for all sites (default: random)
   ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
   ignore_similar_threshold: 80                    Similarity threshold percentage for ignore_similar (default: 80)
@@ -1205,6 +1208,7 @@ const {
   ignoreDomainsByUrl = [],
   blockDomainsByUrl = [],
   blocked: globalBlocked = [],
+  js_redirect_timeout: globalJsRedirectTimeout,
   whois_delay = 3000, 
   whois_server_mode = 'random', 
   ignore_similar = true, 
@@ -1216,6 +1220,28 @@ const {
   comments: globalComments,
   ...otherGlobalConfig
 } = config;
+
+// A global js_redirect_timeout becomes the default for sites that do not set
+// their own. The per-site key was the only way to control this wait, and it costs
+// roughly js_redirect_timeout/3 on EVERY url whether that url redirects or not --
+// so turning it down across a 63-site config meant 63 duplicated lines. Per-site
+// values still win, so a config can switch the wait off globally and keep it for
+// the few sites that need late-JS-redirect tracking.
+//
+// Applied HERE, before the --validate-config block below and before the scan
+// loop, so both see the same effective config. Doing it in only one place is the
+// divergence that let a config validate clean while every scan warned about it.
+if (globalJsRedirectTimeout !== undefined) {
+  if (typeof globalJsRedirectTimeout === 'number' && globalJsRedirectTimeout >= 0) {
+    for (const site of sites) {
+      if (site && typeof site === 'object' && site.js_redirect_timeout === undefined) {
+        site.js_redirect_timeout = globalJsRedirectTimeout;
+      }
+    }
+  } else {
+    console.warn(formatLogMessage('warn', `[config] global 'js_redirect_timeout' must be a number >= 0, got ${JSON.stringify(globalJsRedirectTimeout)} — ignoring it`));
+  }
+}
 
 // --validate-config runs here, after `config` and `sites` are populated.
 // Previously this block lived above the config load and triggered a TDZ
