@@ -623,6 +623,7 @@ let adblockRulesFiles = [];
 let popupSignalMatcher = null;
 let popupSignalBuildFailed = false;
 let popupSignalNoListsWarned = false;
+let popupSignalErrorWarned = false;
 // pattern -> hit count, reported at scan end. Mirrors _blockedPatternHits.
 const _popupSignalHits = new Map();
 
@@ -3936,11 +3937,26 @@ function setupFrameHandling(page, forceDebug) {
             // including ones the site's own filterRegex already covers.
             let popupSignalRule = null;
             if (popupSignalMatcher) {
-              popupSignalRule = popupSignalMatcher.match(checkedUrl, currentUrl);
-              if (popupSignalRule) {
-                _popupSignalHits.set(popupSignalRule, (_popupSignalHits.get(popupSignalRule) || 0) + 1);
-                if (forceDebug) {
-                  console.log(formatLogMessage('debug', `${POPUP_TAG} [popup depth=${depth}] ${checkedRootDomain} matches known popunder pattern ${popupSignalRule} (${resourceType})${popupSignalCaptures ? '' : ' — signal only'}`));
+              // Its own try/catch, because the enclosing one swallows everything
+              // and this is an OBSERVATIONAL step sitting in front of the capture.
+              // Measured with a deliberately throwing matcher: the log showed the
+              // popup URL matching the site's own filterRegex, then the signal
+              // threw and the whole evaluation was discarded -- a real capture
+              // lost to a feature that is not allowed to change outcomes.
+              try {
+                popupSignalRule = popupSignalMatcher.match(checkedUrl, currentUrl);
+                if (popupSignalRule) {
+                  _popupSignalHits.set(popupSignalRule, (_popupSignalHits.get(popupSignalRule) || 0) + 1);
+                  if (forceDebug) {
+                    console.log(formatLogMessage('debug', `${POPUP_TAG} [popup depth=${depth}] ${checkedRootDomain} matches known popunder pattern ${popupSignalRule} (${resourceType})${popupSignalCaptures ? '' : ' — signal only'}`));
+                  }
+                }
+              } catch (signalErr) {
+                // Once per run: a broken matcher would otherwise repeat this for
+                // every popup URL in the scan.
+                if (!popupSignalErrorWarned) {
+                  popupSignalErrorWarned = true;
+                  console.log(formatLogMessage('warn', `${POPUP_TAG} $popup signal evaluation failed (${signalErr.message}); popunder patterns are no longer being reported, capture is unaffected`));
                 }
               }
             }
