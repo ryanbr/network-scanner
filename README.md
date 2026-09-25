@@ -210,7 +210,7 @@ Example:
 | `thirdParty`         | `0` or `1` | `1` | Match third-party requests |
 | `redirect_first_party` | Boolean | `true` | Whether redirect-destination domains count as first-party. Set `false` to keep redirect targets (and chain hops) **third-party**, so `filterRegex`/`dig` can match them under `thirdParty:true` — e.g. capturing the end domain of an ad/cloak redirect. The originally-scanned domain stays first-party either way. Note: this also un-excludes the redirect target's own same-domain resources (more captured) |
 | `subDomains`         | `0` or `1` | `0` | 1 = preserve subdomains in output |
-| `blocked`            | Array | - | Domains or regexes to block during scanning |
+| `blocked`            | String or Array | - | Domains or regexes to block during scanning. A bare string is treated as one pattern; an empty string means none |
 | `even_blocked`       | Boolean | `false` | Add matching rules even if requests are blocked |
 | `bypass_cache`       | Boolean | `false` | Skip all caching for this site's URLs |
 | `window_cleanup`     | Boolean or String | `false` | Close old/unused browser windows/tabs after entire URL group completes |

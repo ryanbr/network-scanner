@@ -997,7 +997,7 @@ Global config.json options:
   ignoreDomains: ["domain.com", "*.ads.com"]     Domains to completely ignore (supports wildcards)
   ignoreDomainsByUrl: ["regex1", "regex2"]       Regex patterns; if any request URL matches, the request's root domain is ignored for the rest of the scan
   blockDomainsByUrl: ["regex1", "regex2"]        Regex patterns; if any request URL matches, ALL subsequent requests on that root domain (and subdomains) are aborted via Puppeteer for the rest of the scan
-  blocked: ["regex1", "regex2"]                   Global regex patterns to block requests (combined with per-site blocked)
+  blocked: "regex" or ["regex1", "regex2"]        Global regex patterns to block requests (combined with per-site blocked)
   whois_server_mode: "random" or "cycle"      Default server selection mode for all sites (default: random)
   ignore_similar: true/false                      Ignore domains similar to already found domains (default: true)
   ignore_similar_threshold: 80                    Similarity threshold percentage for ignore_similar (default: 80)
@@ -1028,7 +1028,7 @@ Redirect Handling Options:
                                                Note: curl respects filterRegex but ignores resourceTypes filtering
   grep: true/false                             Use grep instead of JavaScript for pattern matching (default: false)
                                                Note: requires curl=true, uses system grep command for faster searches
-  blocked: ["regex"]                          Regex patterns to block requests
+  blocked: "regex" or ["regex1", "regex2"]    Regex patterns to block requests
   css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
   resourceTypes: ["script", "stylesheet"]     Only process requests of these resource types (default: all types)
   interact: true/false                         Simulate mouse movements/clicks
@@ -1346,6 +1346,16 @@ function getCompiledRegexes(patterns) {
  * @returns {RegExp[]}
  */
 function compilePatternList(configKey, patterns, compile = (p) => new RegExp(p)) {
+  // A bare string is one pattern. Without this a string silently produced zero
+  // patterns -- the feature looked configured and did nothing. Covers the GLOBAL
+  // `blocked` list too, which normalizeSiteConfig() never touches since it only
+  // walks per-site config.
+  //
+  // An EMPTY string must NOT become [''], the way the same guard in
+  // STRING_TO_ARRAY_FIELDS is careful about: new RegExp('') is /(?:)/, which
+  // matches every URL, so coercing it would turn an obviously-empty setting into
+  // block-everything. Empty means no patterns.
+  if (typeof patterns === 'string') patterns = patterns.length > 0 ? [patterns] : [];
   if (!Array.isArray(patterns)) return [];
   const out = [];
   for (const p of patterns) {
