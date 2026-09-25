@@ -1030,7 +1030,7 @@ Redirect Handling Options:
                                                Note: requires curl=true, uses system grep command for faster searches
   blocked: "regex" or ["regex1", "regex2"]    Regex patterns to block requests
   css_blocked: ["#selector", ".class"]        CSS selectors to hide elements
-  resourceTypes: ["script", "stylesheet"]     Only process requests of these resource types (default: all types)
+  resourceTypes: "script" or ["script", "stylesheet"]  Only process requests of these resource types (default: all)
   interact: true/false                         Simulate mouse movements/clicks
   isBrave: true/false                          Spoof Brave browser detection
   userAgent: "chrome"|"chrome_mac"|"chrome_linux"|"firefox"|"firefox_mac"|"firefox_linux"|"safari"  Desktop User-Agent (defaults to "chrome" if unset; set false to scan with the raw headless UA)
@@ -3436,8 +3436,17 @@ function setupFrameHandling(page, forceDebug) {
       const disableAdblock = siteConfig.disable_adblock === true;
 
       // Pre-build Set for O(1) resourceType lookups (fired per request)
-      const allowedResourceTypesSet = Array.isArray(siteConfig.resourceTypes)
-        ? new Set(siteConfig.resourceTypes)
+      // A bare string is one type. normalizeSiteConfig() already coerces this at
+      // scan startup; coercing here too means the consumer cannot silently fall
+      // back to "no filtering" on any path that skipped normalisation. An EMPTY
+      // string stays null (no filtering) rather than becoming a set containing
+      // '', which no request's resourceType ever equals and which would
+      // therefore match nothing at all.
+      const declaredResourceTypes = typeof siteConfig.resourceTypes === 'string'
+        ? (siteConfig.resourceTypes.length > 0 ? [siteConfig.resourceTypes] : null)
+        : (Array.isArray(siteConfig.resourceTypes) ? siteConfig.resourceTypes : null);
+      const allowedResourceTypesSet = declaredResourceTypes
+        ? new Set(declaredResourceTypes)
         : null;
 
       // Combine site-specific with pre-compiled global blocked patterns.
