@@ -1013,7 +1013,13 @@ Per-site config.json options:
                                               When true, ALL regex patterns must match the same URL
   
 Redirect Handling Options:
-  max_redirects: 10                          Maximum number of redirects to follow (default: 10; 0 = follow none)
+  max_redirects: 10                          Cap on redirects nwss TRACKS, not whether they are followed --
+                                             Chrome follows them regardless. The chain counts the original
+                                             URL, so N tracks N-1: 0 and 1 both track none, 2 tracks one,
+                                             default 10 tracks nine. A tracked destination joins first-party
+                                             (unless redirect_first_party: false) and updates the final URL
+                                             for output; untracked stays third-party, so it remains eligible
+                                             for filterRegex/dig capture.
   js_redirect_timeout: 5000                  Milliseconds to wait for JavaScript redirects (default: 5000)
   detect_js_patterns: true/false             Analyze page source for redirect patterns (default: true)
   redirect_timeout_multiplier: 1.5          Increase timeout for redirected URLs (default: 1.5)

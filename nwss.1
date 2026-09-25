@@ -595,7 +595,11 @@ Integer. Per-popup capture window in milliseconds before the popup is auto-close
 
 .TP
 .B max_redirects
-Number. Maximum number of redirects to follow (default: 10; 0 = follow none).
+Number. Cap on how many redirects nwss \fBtracks\fR (default: 10) \(em \fBnot\fR whether redirects are followed, which Chrome does natively regardless of this value.
+.br
+The chain is seeded with the original URL, so a value of \fIN\fR tracks \fIN\fR\-1 redirects: \fB0\fR and \fB1\fR both track none, \fB2\fR tracks one, and the default \fB10\fR tracks nine.
+.br
+Tracking is what decides classification: a tracked destination is added to the first-party set (unless \fBredirect_first_party: false\fR) and updates the final URL used for output attribution, while an untracked destination stays \fBthird-party\fR and therefore remains eligible for \fBfilterRegex\fR/\fBdig\fR capture.
 
 .TP
 .B js_redirect_timeout
