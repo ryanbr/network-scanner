@@ -594,6 +594,10 @@ Integer. Maximum popup-chain depth to capture, e.g. \fBsite -> p1 -> p2 -> p3 ->
 .B capture_popups_window_ms
 Integer. Per-popup capture window in milliseconds before the popup is auto-closed (default: 5000).
 
+.TP
+.B capture_popups_signal
+Boolean. Treat a \fB$popup\fR filter-list pattern as a match in its own right, so a popup landing on a known popunder endpoint is captured even when the site's \fBfilterRegex\fR does not cover it. The patterns come from the \fB--block-ads\fR lists: neither engine can \fIblock\fR a \fB$popup\fR rule, but most of those patterns appear nowhere else in a list, so together they read as a catalogue of known popunder endpoints. A promoted hit goes through the same path a \fBfilterRegex\fR match does, so \fBignoreDomains\fR, the first/third-party gates and \fBwhois\fR/\fBdig\fR validation all still apply. Requires \fBcapture_popups\fR and \fB--block-ads\fR. With this off, hits are still counted and a one-line tally is printed at the end of the scan \(em only capture is withheld (default: false).
+
 .SS Redirect Handling Options
 
 .TP

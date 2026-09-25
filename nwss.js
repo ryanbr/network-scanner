@@ -7,6 +7,7 @@ const usePuppeteerCore = process.argv.includes('--use-puppeteer-core') || useObs
 const puppeteer = usePuppeteerCore ? require('puppeteer-core') : require('puppeteer');
 const fs = require('fs');
 const os = require('os');
+const net = require('net');
 const psl = require('psl');
 const path = require('path');
 const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonExistenceError, dohTemplatesForResolvers } = require('./lib/dns');
@@ -612,6 +613,18 @@ let adblockRulesMode = args.includes('--adblock-rules');
 let adblockEnabled = false;
 let adblockMatcher = null;
 let adblockStats = { blocked: 0, allowed: 0 };
+// Filter lists from --block-ads, kept at module scope so the popup $popup-signal
+// matcher can be built from them later (the flag-parse block that reads them is
+// long gone by the time a site with capture_popups is processed).
+let adblockRulesFiles = [];
+// $popup signal (opt-in, capture_popups sites only). Built lazily on the first
+// such site because it re-reads the filter lists: 30ms for easylist, wasted on
+// the vast majority of scans that never open a popup. null = not built yet.
+let popupSignalMatcher = null;
+let popupSignalBuildFailed = false;
+let popupSignalNoListsWarned = false;
+// pattern -> hit count, reported at scan end. Mirrors _blockedPatternHits.
+const _popupSignalHits = new Map();
 
 // Cloudflare scan-wide stats. errorPages counts URLs where the returned page
 // was a Cloudflare-served 5xx origin error (522/523/etc.) — no bypass
@@ -835,6 +848,7 @@ if (blockAdsIndex !== -1) {
   }
 
   adblockEnabled = true;
+  adblockRulesFiles = rulesFiles;
   // Resolve the AUTO default here rather than at flag-parse time, so a run
   // without --block-ads never attempts the adblock-rs native require.
   if (adblockEngineName === 'auto') {
@@ -1802,6 +1816,15 @@ function rootDomainForHost(hostname) {
   const cached = _hostRootCache.get(hostname);
   if (cached !== undefined) return cached;
   let result;
+  // An IP literal has no public suffix, but psl treats the octets as labels and
+  // hands back the last two: '127.0.0.1' -> '0.1', '192.168.1.10' -> '1.10'.
+  // That put junk like '||1.10^' in generated output, and merged unrelated hosts
+  // that happen to share their final two octets (8.8.8.8 and 1.8.8.8 both ->
+  // '8.8') into one identity. An IP is its own root.
+  if (net.isIP(hostname)) {
+    _hostRootCache.set(hostname, hostname);
+    return hostname;
+  }
   try { const parsed = psl.parse(hostname); result = parsed.domain || hostname; }
   catch { result = hostname; }
   if (_hostRootCache.size > 5000) _hostRootCache.clear();
@@ -3720,6 +3743,50 @@ function setupFrameHandling(page, forceDebug) {
       const interactPopups = capturePopups && siteConfig.interact_popups === true;
       const POPUP_INTERACT_CLICKS = 3; // enough to fire popunder/redirect SDKs (incl. SDKs that suppress the 1st/2nd click as warmup) without runaway cascades
 
+      // $popup patterns as capture signal. Neither engine can BLOCK a $popup
+      // rule (adblock-rs drops them; lib/adblock.js skips them because treating
+      // them as ordinary network rules over-blocks), but most of easylist's
+      // popup patterns appear nowhere else in the list, so as a set they are a
+      // catalogue of known popunder endpoints -- and a URL a popup navigated to
+      // that matches one is precisely the finding capture_popups is looking for.
+      // Built from the same lists as the blocker, but independently of which
+      // engine was selected: rust is the auto-selected default and exposes no
+      // rule buckets, so hanging this off the matcher would leave it dead on
+      // most runs.
+      //
+      // Unaffected by per-site disable_adblock: that exists to stop the blocker
+      // aborting requests during popup/redirect-chain capture, and this never
+      // aborts anything -- it only reads the same lists.
+      //
+      // capture_popups_signal promotes a hit to a real capture (routed through
+      // the same regex-match path, so ignoreDomains / party gates / whois+dig
+      // validation all still apply). Default off: these rules come from a
+      // third-party list, and a popunder rule on an otherwise-legitimate host
+      // would put that host in generated output without the site's filterRegex
+      // ever asking for it. Off, hits are still counted and logged.
+      const popupSignalCaptures = siteConfig.capture_popups_signal === true;
+      // The patterns come from the --block-ads lists, so without them the
+      // setting silently does nothing at all -- say so rather than let someone
+      // conclude their site simply has no popunders. Once per scan, not per URL.
+      if (popupSignalCaptures && adblockRulesFiles.length === 0 && !popupSignalNoListsWarned) {
+        popupSignalNoListsWarned = true;
+        console.log(formatLogMessage('warn', `${POPUP_TAG} capture_popups_signal is set but no filter lists are loaded — pass --block-ads=<list> (the popunder patterns come from those lists); the setting has no effect`));
+      }
+      if (capturePopups && adblockEnabled && !popupSignalMatcher && !popupSignalBuildFailed && adblockRulesFiles.length > 0) {
+        // Synchronous, so concurrent processUrl calls cannot interleave between
+        // the null check above and the assignment -- no double build, no lock.
+        try {
+          popupSignalMatcher = adblockJs.createPopupSignalMatcher(adblockRulesFiles);
+          if (forceDebug) {
+            console.log(formatLogMessage('debug', `${POPUP_TAG} $popup signal: ${popupSignalMatcher.size} popunder pattern(s) loaded (${popupSignalMatcher.domainEntries} exact-domain, ${popupSignalMatcher.scanEntries} path/regex) — ${popupSignalCaptures ? 'hits COUNT as matches (capture_popups_signal)' : 'report-only; set capture_popups_signal: true to capture them'}`));
+          }
+        } catch (err) {
+          // Signal is a nice-to-have; a scan must not die because a list moved.
+          popupSignalBuildFailed = true;
+          console.log(formatLogMessage('warn', `${POPUP_TAG} $popup signal unavailable (${err.message}); continuing without it`));
+        }
+      }
+
       if (capturePopups && forceDebug) {
         // One-time setup-time warning if the click prerequisite isn't met.
         // Without clicks, capture_popups is a no-op in practice. Previous
@@ -3746,6 +3813,11 @@ function setupFrameHandling(page, forceDebug) {
           console.log(formatLogMessage('debug', `[popup] capture_popups is enabled but 'interact_clicks' is not — set interact_clicks: true to enable element-targeted clicks; without it, only random content-zone clicks fire and may miss overlay-based popunders`));
         }
         console.log(formatLogMessage('debug', `[popup] capture_popups settings: maxDepth=${POPUP_MAX_DEPTH}, windowMs=${POPUP_CAPTURE_WINDOW_MS}`));
+      }
+      if (!capturePopups && siteConfig.capture_popups_signal === true && forceDebug) {
+        // $popup patterns are only ever matched against URLs surfaced from a
+        // popup, so with no popup capture there is nothing to match them against.
+        console.log(formatLogMessage('debug', `${POPUP_TAG} capture_popups_signal is set but 'capture_popups' is not — the popunder patterns are only matched against popup URLs, so nothing will be evaluated`));
       }
 
       if (capturePopups) {
@@ -3857,7 +3929,23 @@ function setupFrameHandling(page, forceDebug) {
               }
             }
 
-            if (!regexMatched) return;
+            // Known popunder endpoint? Signal only -- popups are never aborted.
+            // Checked after the ignore/party gates so an intentionally ignored
+            // domain does not generate noise, and independently of regexMatched
+            // so the tally reflects every popunder endpoint the scan reached,
+            // including ones the site's own filterRegex already covers.
+            let popupSignalRule = null;
+            if (popupSignalMatcher) {
+              popupSignalRule = popupSignalMatcher.match(checkedUrl, currentUrl);
+              if (popupSignalRule) {
+                _popupSignalHits.set(popupSignalRule, (_popupSignalHits.get(popupSignalRule) || 0) + 1);
+                if (forceDebug) {
+                  console.log(formatLogMessage('debug', `${POPUP_TAG} [popup depth=${depth}] ${checkedRootDomain} matches known popunder pattern ${popupSignalRule} (${resourceType})${popupSignalCaptures ? '' : ' — signal only'}`));
+                }
+              }
+            }
+
+            if (!regexMatched && !(popupSignalCaptures && popupSignalRule)) return;
 
             // hasNetTools is the same flag the main handler uses (line ~2639).
             // When the site config carries whois/dig terms, regex match is
@@ -7052,7 +7140,30 @@ function setupFrameHandling(page, forceDebug) {
     }
     }
   }
-  
+
+  // $popup signal report. Printed outside the forceDebug block on purpose: a
+  // popup that reached a known popunder endpoint is a finding, not diagnostics,
+  // and capture_popups is already opt-in so this cannot appear unasked. The
+  // per-pattern breakdown stays behind --debug. Top 10 like blocked-stats, since
+  // one popunder chain can hit dozens of patterns.
+  if (_popupSignalHits.size > 0) {
+    let totalSignals = 0;
+    for (const n of _popupSignalHits.values()) totalSignals += n;
+    if (!silentMode) {
+      console.log(formatLogMessage('info', `${POPUP_TAG} ${_popupSignalHits.size} known popunder pattern(s) reached ${totalSignals} time(s) via popups`));
+    }
+    if (forceDebug) {
+      const sortedSignals = [..._popupSignalHits.entries()].sort((a, b) => b[1] - a[1]);
+      const topSignals = sortedSignals.slice(0, 10);
+      for (const [pattern, hits] of topSignals) {
+        console.log(formatLogMessage('debug', `${POPUP_TAG}   ${hits.toString().padStart(6)} × ${pattern}`));
+      }
+      if (sortedSignals.length > topSignals.length) {
+        console.log(formatLogMessage('debug', `${POPUP_TAG}   ... and ${sortedSignals.length - topSignals.length} more pattern(s)`));
+      }
+    }
+  }
+
   // Flush any remaining buffered log entries before compression/exit
   flushLogBuffersSync();
   if (_logFlushTimer) {
