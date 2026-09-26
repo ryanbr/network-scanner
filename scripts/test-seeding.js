@@ -259,6 +259,23 @@ async function startFixtureServer() {
       return;
     }
 
+    if (url.startsWith('/history-churn')) {
+      // Never reloads. Rewrites its own url repeatedly (what a framework does when
+      // it strips a tracking param or re-asserts a canonical url), then changes the
+      // hash. Counting 'framenavigated' reported this as a reload loop.
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<!doctype html><html><body><p>app</p><script>
+        var i = 0;
+        var t = setInterval(function () {
+          i++;
+          if (i <= 6) history.replaceState({}, '', location.pathname);
+          else if (i <= 9) location.hash = 'h' + i;
+          else clearInterval(t);
+        }, 60);
+      </script></body></html>`);
+      return;
+    }
+
     if (url.startsWith('/redirect-to-loop')) {
       // 302 into the looping route: a loop that only starts after a redirect used
       // to be invisible, because counting compared against the SCANNED url.
@@ -947,6 +964,36 @@ check('browser', 'a loop that starts after a redirect is still reported', async 
     watch.stop();
     await page.close();
     return 'redirect then loop: reported against the landed url';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'history rewrites are not mistaken for reloads', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // The page loads ONCE and then rewrites its own url six times and its hash
+    // three more. Measured against 'framenavigated', which fires for
+    // same-document navigation too, this was reported as a reload loop -- a
+    // warning that was simply false. Counting document loads fixes it.
+    const target = `${ctx.server.ipBase}/history-churn`;
+    const page = await browser.newPage();
+    const watch = watchForReloadLoop(page, { currentUrl: target, expectedLoads: 1, maxExtraReloads: 2 });
+
+    const { output } = await captureLogs(async () => {
+      await page.goto(target, { waitUntil: 'domcontentloaded' });
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+    });
+
+    assertEqual(watch.loads(), 1, 'one document load, however much history churn happened');
+    assertEqual(watch.reported(), false, 'no loop reported');
+    assertExcludes(output, 'navigated to itself', 'and nothing is logged');
+    // Proof the churn really happened, so this is not passing by doing nothing.
+    const changed = await page.evaluate(() => location.hash.startsWith('#h'));
+    assertEqual(changed, true, 'the page really did rewrite its history');
+    watch.stop();
+    await page.close();
+    return '9 history rewrites, 1 counted load, no report';
   } finally {
     await browser.close();
   }
