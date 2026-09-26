@@ -4,7 +4,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
 
 ## Project Structure
 
-- `nwss.js` — Main entry point (~5,800 lines). CLI args, URL processing, orchestration.
+- `nwss.js` — Main entry point (~7,200 lines). CLI args, URL processing, orchestration. `processUrl` is ~3,200 lines of it; the tractable extractions left are the popup cluster (~460 lines) and the request handler (~250), both needing an explicit context object for ~14 closure dependencies.
 - `config.json` — Default scan configuration (sites, filters, options).
 - `lib/` — 36 focused, single-purpose modules:
   - `fingerprint.js` — Bot detection evasion (device/GPU/timezone spoofing)
@@ -22,6 +22,8 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
   - `adblock.js` — Adblock filter parsing and validation (native JS engine). Also exports `createPopupSignalMatcher(lists)`, a standalone report-only matcher for `$popup` rules — neither engine can block those, so they are used as popunder-endpoint *signal* during popup capture. Standalone on purpose: it is called with the rust engine selected too
   - `adblock-rust.js` — Drop-in adblock.js replacement backed by Brave's `adblock-rs` Rust engine; same matcher shape (`shouldBlock`, `getStats`, `rules`) so callers swap with one `require()`
   - `cookies.js` / `storage.js` — Pre-navigation seeding of cookies and `localStorage`/`sessionStorage`, for gates that decide during the first document load. Both scope what they set to the `url` entry and reference-count teardown so concurrent same-host URLs can't tear down each other's state, and both resolve "which site is this" through `site-scope.js` — a seeded cookie defaults to `.` + the registrable domain, the same breadth the storage seed matches, so an apex↔www redirect keeps both (it used to keep storage and drop every cookie). `storage.js` seeds via `evaluateOnNewDocument` (storage is only reachable from a document on the origin) and matches on the registrable domain (via `psl`), not the origin or the exact hostname, so an http→https upgrade, a port change or a redirect to another subdomain still gets seeded, while a different registrable domain is refused
+  - `eval-on-doc.js` — Fetch/XHR interception injected before page scripts (`evaluateOnNewDocument: true` per site, or `--eval-on-doc`). Three strategies: browser health check, full injection, then a minimal fetch-only fallback — but never after a CDP/Protocol error, which means the browser link is broken. Extracted verbatim from `processUrl`; note its loop-protection assigns to `window.location.reload`/`replace`, which are `writable: false` in Chrome, so those guards are inert (the fetch/XHR wrappers after them work)
+  - `css-blocking.js` — `css_blocked` selector hiding, at both application points: `injectCssBlocking()` before navigation and `applyCssBlockingNow()` as a post-load fallback, plus the one `getCssBlockedSelectors()` gate both share
   - `site-scope.js` — Registrable-domain (eTLD+1) derivation via `psl`, shared by `cookies.js` and `storage.js`. `registrableDomain()` returns null when there is no wider scope than the host (IP literal, single-label host, bare public suffix) — for SETTING a scope; `siteScope()` falls back to the host itself — for MATCHING one
   - `validate_rules.js` — Domain and rule format validation
   - `colorize.js` — Console output formatting and colors
@@ -98,11 +100,12 @@ default so local dev doesn't silently drop the sandbox. The harness depends
 on `USER_AGENT_COLLECTIONS` exported from `lib/fingerprint.js` — keep that
 export in sync if the UA list changes.
 
-## Seeding Tests
+## Injection / Seeding Tests
 
-`scripts/test-seeding.js` is the assertion-based suite for the pre-seeding
-features (`cookies`, `local_storage`, `session_storage`, `$popup` capture
-signal). It exits non-zero on failure, so unlike `test-stealth.js` it is a gate,
+`scripts/test-seeding.js` is the assertion-based suite for everything nwss
+injects into a page before its own scripts run: `cookies`, `local_storage`,
+`session_storage`, `css_blocked`, Fetch/XHR interception and the `$popup`
+capture signal. It exits non-zero on failure, so unlike `test-stealth.js` it is a gate,
 not a report. Three groups, selectable with `--group=`:
 
 - `unit` — scope derivation, cookie/storage config normalisation, the signal
@@ -123,7 +126,8 @@ node scripts/test-seeding.js --list           # check names
 
 Every check pins a bug a review pass found, most of them things static reading
 got wrong. **When changing anything in `lib/cookies.js`, `lib/storage.js`,
-`lib/site-scope.js` or the popup-signal path, add a check here** — these
+`lib/site-scope.js`, `lib/css-blocking.js`, `lib/eval-on-doc.js` or the
+popup-signal path, add a check here** — these
 behaviours are set by Chrome and CDP, not by our code, so they cannot be
 verified by reading.
 

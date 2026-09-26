@@ -888,9 +888,9 @@ node scripts/test-stealth.js --help           # full flag list
 
 Set `PUPPETEER_NO_SANDBOX=1` when running as root (CI containers, some Docker setups). Off by default so local dev doesn't silently drop the Chromium sandbox.
 
-## Seeding Tests
+## Injection / Seeding Tests
 
-`scripts/test-seeding.js` is an assertion-based regression suite for the pre-seeding features — `cookies`, `local_storage`, `session_storage` and the `$popup` capture signal. Unlike the stealth harness it **does** assert: it exits 0 when every check passes and 1 on any failure, so it works as a gate before a release.
+`scripts/test-seeding.js` is an assertion-based regression suite for everything nwss injects into a page before its own scripts run — `cookies`, `local_storage`, `session_storage`, `css_blocked`, Fetch/XHR interception and the `$popup` capture signal. Unlike the stealth harness it **does** assert: it exits 0 when every check passes and 1 on any failure, so it works as a gate before a release.
 
 It runs at three levels: pure-function checks (scope derivation, config normalisation, signal matching), Puppeteer harnesses that exercise the real browser behaviour, and end-to-end `nwss.js` scans driven from generated configs. Fixture servers bind ephemeral ports and every config and filter list is generated into a temp directory, so it needs no scan config and no downloaded filter list.
 

@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * Pre-seeding regression suite — cookies, Web Storage and the $popup signal.
+ * Page-injection regression suite — cookies, Web Storage, CSS blocking,
+ * Fetch/XHR interception and the $popup signal.
  *
- * Covers lib/cookies.js, lib/storage.js, lib/site-scope.js and the popunder
- * signal path (lib/adblock.js's createPopupSignalMatcher plus nwss.js's
- * capture_popups_signal), at three levels: pure-function checks, Puppeteer
- * harnesses that exercise the real browser behaviour, and end-to-end nwss runs
- * driven from generated configs.
+ * Covers lib/cookies.js, lib/storage.js, lib/site-scope.js, lib/css-blocking.js,
+ * lib/eval-on-doc.js and the popunder signal path (lib/adblock.js's
+ * createPopupSignalMatcher plus nwss.js's capture_popups_signal), at three
+ * levels: pure-function checks, Puppeteer harnesses that exercise the real
+ * browser behaviour, and end-to-end nwss runs driven from generated configs.
+ *
+ * What ties these together: every one of them acts on a page BEFORE its own
+ * scripts run, which is the part no amount of reading can confirm.
  *
  * Purpose: every check here exists because a review pass found a real bug, and
  * most of them are things static reading got WRONG. A cookie without a leading
@@ -59,6 +63,8 @@ const { registrableDomain, siteScope } = require('../lib/site-scope');
 const { normalizeCookies, applyCookies, applySiteCookies, retainSeeded, removeCookies } = require('../lib/cookies');
 const { applySiteStorage, retainSeeded: retainSeededStorage, removeStorage } = require('../lib/storage');
 const { createPopupSignalMatcher, parseAdblockRules } = require('../lib/adblock');
+const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = require('../lib/css-blocking');
+const { installFetchXhrInterception } = require('../lib/eval-on-doc');
 const { validateSiteConfig, normalizeSiteConfig } = require('../lib/validate_rules');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -448,6 +454,19 @@ check('unit', 'cookies: a repeated identity is deduped and reported', async () =
   return 'deduped with a warning; distinct domains untouched';
 });
 
+check('unit', 'css blocking: the selector gate', async () => {
+  // One gate for both call sites (pre-navigation and runtime), so they cannot
+  // disagree about what counts as configured.
+  assertEqual(getCssBlockedSelectors({ css_blocked: ['.ad'] }), ['.ad'], 'array of one');
+  assertEqual(getCssBlockedSelectors({ css_blocked: [] }), null, 'empty array is nothing to block');
+  assertEqual(getCssBlockedSelectors({}), null, 'absent key');
+  assertEqual(getCssBlockedSelectors({ css_blocked: null }), null, 'null');
+  // A bare string is what normalizeSiteConfig coerces to an array precisely
+  // because this Array.isArray gate would otherwise skip it in silence.
+  assertEqual(getCssBlockedSelectors({ css_blocked: '.ad' }), null, 'a bare string is not accepted here');
+  return '5 shapes';
+});
+
 check('unit', 'popup signal: parses $popup rules that blocking discards', async () => {
   const listPath = path.join(os.tmpdir(), `nwss-seed-list-${process.pid}.txt`);
   fs.writeFileSync(listPath, TEST_LIST);
@@ -693,6 +712,99 @@ check('browser', 'a cookie teardown failure is reported, not swallowed', async (
     assertEqual((await realContext.cookies()).length, 2, 'the cookies are indeed still there');
     await ctxt.close();
     return 'warns and states the consequence';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'css blocking hides elements before and after load', async () => {
+  const browser = await launchBrowser();
+  try {
+    // A data: URL, not a fixture route: this feature injects a stylesheet into
+    // whatever document loads, and where that document came from is irrelevant to
+    // it. Keeps the check independent of the fixture server.
+    const PAGE = 'data:text/html,<div class="ad-banner">ad</div><p>content</p>';
+    const selectors = getCssBlockedSelectors({ css_blocked: ['.ad-banner'] });
+    const hidden = (page) => page.evaluate(() =>
+      getComputedStyle(document.querySelector('.ad-banner')).display);
+
+    // Pre-navigation injection: in force before the page's own scripts run.
+    const injected = await browser.newPage();
+    const inj = await injectCssBlocking(injected, selectors, { currentUrl: PAGE, forceDebug: false });
+    assertEqual(inj.installed, true, 'injection reported installed');
+    await injected.goto(PAGE, { waitUntil: 'domcontentloaded' });
+    assertEqual(await hidden(injected), 'none', 'element hidden by the injected stylesheet');
+    await injected.close();
+
+    // Runtime fallback, on a page that never received the injection.
+    const runtime = await browser.newPage();
+    await runtime.goto(PAGE, { waitUntil: 'domcontentloaded' });
+    assertEqual(await hidden(runtime), 'block', 'visible without either path');
+    await applyCssBlockingNow(runtime, selectors, { currentUrl: PAGE });
+    assertEqual(await hidden(runtime), 'none', 'element hidden by the runtime fallback');
+
+    // Id-guarded, so running it again adds no second stylesheet.
+    await applyCssBlockingNow(runtime, selectors, { currentUrl: PAGE });
+    const styleCount = await runtime.evaluate(() => document.querySelectorAll('#css-blocker-runtime').length);
+    assertEqual(styleCount, 1, 'the runtime stylesheet is not duplicated');
+    await runtime.close();
+    return 'hidden pre-nav and at runtime, no duplicate stylesheet';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'fetch/XHR interception installs its wrappers', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // Opt-in per site.
+    const page = await browser.newPage();
+    const res = await installFetchXhrInterception(page, {
+      siteConfig: { evaluateOnNewDocument: true },
+      currentUrl: `${ctx.server.ipBase}/gate`,
+      browserInstance: browser,
+      globalEvalOnDoc: false,
+      forceDebug: false
+    });
+    assertEqual([res.requested, res.injected, res.strategy], [true, true, 'full'], 'full injection reported');
+    await page.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    const probe = await page.evaluate(() => ({
+      applied: window.__nwss_injection_applied === true,
+      fetchWrapped: String(window.fetch).includes('originalFetch'),
+      xhrWrapped: String(XMLHttpRequest.prototype.open).includes('originalXHROpen'),
+      // Pinning CURRENT behaviour, which is not what the injected code reads like:
+      // its loop protection assigns to window.location.reload/replace, and those
+      // are writable:false, configurable:false on Location.prototype in Chrome.
+      // The injected script is sloppy mode, so the assignment neither throws nor
+      // takes effect -- measured -- which means the reload/replace guards have
+      // never done anything, while the fetch/XHR wrappers after them do work.
+      // Left as-is because this was extracted verbatim; if the guards are ever
+      // made real, this expectation flips to true and the check will say so.
+      reloadGuardDead: !String(window.location.reload).includes('reloadCount')
+    }));
+    assertEqual(probe, { applied: true, fetchWrapped: true, xhrWrapped: true, reloadGuardDead: true },
+      'fetch/XHR wrappers present; location guards inert as they have always been');
+    await page.close();
+
+    // The global flag alone is enough.
+    const viaFlag = await browser.newPage();
+    const flagRes = await installFetchXhrInterception(viaFlag, {
+      siteConfig: {}, currentUrl: `${ctx.server.ipBase}/gate`, browserInstance: browser, globalEvalOnDoc: true
+    });
+    assertEqual(flagRes.injected, true, '--eval-on-doc alone injects');
+    await viaFlag.close();
+
+    // Neither set: nothing is touched at all.
+    const untouched = await browser.newPage();
+    const off = await installFetchXhrInterception(untouched, {
+      siteConfig: {}, currentUrl: `${ctx.server.ipBase}/gate`, browserInstance: browser, globalEvalOnDoc: false
+    });
+    assertEqual([off.requested, off.injected], [false, false], 'no injection when unasked');
+    await untouched.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    assertEqual(await untouched.evaluate(() => window.__nwss_injection_applied === true), false,
+      'page is left alone when neither the site nor the flag asks');
+    await untouched.close();
+    return 'site opt-in, global flag, and off';
   } finally {
     await browser.close();
   }
