@@ -225,7 +225,13 @@ async function startFixtureServer() {
       return;
     }
 
-    if (url.startsWith('/redirect')) {
+    // Exact match, not a prefix: '/redirect-to-loop'.startsWith('/redirect') is
+    // true, so a prefix test here silently swallowed that route and sent the
+    // browser to www.<SITE> instead -- which only resolves under the resolver
+    // rules THIS route's check passes, so the symptom was ERR_NAME_NOT_RESOLVED
+    // on a loopback address in an unrelated check. Routes below are matched by
+    // prefix only where they take a query string.
+    if (url === '/redirect') {
       res.writeHead(302, { location: `http://www.${SITE}:${server.address().port}/landed` });
       res.end();
       return;
@@ -250,6 +256,15 @@ async function startFixtureServer() {
       } catch (_) { /* fall back to the relative default */ }
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end(`<!doctype html><html><body>opener<script>window.open(${JSON.stringify(target)},'_blank');</script></body></html>`);
+      return;
+    }
+
+    if (url.startsWith('/redirect-to-loop')) {
+      // 302 into the looping route: a loop that only starts after a redirect used
+      // to be invisible, because counting compared against the SCANNED url.
+      const tag = new URL(url, 'http://x').searchParams.get('tag') || 'redir';
+      res.writeHead(302, { location: `/selfreload?tag=${tag}` });
+      res.end();
       return;
     }
 
@@ -904,6 +919,34 @@ check('browser', 'reload loop reporting ignores ordinary pages and intended relo
     reloadWatch.stop();
     await reloaded.close();
     return 'quiet page and 3 intended reloads both ignored';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'a loop that starts after a redirect is still reported', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // The watcher is installed against the CONFIG url, as nwss installs it, but
+    // the loop happens on the url the redirect lands on. Counting against the
+    // scanned url alone reported 0 of 14 loads -- measured before this was fixed.
+    const configUrl = `${ctx.server.ipBase}/redirect-to-loop?tag=redir`;
+    const landedUrl = `${ctx.server.ipBase}/selfreload?tag=redir`;
+    const page = await browser.newPage();
+    const watch = watchForReloadLoop(page, { currentUrl: configUrl, expectedLoads: 1, maxExtraReloads: 2 });
+
+    const { output } = await captureLogs(async () => {
+      await page.goto(configUrl, { waitUntil: 'domcontentloaded' });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    });
+
+    assert(watch.reported(), 'the post-redirect loop was detected');
+    assertEqual(watch.loopedUrl(), landedUrl, 'the looping url is identified, not the scanned one');
+    assertIncludes(output, 'reached from', 'the message says where the looping url came from');
+    assertIncludes(output, configUrl, 'and names the scanned url too');
+    watch.stop();
+    await page.close();
+    return 'redirect then loop: reported against the landed url';
   } finally {
     await browser.close();
   }
