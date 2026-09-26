@@ -6054,10 +6054,16 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
 
+        // Out of the keepBrowserOpen branch below: _inFlightPages drives the hang
+        // probe, which exists for pages still being processed. A finished page is
+        // not in flight, and leaving it in the set under --keep-open meant the
+        // probe kept polling pages the scan was done with -- and could strike one
+        // out and close it, which is the opposite of what that flag asks for.
+        _inFlightPages.delete(page);
+
         if (!keepBrowserOpen) {
           try {
             untrackPage(page);
-            _inFlightPages.delete(page);
             await page.close();
             if (forceDebug) console.log(formatLogMessage('debug', `Page closed for ${currentUrl}`));
           } catch (pageCloseErr) {
