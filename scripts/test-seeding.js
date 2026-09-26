@@ -429,6 +429,25 @@ check('unit', 'cookies: a relative path is corrected before the browser sees it'
   return 'relative corrected, absolute preserved';
 });
 
+check('unit', 'cookies: a repeated identity is deduped and reported', async () => {
+  // One cookie in the browser, so the later entry silently won and the earlier
+  // vanished. lib/storage.js has always warned about this shape for storage keys;
+  // the two modules disagreed until 2026-09-26.
+  const dup = normalizeCookies([{ name: 'dup', value: 'first' }, { name: 'dup', value: 'second' }], 'https://www.domain.com/');
+  assertEqual(dup.cookies.length, 1, 'duplicate identities collapse to one cookie');
+  assertEqual(dup.cookies[0].value, 'second', 'the last declaration wins, as setCookie would');
+  assert(dup.errors.some(e => e.includes('declared more than once')), 'the collision is reported');
+
+  // Same NAME on different domains is two real cookies, not a collision.
+  const distinct = normalizeCookies([
+    { name: 'same', value: '1', domain: '.a.test' },
+    { name: 'same', value: '2', domain: '.b.test' }
+  ], 'https://www.domain.com/');
+  assertEqual(distinct.cookies.length, 2, 'same name on different domains is kept');
+  assertEqual(distinct.errors.length, 0, 'and is not reported');
+  return 'deduped with a warning; distinct domains untouched';
+});
+
 check('unit', 'popup signal: parses $popup rules that blocking discards', async () => {
   const listPath = path.join(os.tmpdir(), `nwss-seed-list-${process.pid}.txt`);
   fs.writeFileSync(listPath, TEST_LIST);
