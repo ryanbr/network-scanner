@@ -2496,8 +2496,7 @@ function setupFrameHandling(page, forceDebug) {
   if (forceDebug) console.log(formatLogMessage('debug', 'Cleaning up any leftover temp files from previous runs...'));
   await cleanupChromeTempFiles({ 
     includeSnapTemp: true,  // Always clean snap dirs on startup
-    forceDebug,
-    comprehensive: true     // Always comprehensive on startup to clean leftovers
+    forceDebug
   });
 
   // Set up cleanup on process termination
@@ -2526,15 +2525,13 @@ function setupFrameHandling(page, forceDebug) {
           timeout: 5000,
           exitOnFailure: false,
           cleanTempFiles: true,
-          comprehensiveCleanup: true,  // Always comprehensive on emergency
           userDataDir: browser._nwssUserDataDir
         });
       } else {
         // Browser already dead, just clean temp files
         await cleanupChromeTempFiles({ 
           includeSnapTemp: true, 
-          forceDebug,
-          comprehensive: true 
+          forceDebug
         });
       }
     } catch (emergencyErr) {
@@ -6194,8 +6191,7 @@ function setupFrameHandling(page, forceDebug) {
           forceDebug,
           timeout: 10000,
           exitOnFailure: false,
-          cleanTempFiles: true,
-          comprehensiveCleanup: removeTempFiles  // Respect --remove-tempfiles during restarts
+          cleanTempFiles: true
         });
 
         // Clean up the specific user data directory
@@ -6205,8 +6201,7 @@ function setupFrameHandling(page, forceDebug) {
         if (removeTempFiles) {
           await cleanupChromeTempFiles({
             includeSnapTemp: true,
-            forceDebug,
-            comprehensive: true
+            forceDebug
           });
         }
 
@@ -6238,7 +6233,7 @@ function setupFrameHandling(page, forceDebug) {
       try {
         await handleBrowserExit(browser, {
           forceDebug, timeout: 10000, exitOnFailure: false,
-          cleanTempFiles: true, comprehensiveCleanup: removeTempFiles
+          cleanTempFiles: true
         });
         if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
       } catch (proxyRestartErr) {
@@ -6688,14 +6683,13 @@ function setupFrameHandling(page, forceDebug) {
           if (forceDebug) console.log(formatLogMessage('debug', `Page cleanup during emergency restart failed: ${pageCloseErr.message}`));
         }
 
-        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true, comprehensiveCleanup: removeTempFiles });
+        await handleBrowserExit(browser, { forceDebug, timeout: 5000, exitOnFailure: false, cleanTempFiles: true });
         if (userDataDir) await cleanupUserDataDir(userDataDir, forceDebug);
         // Additional cleanup after emergency restart
         if (removeTempFiles) {
           await cleanupChromeTempFiles({
             includeSnapTemp: true,
-            forceDebug,
-            comprehensive: true
+            forceDebug
           });
         }
         browser = await createBrowser(currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : []);
@@ -7039,7 +7033,6 @@ function setupFrameHandling(page, forceDebug) {
       timeout: 10000,
       exitOnFailure: true,
       cleanTempFiles: true,
-      comprehensiveCleanup: removeTempFiles,
       userDataDir: browser._nwssUserDataDir,
       verbose: !silentMode && removeTempFiles
     });
@@ -7058,8 +7051,7 @@ function setupFrameHandling(page, forceDebug) {
   if (forceDebug) console.log(formatLogMessage('debug', 'Performing final aggressive temp file cleanup...'));
   await cleanupChromeTempFiles({
     includeSnapTemp: true,
-    forceDebug,
-    comprehensive: true
+    forceDebug
   });
   await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY); // Give filesystem time to sync
 
