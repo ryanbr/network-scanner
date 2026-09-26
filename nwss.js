@@ -13,7 +13,7 @@ const path = require('path');
 const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonExistenceError, dohTemplatesForResolvers } = require('./lib/dns');
 // Fetch/XHR interception + CSS element blocking: both are page injections that
 // used to sit inline in processUrl.
-const { installFetchXhrInterception, installReloadLoopGuard } = require('./lib/eval-on-doc');
+const { installFetchXhrInterception, watchForReloadLoop } = require('./lib/eval-on-doc');
 const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = require('./lib/css-blocking');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
@@ -2641,7 +2641,7 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     let page = null;
-    let reloadLoopGuard = null;
+    let reloadLoopWatch = null;
     // Hoisted so the finally below can undo it: cookies seeded for this URL are
     // removed there, and a const inside the try is not in scope in the finally.
     let seededCookies = [];
@@ -2905,17 +2905,15 @@ function setupFrameHandling(page, forceDebug) {
         forceDebug
       });
 
-      // Reload-loop guard, on the same opt-in the injection uses -- it was part of
-      // that injected script until it turned out it could never have worked
-      // (location.reload is [[Unforgeable]]). Kept behind the same flag rather
-      // than made global: a scan that never asked for this behaviour should not
-      // start getting it. `reload: N` is passed through so the scan's own reloads
-      // cannot trip it. Torn down in the finally with the page.
+      // Reload-loop reporting, on the same opt-in the injection uses -- it was
+      // part of that injected script until it turned out it could never have
+      // worked (location.reload is [[Unforgeable]]). Observation only: it warns
+      // and leaves the page alone. `reload: N` is passed through so the scan's own
+      // reloads cannot trigger it. Detached in the finally with the page.
       if (evalOnDocResult.requested) {
-        reloadLoopGuard = await installReloadLoopGuard(page, {
+        reloadLoopWatch = watchForReloadLoop(page, {
           currentUrl,
-          expectedLoads: Math.max(1, parseInt(siteConfig.reload, 10) || 1),
-          forceDebug
+          expectedLoads: Math.max(1, parseInt(siteConfig.reload, 10) || 1)
         });
       }
 
@@ -5824,11 +5822,10 @@ function setupFrameHandling(page, forceDebug) {
         // out and close it, which is the opposite of what that flag asks for.
         _inFlightPages.delete(page);
 
-        // Detach the reload-loop guard's listener and CDP session while the page
-        // is still alive; it is a no-op if it was never installed.
-        if (reloadLoopGuard) {
-          try { await reloadLoopGuard.stop(); } catch (_) { /* page already gone */ }
-          reloadLoopGuard = null;
+        // Detach the reload-loop watcher's listener; no-op if never installed.
+        if (reloadLoopWatch) {
+          try { reloadLoopWatch.stop(); } catch (_) { /* page already gone */ }
+          reloadLoopWatch = null;
         }
 
         if (!keepBrowserOpen) {

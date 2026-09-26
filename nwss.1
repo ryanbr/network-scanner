@@ -536,7 +536,7 @@ Boolean. Spoof Brave browser detection.
 
 .TP
 .B evaluateOnNewDocument
-Boolean. Inject Fetch/XHR interceptor scripts into page context. This also enables the reload-loop guard: when the page navigates to its own URL more often than \fBreload\fR asks for (plus two), script execution is disabled to break the loop. The document is kept, so \fBgrep\fR, \fBsearchstring\fR and \fBscreenshot\fR still see the real page \(em aborting the navigation instead leaves a browser error page. Because it counts navigations rather than patching the page, it catches \fBlocation.reload\fR, \fBlocation.replace\fR, an \fBhref\fR assignment and a \fB<meta refresh>\fR equally.
+Boolean. Inject Fetch/XHR interceptor scripts into page context. This also enables reload-loop reporting: when the page navigates to its own URL more often than \fBreload\fR asks for (plus two), nwss warns once that the page appears to be reloading itself, and \fBleaves it running\fR \(em so that URL may spend its whole timeout reloading, with its requests repeating each time. Reporting rather than intervening is deliberate: aborting the navigation leaves a browser error page where the site should be, and disabling script execution would stop every other script on the page as well. Because it counts navigations rather than patching the page, it sees \fBlocation.reload\fR, \fBlocation.replace\fR, an \fBhref\fR assignment and a \fB<meta refresh>\fR equally.
 
 .TP
 .B cdp

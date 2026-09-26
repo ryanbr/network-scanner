@@ -64,7 +64,7 @@ const { normalizeCookies, applyCookies, applySiteCookies, retainSeeded, removeCo
 const { applySiteStorage, retainSeeded: retainSeededStorage, removeStorage } = require('../lib/storage');
 const { createPopupSignalMatcher, parseAdblockRules } = require('../lib/adblock');
 const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = require('../lib/css-blocking');
-const { installFetchXhrInterception, installReloadLoopGuard } = require('../lib/eval-on-doc');
+const { installFetchXhrInterception, watchForReloadLoop } = require('../lib/eval-on-doc');
 const { validateSiteConfig, normalizeSiteConfig } = require('../lib/validate_rules');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
@@ -200,7 +200,10 @@ async function captureLogs(fn) {
  */
 async function startFixtureServer() {
   const hits = [];
-  let selfReloadHits = 0;
+  // Per-tag, NOT global: one shared counter meant the first check to use this
+  // route burned the cap and every later check got a page that never reloaded --
+  // which looked exactly like a broken watcher.
+  const selfReloadHits = new Map();
   const SELF_RELOAD_CAP = 12;
   // Which e2e check's readback log to append to. Mutable so each run reads back
   // only its own page loads.
@@ -253,13 +256,15 @@ async function startFixtureServer() {
     if (url.startsWith('/selfreload')) {
       // Reloads itself on a short timer. The count in the body lets a check see
       // how many times the loop actually ran.
-      selfReloadHits++;
-      // Self-limiting at SELF_RELOAD_CAP: a check that deliberately runs WITHOUT
-      // the guard still has to finish, and an unbounded loop would just burn the
+      const tag = new URL(url, 'http://x').searchParams.get('tag') || 'default';
+      const seen = (selfReloadHits.get(tag) || 0) + 1;
+      selfReloadHits.set(tag, seen);
+      // Self-limiting at SELF_RELOAD_CAP: a check that deliberately runs with no
+      // watcher still has to finish, and an unbounded loop would just burn the
       // scan's timeout instead of failing usefully.
-      const keepGoing = selfReloadHits < SELF_RELOAD_CAP;
+      const keepGoing = seen < SELF_RELOAD_CAP;
       res.writeHead(200, { 'content-type': 'text/html' });
-      res.end(`<!doctype html><html><body><p id="n">${selfReloadHits}</p>
+      res.end(`<!doctype html><html><body><p id="n">${seen}</p>
         ${keepGoing ? '<script>setTimeout(function(){ location.reload(); }, 120);</script>' : ''}
         </body></html>`);
       return;
@@ -288,7 +293,7 @@ async function startFixtureServer() {
     port,
     hits,
     setLog: (p) => { logPath = p; },
-    selfReloadHits: () => selfReloadHits,
+    selfReloadHits: (tag = 'default') => selfReloadHits.get(tag) || 0,
     ipBase: `http://127.0.0.1:${port}`,
     // A second loopback IP: a distinct root domain from 127.0.0.1, so a popup
     // there is third-party to the opener and survives first-party cleanup.
@@ -828,76 +833,77 @@ check('browser', 'fetch/XHR interception installs its wrappers', async (ctx) => 
   }
 });
 
-check('browser', 'reload-loop guard breaks a self-reloading page', async (ctx) => {
+check('browser', 'reload loop is reported once and the page is left alone', async (ctx) => {
   const browser = await launchBrowser();
   try {
-    const target = `${ctx.server.ipBase}/selfreload`;
+    const target = `${ctx.server.ipBase}/selfreload?tag=browser`;
     const page = await browser.newPage();
-    const guard = await installReloadLoopGuard(page, { currentUrl: target, expectedLoads: 1, maxExtraReloads: 2 });
+    const watch = watchForReloadLoop(page, { currentUrl: target, expectedLoads: 1, maxExtraReloads: 2 });
 
-    const before = ctx.server.selfReloadHits();
+    const before = ctx.server.selfReloadHits('browser');
     const { output } = await captureLogs(async () => {
       await page.goto(target, { waitUntil: 'domcontentloaded' });
-      // 2s at a 120ms reload interval is ~16 loads if nothing intervenes (the
-      // fixture caps itself at 12 so an unguarded run still terminates).
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // The fixture reloads every 120ms and caps itself at SELF_RELOAD_CAP, so
+      // this window is long enough for it to run itself out.
+      await new Promise((resolve) => setTimeout(resolve, 2500));
     });
-    const loadsServed = ctx.server.selfReloadHits() - before;
+    const loadsServed = ctx.server.selfReloadHits('browser') - before;
 
-    assert(guard.tripped(), 'the guard fired');
-    assertIncludes(output, 'reloaded itself', 'the trip is reported');
-    assertIncludes(output, 'script execution disabled', 'the message says what was done');
-    assert(loadsServed < 8, `loop was broken (server served ${loadsServed} loads, unguarded would be ~16)`);
+    assert(watch.reported(), 'the loop was detected');
+    assertIncludes(output, 'navigated to itself', 'the loop is reported');
+    assertIncludes(output, 'Left running', 'the message is explicit that nothing was stopped');
 
-    // The document must survive: aborting the navigation instead would have left
-    // an error page, which is what makes that approach unusable here.
-    const state = await page.evaluate(() => ({
-      url: location.href,
-      hasMarker: !!document.querySelector('#n'),
-      contentLen: document.documentElement.outerHTML.length
-    }));
-    assertEqual(state.url, target, 'still on the scanned URL, not an error page');
-    assertEqual(state.hasMarker, true, 'the document is intact');
-    assert(state.contentLen > 50, 'page content is still readable');
-    assert(await page.content().then(c => c.includes('id="n"')), 'page.content() still works for grep/searchstring');
+    // Reported ONCE, however long the loop runs: without the latch this line
+    // would repeat for every reload for the rest of the scan.
+    const mentions = output.split('\n').filter(l => l.includes('navigated to itself')).length;
+    assertEqual(mentions, 1, 'reported exactly once');
 
-    await guard.stop();
+    // And the page really is untouched: the loop kept going past the report, and
+    // script execution still works.
+    assert(loadsServed > 4, `the loop was NOT interfered with (server served ${loadsServed} loads after the report)`);
+    assertEqual(await page.evaluate(() => 2 + 2), 4, 'script execution left enabled');
+    const state = await page.evaluate(() => ({ url: location.href, hasMarker: !!document.querySelector('#n') }));
+    assertEqual(state.url, target, 'still on the scanned URL');
+    assertEqual(state.hasMarker, true, 'document intact');
+
+    watch.stop();
     await page.close();
-    return `tripped after ${loadsServed} loads, document intact`;
+    return `reported once after ${loadsServed} loads, page untouched`;
   } finally {
     await browser.close();
   }
 });
 
-check('browser', 'reload-loop guard leaves ordinary pages and intended reloads alone', async (ctx) => {
+check('browser', 'reload loop reporting ignores ordinary pages and intended reloads', async (ctx) => {
   const browser = await launchBrowser();
   try {
     const target = `${ctx.server.ipBase}/gate`;
 
-    // A page that does not reload itself must never trip it.
+    // A page that does not reload itself must never be reported.
     const quiet = await browser.newPage();
-    const quietGuard = await installReloadLoopGuard(quiet, { currentUrl: target, expectedLoads: 1, maxExtraReloads: 2 });
-    await quiet.goto(target, { waitUntil: 'domcontentloaded' });
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    assertEqual(quietGuard.tripped(), false, 'no trip on a page that loads once');
-    assertEqual(quietGuard.loads(), 1, 'one load counted');
-    await quietGuard.stop();
+    const quietWatch = watchForReloadLoop(quiet, { currentUrl: target, expectedLoads: 1, maxExtraReloads: 2 });
+    const quietLogs = await captureLogs(async () => {
+      await quiet.goto(target, { waitUntil: 'domcontentloaded' });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    });
+    assertEqual(quietWatch.reported(), false, 'no report for a page that loads once');
+    assertEqual(quietWatch.loads(), 1, 'one load counted');
+    assertExcludes(quietLogs.output, 'navigated to itself', 'and nothing is logged');
+    quietWatch.stop();
     await quiet.close();
 
-    // The scan's OWN reloads (reload: N) must not trip it either -- three
+    // The scan's OWN reloads (reload: N) must not trigger it either -- three
     // deliberate loads with expectedLoads: 3 stays inside the limit.
     const reloaded = await browser.newPage();
-    const reloadGuard = await installReloadLoopGuard(reloaded, { currentUrl: target, expectedLoads: 3, maxExtraReloads: 2 });
+    const reloadWatch = watchForReloadLoop(reloaded, { currentUrl: target, expectedLoads: 3, maxExtraReloads: 2 });
     await reloaded.goto(target, { waitUntil: 'domcontentloaded' });
     await reloaded.reload({ waitUntil: 'domcontentloaded' });
     await reloaded.reload({ waitUntil: 'domcontentloaded' });
-    assertEqual(reloadGuard.loads(), 3, 'three intended loads counted');
-    assertEqual(reloadGuard.tripped(), false, 'intended reloads do not trip the guard');
-    // Script still runs, i.e. nothing was disabled behind our back.
-    assertEqual(await reloaded.evaluate(() => 2 + 2), 4, 'script execution untouched');
-    await reloadGuard.stop();
+    assertEqual(reloadWatch.loads(), 3, 'three intended loads counted');
+    assertEqual(reloadWatch.reported(), false, 'intended reloads are not reported');
+    reloadWatch.stop();
     await reloaded.close();
-    return 'quiet page and 3 intended reloads both untouched';
+    return 'quiet page and 3 intended reloads both ignored';
   } finally {
     await browser.close();
   }
@@ -1052,23 +1058,24 @@ adblock.createPopupSignalMatcher = (...a) => Object.assign({}, orig(...a), {
   return 'capture preserved, failure reported';
 });
 
-check('e2e', 'a scan installs the reload-loop guard only when asked', async (ctx) => {
+check('e2e', 'a scan reports a reload loop only when asked', async (ctx) => {
   const site = {
-    url: `${ctx.server.ipBase}/selfreload`,
+    // Its own reload budget, and a second one for the control run below.
+    url: `${ctx.server.ipBase}/selfreload?tag=e2e-on`,
     capture_popups: false,
     filterRegex: ['/matches-nothing/']
   };
   // evaluateOnNewDocument opts into the injection, and the guard rides with it.
   const on = await runNwss(ctx, { sites: [{ ...site, evaluateOnNewDocument: true }] }, ['--debug']);
-  assertIncludes(on.stdout, 'reloaded itself', 'the guard reports the loop during a real scan');
+  assertIncludes(on.stdout, 'navigated to itself', 'the loop is reported during a real scan');
   assertIncludes(on.stdout, 'Scan completed', 'and the scan still completes');
 
   // Without the opt-in, nothing is installed and nothing is reported. The fixture
   // caps its own reloads, so this run terminates on its own.
-  const off = await runNwss(ctx, { sites: [site] }, ['--debug']);
-  assertExcludes(off.stdout, 'reloaded itself', 'no guard when the feature was not requested');
+  const off = await runNwss(ctx, { sites: [{ ...site, url: `${ctx.server.ipBase}/selfreload?tag=e2e-off` }] }, ['--debug']);
+  assertExcludes(off.stdout, 'navigated to itself', 'nothing reported when the feature was not requested');
   assertIncludes(off.stdout, 'Scan completed', 'that scan completes too');
-  return 'installed with the opt-in, absent without it';
+  return 'reported with the opt-in, silent without it';
 });
 
 check('e2e', '--validate-config accepts a cookie + storage config', async (ctx) => {

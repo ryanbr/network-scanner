@@ -318,7 +318,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 | `clear_sitedata`     | Boolean | `false` | Clear all cookies, cache, storage before each load |
 | `forcereload`        | Boolean or Array | `false` | Force cache-clearing reload for all URLs (`true`) or specific domains (`["domain1.com"]`) |
 | `isBrave`            | Boolean | `false` | Spoof Brave browser detection |
-| `evaluateOnNewDocument` | Boolean | `false` | Inject fetch/XHR interceptor in page. Also enables the reload-loop guard: if the page navigates to its own URL more times than `reload` asks for (plus 2), script execution is disabled to break the loop, keeping the document so grep/searchstring/screenshot still see the real page. Counts navigations, so it catches `location.reload`, `replace`, `href` and `<meta refresh>` alike |
+| `evaluateOnNewDocument` | Boolean | `false` | Inject fetch/XHR interceptor in page. Also enables reload-loop reporting: if the page navigates to its own URL more times than `reload` asks for (plus 2), nwss warns once that it looks like a reload loop and **leaves the page running** — that URL may then spend its whole timeout reloading. Counts navigations, so it sees `location.reload`, `replace`, `href` and `<meta refresh>` alike |
 | `cdp`                | Boolean | `false` | Enable CDP logging for this site |
 | `cdp_specific`       | String or Array | - | Enable CDP logging only for specific domains in the URL list. A bare string is treated as one domain |
 | `css_blocked`        | String or Array | - | CSS selectors to hide elements. A bare string is treated as one selector |
