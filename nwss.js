@@ -5625,7 +5625,8 @@ function setupFrameHandling(page, forceDebug) {
         dnsmasqOldMode,
         unboundMode,
         privoxyMode,
-        piholeMode
+        piholeMode,
+        forceDebug // so formatDomain can say which keys it refused to emit
       };
         // Drain pending dig/whois handlers BEFORE snapshotting matchedDomains.
         // Without this, late-completing async validations (request fired near
@@ -5698,7 +5699,8 @@ function setupFrameHandling(page, forceDebug) {
           dnsmasqOldMode,
           unboundMode,
           privoxyMode,
-          piholeMode
+          piholeMode,
+          forceDebug // so formatDomain can say which keys it refused to emit
         };
         const formattedRules = formatRules(matchedDomains, siteConfig, globalOptions);
         if (forceDebug) console.log(formatLogMessage('debug', `Saving ${formattedRules.length} rules despite page load failure`));
