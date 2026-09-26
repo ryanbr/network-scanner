@@ -127,6 +127,15 @@ got wrong. **When changing anything in `lib/cookies.js`, `lib/storage.js`,
 behaviours are set by Chrome and CDP, not by our code, so they cannot be
 verified by reading.
 
+After adding a check, confirm it FAILS with the fix reverted — a check that
+cannot fail is decoration. Mutate by removing or inverting the guard itself
+(rethrow from the catch, negate the condition); never add a failure *inside* the
+region the guard protects, or the guard catches it and the run reports a coverage
+gap that does not exist. The suite's ten existing checks were verified this way
+on 2026-09-26. Done ad hoc rather than with a committed tool on purpose: a
+mutation script is a list of exact source strings, which rot into silent
+no-op "skips" on the next refactor of the files they target.
+
 ## Files to Ignore
 
 - `node_modules/**`
