@@ -903,6 +903,12 @@ node scripts/test-seeding.js --verbose        # per-check detail
 node scripts/test-seeding.js --keep           # keep the temp fixtures for inspection
 ```
 
+`scripts/test-adblock-parity.js` is the companion suite for the two adblock engines: it asserts that `lib/adblock.js` and `lib/adblock-rust.js` reach the same verdict, since `--adblock-engine` defaults to whichever is installed and a disagreement between them silently changes what a scan blocks. It runs in under a second with no browser, skips when `adblock-rs` isn't installed, and its `asymmetries` group records the differences that genuinely exist rather than hiding them.
+
+```bash
+node scripts/test-adblock-parity.js
+```
+
 Every check exists because a review pass found a real bug, and most pin something static reading got wrong: a cookie `domain` without a leading dot is host-only on the CDP path (unlike the same string in a `Set-Cookie` header), one rejected cookie used to reject the whole batch, `DOMStorage` removal resolves through the inspected target's frame tree so a closed seeding page stranded the keys, and a throwing signal matcher discarded a capture the page had already matched. Add a check here rather than a comment when fixing anything in this area.
 
 ---

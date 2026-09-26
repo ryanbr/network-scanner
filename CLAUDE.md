@@ -140,6 +140,34 @@ on 2026-09-26. Done ad hoc rather than with a committed tool on purpose: a
 mutation script is a list of exact source strings, which rot into silent
 no-op "skips" on the next refactor of the files they target.
 
+## Adblock Parity Tests
+
+`scripts/test-adblock-parity.js` asserts that `lib/adblock.js` and
+`lib/adblock-rust.js` return the same VERDICT (`blocked`), not the same `reason` —
+each names its own matching bucket. It exists because the two are swapped by one
+`require()` and `--adblock-engine` defaults to whichever loads, so a scan's
+blocking depends on which engine ran, and their disagreements are silent.
+
+```bash
+node scripts/test-adblock-parity.js                 # ~0.5s, no browser
+node scripts/test-adblock-parity.js --group=corpus  # verdicts | corpus | asymmetries
+```
+
+Skips when `adblock-rs` is absent (optional dep) and the easylist-backed checks
+skip without `./easylist.txt` (untracked). The `asymmetries` group pins the
+differences that DO exist, measured: an empty `resourceType` blocks a
+type-restricted rule in the JS engine but not in rust (nwss always has a type, so
+it is recorded rather than fixed), and for `document` requests the JS engine blocks
+where rust does not while rust is never stricter — that direction is asserted,
+because nwss never aborts a main-frame document and an ad iframe arrives as
+`sub_frame`, which must agree exactly.
+
+**A directional assertion needs inputs on both sides.** The document check first
+shipped with a corpus built only from urls the JS engine blocks, so "rust blocks
+where js does not" could never be observed — forcing rust to block every document
+request left it green. It now carries innocuous control urls, asserted innocuous
+first.
+
 ## Files to Ignore
 
 - `node_modules/**`
