@@ -28,7 +28,6 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
   - `browserexit.js` — Browser teardown and temp-file cleanup. The Chrome/Puppeteer temp sweep is **guarded**: it removes paths the run declares as its own (`ownPaths`, which `handleBrowserExit` derives from both the caller's `userDataDir` and the browser's own `--user-data-dir` spawnarg), skips anything a live browser is using (`SingletonLock` → `<host>-<pid>`, plus the `/tmp/com.google.Chrome.*` directory a live profile's `SingletonSocket` points at), and otherwise only removes entries older than `LEFTOVER_MIN_AGE_MS` (15 min). Unguarded, it deleted any match on the machine — a concurrent run's live profile, a desktop Chrome's temp dir, and even the profile of the browser this run had just launched, since the startup sweep runs after launch
   - `validate_rules.js` — Domain and rule format validation
   - `colorize.js` — Console output formatting and colors
-  - `domain-cache.js` — Domain detection cache for performance
   - `post-processing.js` — Result cleanup and deduplication
   - `spawn-async.js` — Shared `runProcess(cmd, args, opts)` helper used by curl/grep/searchstring; resolves (never rejects) with `{code, signal, stdout, stderr, truncated, error}`, enforces timeout + stdout caps
   - `redirect.js`, `referrer.js`, `cdp.js`, `curl.js`, `grep.js`, `compare.js`, `compress.js`, `dry-run.js`, `browserexit.js`, `clear_sitedata.js`, `flowproxy.js`, `ignore_similar.js`, `searchstring.js`

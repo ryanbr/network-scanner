@@ -75,7 +75,6 @@ const { performPageInteraction, createInteractionConfig, computeInteractionCeili
 // Optional ghost-cursor support for advanced Bezier-based mouse movements
 const { createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostCursorConfig } = require('./lib/ghost-cursor');
 // Domain detection cache for performance optimization
-const { createGlobalHelpers, getDetectedDomainsCount } = require('./lib/domain-cache');
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
 const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy, prepareSocksRelays, closeAllSocksRelays } = require('./lib/proxy');
@@ -204,14 +203,13 @@ const VERSION = '2.0.33'; // Script version
 // get startTime
 const startTime = Date.now();
 
-// Initialize domain cache helpers with debug logging if enabled
-const domainCacheOptions = { enableLogging: false }; // Set to true for cache debug logs
-// Only markDomainAsDetected is used — the global cache feeds the end-of-scan
-// "unique domains cached" stat (getDetectedDomainsCount). The skip-check
-// (isDomainAlreadyDetected) is intentionally not wired in: cross-URL dedup is
-// already handled by nettools' global processed-domain sets, smart-cache, and
-// the per-URL local set, so a cache-level skip would be redundant.
-const { markDomainAsDetected } = createGlobalHelpers(domainCacheOptions);
+// Every unique subdomain matched across the whole scan, for the end-of-scan
+// "unique domains cached" debug line — its only consumer. Filled only when
+// --debug is on (see addMatchedDomain), so a normal run doesn't pay a Set
+// insert per matched domain for a number nobody will ask for. Cross-URL dedup
+// is handled elsewhere (nettools' processed-domain sets, smart-cache and the
+// per-URL local set), so nothing reads this set's membership — only its size.
+const detectedDomains = new Set();
 
 // Smart cache will be initialized after config is loaded
 let smartCache = null;
@@ -3444,8 +3442,9 @@ function setupFrameHandling(page, forceDebug) {
         }
       }
 
-      // Mark full subdomain as detected for future reference
-      markDomainAsDetected(cacheKey);
+      // Count the full subdomain toward the end-of-scan unique-domain stat.
+      // Debug-only: nothing else reads this set (see its declaration).
+      if (forceDebug) detectedDomains.add(cacheKey);
       localDetectedDomains.add(cacheKey);
       
       // Also mark in smart cache with context (if cache is enabled)
@@ -6835,7 +6834,6 @@ function setupFrameHandling(page, forceDebug) {
   const totalMatches = results.reduce((sum, r) => sum + (r.rules ? r.rules.length : 0), 0);
 
   // Debug: Show output format being used
-  const detectedDomainsCount = getDetectedDomainsCount();
   if (forceDebug) {
     const globalOptions = {
       localhostIP,
@@ -6849,7 +6847,7 @@ function setupFrameHandling(page, forceDebug) {
     };
      console.log(formatLogMessage('debug', `Output format: ${getFormatDescription(globalOptions)}`));
      console.log(formatLogMessage('debug', `Generated ${outputResult.totalRules} rules from ${outputResult.successfulPageLoads} successful page loads`));
-     console.log(formatLogMessage('debug', `Performance: ${detectedDomainsCount} unique domains cached`));
+     console.log(formatLogMessage('debug', `Performance: ${detectedDomains.size} unique domains cached`));
      // Cloudflare cache statistics
      const cloudflareStats = getCacheStats();
      if (cloudflareStats.size > 0) {
