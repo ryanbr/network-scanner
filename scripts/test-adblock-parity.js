@@ -386,15 +386,31 @@ check('asymmetries', 'hostless URLs agree, and neither engine calls them an erro
     const pair = loadPair(listPath);
     // The rust wrapper used to throw on these and log a warning per request; both
     // engines now report the same non-match with the same reason.
+    //
+    // The last four matter more than they look. A hostless URI carries its own
+    // content in the url, so a path or regex rule can match a substring INSIDE it:
+    // measured, `data:text/html,<img src="/banner-ad.png">` was blocked by the rule
+    // `/banner-ad.` in the JS engine while rust left it alone -- an inert inline
+    // resource aborted for no benefit, and a silent difference between the default
+    // engine and its fallback. Both now decline all of them.
     for (const url of ['data:text/javascript,1', 'data:image/png;base64,iVBORw0K', 'about:blank',
-      'blob:https://x.test/abc', 'javascript:void(0)']) {
+      'blob:https://x.test/abc', 'javascript:void(0)',
+      'data:text/html,<img src="/banner-ad.png">',
+      'data:text/html,%3Cimg%20src%3D%22/banner-ad.png%22%3E',
+      'about:blank?/banner-ad.',
+      'blob:https://ads.example.com/uuid']) {
       const a = pair.js.shouldBlock(url, 'https://site.test/', 'script');
       const b = pair.rust.shouldBlock(url, 'https://site.test/', 'script');
       assertEqual([a.blocked, a.reason], [false, 'no_match'], `js on ${url}`);
       assertEqual([b.blocked, b.reason], [false, 'no_match'], `rust on ${url}`);
     }
     assertEqual(pair.rust.getStats().errors, 0, 'no engine errors were recorded for hostless URLs');
-    return '5 hostless schemes, same verdict and same reason, 0 engine errors';
+    // Not vacuous: the same substrings and host DO block when they arrive over http.
+    assertEqual(pair.js.shouldBlock('https://cdn.test/banner-ad.png', 'https://site.test/', 'image').blocked, true,
+      'the same pattern still blocks over http in the JS engine');
+    assertEqual(pair.rust.shouldBlock('https://ads.example.com/uuid', 'https://site.test/', 'image').blocked, true,
+      'the same host still blocks over http in rust');
+    return '9 hostless urls incl. 4 carrying blockable substrings, same verdict and reason, 0 engine errors';
   });
 });
 
