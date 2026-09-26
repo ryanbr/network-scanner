@@ -538,6 +538,15 @@ check('unit', 'popup signal: parses $popup rules that blocking discards', async 
     // Parent-suffix walk, same as the blocking path's.
     assertEqual(sig.match('http://sub.some-unrelated-domain.test/x', 'http://site.test/'), '||some-unrelated-domain.test^$popup', 'subdomain match');
     assertEqual(sig.match('http://unrelated.test/asset.png', 'http://site.test/'), null, 'non-matching URL');
+    // A hostless URI carries its content in the url, so a path rule matches a
+    // substring inside it unless something stops it: measured,
+    // `data:text/html,<a href="/pop-target.html">` reported as a known popunder
+    // endpoint. The blocking path skips these for the same reason, through the same
+    // shared predicate.
+    assertEqual(sig.match('data:text/html,<a href="/pop-target.html">x</a>', 'http://site.test/'), null,
+      'a data: URI containing the pattern is not a popunder endpoint');
+    assertEqual(sig.match('about:blank?/pop-target.html', 'http://site.test/'), null,
+      'nor is an about: url containing it');
     // Third-party status comes from BASE domains, exactly as shouldBlock derives
     // it -- so this rule must not report for a sibling of the opener.
     assertEqual(sig.match('http://ads.example.com/x', 'http://www.example.com/'), null, 'same-site opener is not third-party');
