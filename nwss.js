@@ -1563,9 +1563,6 @@ smartCache = createSmartCache({
   forceDebug,
   max_concurrent_sites: MAX_CONCURRENT_SITES,  // Pass concurrency info
   cache_aggressive_mode: MAX_CONCURRENT_SITES > CONCURRENCY_LIMITS.HIGH_CONCURRENCY_THRESHOLD,  // Auto-enable for high concurrency
-  cache_persistence: false, // Disable persistence completely
-  cache_autosave: false, // Disable auto-save completely
-  cache_autosave_minutes: config.cache_autosave_minutes || 1,
   cache_max_size: config.cache_max_size || CACHE_LIMITS.DEFAULT_MAX_SIZE
 });
 }
@@ -6944,9 +6941,6 @@ function setupFrameHandling(page, forceDebug) {
     console.log(formatLogMessage('debug', `Response: ${cacheStats.responseHitRate}, NetTools: ${cacheStats.netToolsHitRate}`));
     console.log(formatLogMessage('debug', `Regex compilations saved: ${cacheStats.regexCacheHits}`));
     console.log(formatLogMessage('debug', `Similarity cache hits: ${cacheStats.similarityHits}`));
-    if (config.cache_persistence) {
-      console.log(formatLogMessage('debug', `Persistence - Loads: ${cacheStats.persistenceLoads}, Saves: ${cacheStats.persistenceSaves}`));
-    }
     }
   }
 

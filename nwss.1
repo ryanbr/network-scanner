@@ -277,16 +277,14 @@ Number. Browser restart interval in URLs processed (1-1000, default: 80).
 
 .TP
 .B cache_path
-String. Directory path for persistent cache storage (default: ".cache").
+String. Where \fB--clear-cache\fR looks for a leftover on-disk cache (default: ".cache").
+Nothing writes one: the caches are in-memory, and only v1.0.57 ever persisted them.
 
 .TP
 .B cache_max_size
 Number. Maximum number of entries in cache (default: 5000).
 
 .TP
-.B cache_autosave_minutes
-Number. Interval for automatic cache saves in minutes (default: 1).
-
 .TP
 .B cache_requests
 Boolean. Enable HTTP request response caching (default: false).

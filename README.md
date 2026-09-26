@@ -550,9 +550,8 @@ These options go at the root level of your config.json:
 | `ignore_similar_ignored_domains` | Boolean | `true` | Ignore domains similar to ignoreDomains list |
 | `max_concurrent_sites` | Integer | `6` | Maximum concurrent site processing (1-50) |
 | `resource_cleanup_interval` | Integer | `80` | Browser restart interval in URLs processed (1-1000) |
-| `cache_path`         | String | `".cache"` | Directory path for persistent cache storage |
+| `cache_path`         | String | `".cache"` | Where `--clear-cache` looks for a leftover on-disk cache. Nothing writes one: only v1.0.57 did, and the caches are in-memory now |
 | `cache_max_size`     | Integer | `5000` | Maximum number of entries in cache |
-| `cache_autosave_minutes` | Integer | `1` | Interval for automatic cache saves (minutes) |
 | `cache_requests`     | Boolean | `false` | Enable HTTP request response caching |
 
 ---
