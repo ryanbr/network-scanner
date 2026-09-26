@@ -98,6 +98,35 @@ default so local dev doesn't silently drop the sandbox. The harness depends
 on `USER_AGENT_COLLECTIONS` exported from `lib/fingerprint.js` — keep that
 export in sync if the UA list changes.
 
+## Seeding Tests
+
+`scripts/test-seeding.js` is the assertion-based suite for the pre-seeding
+features (`cookies`, `local_storage`, `session_storage`, `$popup` capture
+signal). It exits non-zero on failure, so unlike `test-stealth.js` it is a gate,
+not a report. Three groups, selectable with `--group=`:
+
+- `unit` — scope derivation, cookie/storage config normalisation, the signal
+  matcher against an inline filter list (never `easylist.txt`, which is not
+  tracked and whose counts move every update)
+- `browser` — Puppeteer harnesses for behaviour only the browser can settle:
+  cookie scope across an apex→www redirect (via `--host-resolver-rules`, since an
+  IP literal has no subdomains), per-key storage writes, refcounted teardown,
+  partial failure
+- `e2e` — real `nwss.js` scans against generated configs and a loopback fixture
+  server
+
+```bash
+node scripts/test-seeding.js                  # all groups
+node scripts/test-seeding.js --group=unit     # fast, no browser
+node scripts/test-seeding.js --list           # check names
+```
+
+Every check pins a bug a review pass found, most of them things static reading
+got wrong. **When changing anything in `lib/cookies.js`, `lib/storage.js`,
+`lib/site-scope.js` or the popup-signal path, add a check here** — these
+behaviours are set by Chrome and CDP, not by our code, so they cannot be
+verified by reading.
+
 ## Files to Ignore
 
 - `node_modules/**`

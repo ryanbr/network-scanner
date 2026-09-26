@@ -7,7 +7,7 @@
     "start": "node nwss.js",
     "scan": "node nwss.js",
     "help": "node nwss.js --help",
-    "lint": "eslint *.js lib/*.js"
+    "lint": "eslint *.js lib/*.js scripts/*.js"
   },
   "dependencies": {
     "ghost-cursor": "^1.4.2",
