@@ -985,7 +985,10 @@ General Options:
   --dig-retry-backoff <ms>       Backoff before each --dig-retry-failed attempt (default 3000, capped 60000); raise to outlast longer resolver bursts
   --dnsignore-auto               After the run, auto-append newly-detected dead domains (SERVFAIL/REFUSED only, never timeout) to .dnsignore, deduped
   --cleanup-interval <number>    Browser restart interval in URLs processed (1-1000, overrides config/default)
-  --remove-tempfiles             Remove Chrome/Puppeteer temporary files before exit
+  --remove-tempfiles             Show a summary of the Chrome/Puppeteer temp-file cleanup
+                                 (the cleanup itself always runs). Only entries this
+                                 run created, or leftovers older than 15 minutes with
+                                 no live browser attached, are removed
 
 Validation Options:
   --cache-requests               Cache HTTP requests to avoid re-requesting same URLs within scan
