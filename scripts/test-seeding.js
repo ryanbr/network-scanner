@@ -21,6 +21,13 @@
  * are generated into a temp directory, and nothing depends on a scan config,
  * a downloaded filter list or a previous run.
  *
+ * Mutation-verified 2026-09-26: each of the ten fixes these checks pin was
+ * reverted in turn, and the suite went red every time. Worth repeating after
+ * adding a check -- a check that cannot fail is decoration. The first attempt at
+ * that exercise also produced a false clean bill of health, by injecting the
+ * throw INSIDE the try/catch it meant to disable; make the mutation remove the
+ * guard, not exercise it.
+ *
  * Usage:
  *   node scripts/test-seeding.js                   # everything
  *   node scripts/test-seeding.js cookie            # only checks matching "cookie"
@@ -106,6 +113,28 @@ Exit code 0 = all selected checks passed, 1 = a failure, 2 = bad usage.
 
 function assert(cond, msg) {
   if (!cond) throw new Error(msg);
+}
+
+/** Thrown by a check that cannot run here -- reported as SKIP, not a failure. */
+class SkipCheck extends Error {}
+
+/**
+ * The popup checks need a SECOND loopback address: a popup must be third-party to
+ * its opener to survive first-party cleanup, and 127.0.0.1 vs 127.0.0.2 is the
+ * only way to get two registrable domains without DNS. Linux answers on the whole
+ * 127/8 range; macOS binds 127.0.0.1 only unless an alias was added, so check
+ * rather than fail with something cryptic.
+ */
+async function requireSecondLoopback(port) {
+  await new Promise((resolve, reject) => {
+    const req = http.get(`http://127.0.0.2:${port}/`, (res) => {
+      res.resume();
+      resolve();
+    });
+    req.setTimeout(2000, () => req.destroy(new Error('timed out')));
+    req.on('error', (err) => reject(new SkipCheck(
+      `127.0.0.2 is not reachable (${err.message}). On macOS: sudo ifconfig lo0 alias 127.0.0.2 up`)));
+  });
 }
 
 function assertEqual(actual, expected, what) {
@@ -274,6 +303,10 @@ function storageKeys(page) {
 async function runNwss(ctx, config, extraArgs = [], { readbackLog = null } = {}) {
   const cfgPath = path.join(ctx.tmpDir, `cfg-${ctx.nextId()}.json`);
   fs.writeFileSync(cfgPath, JSON.stringify(config, null, 2));
+  // Point the fixture server at this run's log here rather than trusting each
+  // check to do it: forgetting would silently read back the PREVIOUS run's loads
+  // and assert against them.
+  ctx.setReadbackLog(readbackLog);
   if (readbackLog) fs.writeFileSync(readbackLog, '');
 
   // runProcess resolves (never rejects) with Buffers, and inherits this
@@ -650,7 +683,6 @@ check('browser', 'a cookie teardown failure is reported, not swallowed', async (
 
 check('e2e', 'a scan seeds 4 cookies + 4 local + 4 session on every load', async (ctx) => {
   const readback = path.join(ctx.tmpDir, 'readback-conc.log');
-  ctx.setReadbackLog(readback);
   const site = {
     url: [`${ctx.server.ipBase}/gate?a`, `${ctx.server.ipBase}/gate?b`],
     cookies: { k1: true, k2: 'granted', k3: 'b', k4: 3 },
@@ -674,13 +706,15 @@ check('e2e', 'a scan seeds 4 cookies + 4 local + 4 session on every load', async
   assertIncludes(run.stdout, 'Kept 4 seeded cookie(s)', 'refcount holds cookies for the concurrent URL');
   assertIncludes(run.stdout, 'Removed 4 seeded cookie(s)', 'last finisher removes the cookies');
   assertIncludes(run.stdout, 'Released 4 seeded localStorage key(s)', 'last finisher releases the storage keys');
-  assertExcludes(run.stdout, '[warn]', 'a clean run emits no warnings');
+  // Scoped to the two subsystems under test: asserting on ALL warnings would
+  // make an unrelated nwss warning fail this check.
+  assertExcludes(run.stdout, '[warn] [cookies]', 'a clean run emits no cookie warnings');
+  assertExcludes(run.stdout, '[warn] [storage]', 'a clean run emits no storage warnings');
   return '4 loads x 12 items, teardown ordered, no warnings';
 });
 
 check('e2e', 'a later entry on the same host inherits nothing', async (ctx) => {
   const readback = path.join(ctx.tmpDir, 'readback-slate.log');
-  ctx.setReadbackLog(readback);
   const run = await runNwss(ctx, {
     max_concurrent_sites: 1,
     sites: [
@@ -721,6 +755,7 @@ check('e2e', 'a URL that never loads does not claim a storage leak', async (ctx)
 });
 
 check('e2e', '$popup signal reports and can promote a capture', async (ctx) => {
+  await requireSecondLoopback(ctx.server.port);
   const listPath = path.join(ctx.tmpDir, 'popup-list.txt');
   fs.writeFileSync(listPath, TEST_LIST);
   // Loopback IPs rather than the resolver-mapped hostnames the browser harnesses
@@ -751,6 +786,7 @@ check('e2e', '$popup signal reports and can promote a capture', async (ctx) => {
 check('e2e', 'a failing signal matcher cannot discard a capture', async (ctx) => {
   // The popup evaluation ends in a catch-all, so a throw from the signal used to
   // take the surrounding capture with it -- silently.
+  await requireSecondLoopback(ctx.server.port);
   const listPath = path.join(ctx.tmpDir, 'popup-list-throw.txt');
   fs.writeFileSync(listPath, TEST_LIST);
   const patchPath = path.join(ctx.tmpDir, 'throwing-matcher.js');
@@ -855,6 +891,7 @@ async function main() {
   };
 
   let failures = 0;
+  let skipped = 0;
   let lastGroup = null;
   const started = Date.now();
 
@@ -869,6 +906,12 @@ async function main() {
       const ms = Date.now() - t0;
       console.log(`  ${messageColors.success('PASS')}  ${c.name}${VERBOSE && detail ? `\n          ${detail} (${ms}ms)` : ''}`);
     } catch (err) {
+      if (err instanceof SkipCheck) {
+        skipped++;
+        console.log(`  ${messageColors.warn('SKIP')}  ${c.name}`);
+        console.log(`          ${err.message}`);
+        continue;
+      }
       failures++;
       console.log(`  ${messageColors.error('FAIL')}  ${c.name}`);
       console.log(`          ${err.message}`);
@@ -886,7 +929,8 @@ async function main() {
   const secs = ((Date.now() - started) / 1000).toFixed(1);
   console.log('');
   if (failures === 0) {
-    console.log(messageColors.success(`All ${selected.length} check(s) passed in ${secs}s`));
+    const skipNote = skipped ? `, ${skipped} skipped` : '';
+    console.log(messageColors.success(`All ${selected.length - skipped} check(s) passed in ${secs}s${skipNote}`));
     process.exit(0);
   }
   console.log(messageColors.error(`${failures} of ${selected.length} check(s) FAILED in ${secs}s`));
