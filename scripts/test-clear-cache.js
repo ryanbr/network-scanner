@@ -83,6 +83,48 @@ check('a kept directory is explained under forceDebug',
   logged.some(l => l.includes('Kept') && l.includes(dir) && l.includes('not ours')),
   logged.filter(l => l.includes('Kept')).join(' | ') || 'no "Kept" line');
 
+// 3c. A temp file carries the pid writing it. One whose process is still alive
+//     is an in-flight write -- deleting it makes that process's rename fail --
+//     so it stays, while a temp from a dead pid is ours to collect. pid 1 covers
+//     the EPERM branch: it is alive but root-owned, and only ESRCH means gone.
+const deadPid = (() => {
+  const { spawnSync } = require('child_process');
+  const p = spawnSync(process.execPath, ['-e', '']);   // exits immediately
+  return p.pid;
+})();
+dir = tmpDir('temps');
+const liveTmp = path.join(dir, `smart-cache.json.${process.pid}.tmp`);
+const rootTmp = path.join(dir, 'smart-cache.json.1.tmp');
+const deadTmp = path.join(dir, `smart-cache.json.${deadPid}.tmp`);
+fs.writeFileSync(liveTmp, 'in flight');
+fs.writeFileSync(rootTmp, 'in flight, root-owned pid');
+fs.writeFileSync(deadTmp, 'orphaned');
+const logged2 = [];
+const realLog2 = console.log;
+console.log = (...a) => logged2.push(a.join(' '));
+r = clearPersistentCache({ silent: true, forceDebug: true, cachePath: dir });
+console.log = realLog2;
+check("a live pid's temp is left alone", fs.existsSync(liveTmp), `exists=${fs.existsSync(liveTmp)}`);
+check('an EPERM (root-owned, alive) pid\'s temp is left alone', fs.existsSync(rootTmp), `exists=${fs.existsSync(rootTmp)}`);
+check("a dead pid's temp is collected", !fs.existsSync(deadTmp), `gone=${!fs.existsSync(deadTmp)} pid=${deadPid}`);
+check('in-flight temps are reported under forceDebug',
+  logged2.some(l => l.includes('still being written')),
+  logged2.filter(l => l.includes('Kept')).join(' | ') || 'no report');
+
+// 3d. A symlinked cache directory: our file goes, the link and its target stay,
+//     and the clear does NOT report a failure. rmdir on a symlink fails with
+//     ENOTDIR, which used to surface as a spurious error.
+const realDir = tmpDir('symlink-target');
+fs.writeFileSync(path.join(realDir, 'smart-cache.json'), '{"timestamp":1}');
+const linkPath = path.join(tmpDir('symlink-holder'), 'cache');
+fs.symlinkSync(realDir, linkPath);
+r = clearPersistentCache({ silent: true, cachePath: linkPath });
+check('symlinked cache dir is cleared without a spurious error',
+  !fs.existsSync(path.join(realDir, 'smart-cache.json')) && r.success === true && r.errors.length === 0,
+  `file gone=${!fs.existsSync(path.join(realDir, 'smart-cache.json'))} success=${r.success} errors=${JSON.stringify(r.errors.map(e => e.error))}`);
+check('the symlink itself is not removed', fs.existsSync(linkPath) && fs.existsSync(realDir),
+  `link=${fs.existsSync(linkPath)} target=${fs.existsSync(realDir)}`);
+
 // 4. cachePath pointing at an arbitrary FILE: refused, file survives
 const f = path.join(tmpDir('file'), 'my-notes.txt');
 fs.writeFileSync(f, 'keep me');
