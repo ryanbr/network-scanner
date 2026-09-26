@@ -5917,7 +5917,11 @@ function setupFrameHandling(page, forceDebug) {
   
   if (!silentMode && totalUrls > 0) {
     console.log(`\n${messageColors.processing('Processing')} ${totalUrls} URLs with TRUE concurrency ${effectiveConcurrency}...`);
-    if (totalUrls > RESOURCE_CLEANUP_INTERVAL) {
+    // Twice the interval, not once: a restart happens at the start of a batch that
+    // is not the last one, so it takes three batches before any occurs. With
+    // `totalUrls > interval` this line promised restarts for a two-batch run that
+    // could never have one.
+    if (totalUrls > RESOURCE_CLEANUP_INTERVAL * 2) {
       console.log(messageColors.processing('Browser will restart every') + ` ~${RESOURCE_CLEANUP_INTERVAL} URLs to free resources`);
     }
   }
@@ -6146,9 +6150,18 @@ function setupFrameHandling(page, forceDebug) {
     
     // Restart conditions split into hang recovery vs proactive triggers.
     // Hang recovery (forceRestartFlag set by 2.5-min HANG CHECK or a per-URL
-    // timeout) bypasses the urlsSinceLastCleanup > 8 gate — a confirmed hang
-    // needs immediate restart even if we just cleaned up. Proactive triggers
-    // keep the gate to prevent thrashing.
+    // timeout) bypasses the gate below — a confirmed hang needs immediate restart
+    // even if we just cleaned up.
+    //
+    // The proactive gate was `urlsSinceLastCleanup > 8`, described as anti-thrash.
+    // It could not do that job: batches are RESOURCE_CLEANUP_INTERVAL wide, so the
+    // counter at a boundary always EQUALS the configured interval, and the 8 simply
+    // voided every interval of 8 or less — `resource_cleanup_interval: 1` announced
+    // a restart every URL and then never performed one. Anti-thrash is already
+    // wouldExceedLimit's job: it fires only once the configured interval is
+    // reached. What remains here is the real precondition — something must have
+    // been processed since the last cleanup, which is what keeps the first
+    // boundary (counter 0) from restarting a browser that has done nothing.
     //
     // hasHighFailureRate is computed (and still used for the health-check
     // gate above) but intentionally NOT folded into proactiveRestart:
@@ -6159,7 +6172,7 @@ function setupFrameHandling(page, forceDebug) {
     // interrupt mid-cleanup-interval, that requires interrupting the
     // running Promise.all — a real behavior change, not an OR addition.
     const hangRecoveryRestart = forceRestartFlag;
-    const proactiveRestart = (wouldExceedLimit || shouldRestartFromHealth) && urlsSinceLastCleanup > 8;
+    const proactiveRestart = (wouldExceedLimit || shouldRestartFromHealth) && urlsSinceLastCleanup > 0;
     if ((hangRecoveryRestart || proactiveRestart) && isNotLastBatch) {
       let restartReason = 'Unknown';
       if (forceRestartFlag) {
