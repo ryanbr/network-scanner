@@ -13,7 +13,7 @@ const path = require('path');
 const { createRotatingResolver, createDnsCircuitBreaker, parseDnsServers, isNonExistenceError, dohTemplatesForResolvers } = require('./lib/dns');
 // Fetch/XHR interception + CSS element blocking: both are page injections that
 // used to sit inline in processUrl.
-const { installFetchXhrInterception } = require('./lib/eval-on-doc');
+const { installFetchXhrInterception, installReloadLoopGuard } = require('./lib/eval-on-doc');
 const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = require('./lib/css-blocking');
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
@@ -2641,6 +2641,7 @@ function setupFrameHandling(page, forceDebug) {
     }
 
     let page = null;
+    let reloadLoopGuard = null;
     // Hoisted so the finally below can undo it: cookies seeded for this URL are
     // removed there, and a const inside the try is not in scope in the finally.
     let seededCookies = [];
@@ -2896,13 +2897,27 @@ function setupFrameHandling(page, forceDebug) {
       // Fetch/XHR interception, injected before the page's own scripts run.
       // Opt-in via siteConfig.evaluateOnNewDocument or --eval-on-doc; lives in
       // lib/eval-on-doc.js with its three injection strategies and their timeouts.
-      await installFetchXhrInterception(page, {
+      const evalOnDocResult = await installFetchXhrInterception(page, {
         siteConfig,
         currentUrl,
         browserInstance,
         globalEvalOnDoc,
         forceDebug
       });
+
+      // Reload-loop guard, on the same opt-in the injection uses -- it was part of
+      // that injected script until it turned out it could never have worked
+      // (location.reload is [[Unforgeable]]). Kept behind the same flag rather
+      // than made global: a scan that never asked for this behaviour should not
+      // start getting it. `reload: N` is passed through so the scan's own reloads
+      // cannot trip it. Torn down in the finally with the page.
+      if (evalOnDocResult.requested) {
+        reloadLoopGuard = await installReloadLoopGuard(page, {
+          currentUrl,
+          expectedLoads: Math.max(1, parseInt(siteConfig.reload, 10) || 1),
+          forceDebug
+        });
+      }
 
       // CSS element blocking (siteConfig.css_blocked), in lib/css-blocking.js.
       // The selector list is kept here because the runtime fallback below reuses it.
@@ -5808,6 +5823,13 @@ function setupFrameHandling(page, forceDebug) {
         // probe kept polling pages the scan was done with -- and could strike one
         // out and close it, which is the opposite of what that flag asks for.
         _inFlightPages.delete(page);
+
+        // Detach the reload-loop guard's listener and CDP session while the page
+        // is still alive; it is a no-op if it was never installed.
+        if (reloadLoopGuard) {
+          try { await reloadLoopGuard.stop(); } catch (_) { /* page already gone */ }
+          reloadLoopGuard = null;
+        }
 
         if (!keepBrowserOpen) {
           try {
