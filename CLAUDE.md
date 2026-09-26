@@ -12,7 +12,7 @@ Puppeteer-based network scanner for analyzing web traffic, generating adblock fi
   - `browserhealth.js` — Memory management and browser lifecycle
   - `interaction.js` — Human-like mouse/scroll/typing simulation
   - `ghost-cursor.js` — Bezier-curve cursor pathing for human-like mouse movement
-  - `smart-cache.js` — Multi-layer caching with persistence
+  - `smart-cache.js` — Multi-layer caching (domain / pattern / response / nettools / similarity / regex / request LRUs). Its **persistence layer does not run**: `nwss.js` passes `cache_persistence: false` *after* spreading `...config`, so a user's own `cache_persistence: true` is overridden by key order — `_loadPersistentCache`, `savePersistentCache`, `_setupAutoSave` and the `destroy()` save branch are all unreachable, and `cache_path` is documented in README/nwss.1 as an option that currently has no effect. `--clear-cache` is **guarded** the same way the temp sweep in `browserexit.js` is: it removes only this module's own files by name (`smart-cache.json` and its `<pid>.tmp` siblings), skips a temp whose pid is still alive (only `ESRCH` means gone), never `rmdir`s through a symlink, and removes the directory only when that leaves it empty. Unguarded it was `fs.rmSync(cache_path, { recursive: true, force: true })` on a user-supplied path for a cache nwss never writes — a recursive delete of any directory the config happened to name
   - `nettools.js` — WHOIS/dig integration
   - `dns.js` — DNS pre-check resolver: multi-nameserver rotation + `--dns` override (pre-check only; not Chrome/dig)
   - `output.js` — Multi-format rule output (adblock, dnsmasq, unbound, pihole, etc.)

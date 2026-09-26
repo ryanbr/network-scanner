@@ -111,6 +111,17 @@ check('in-flight temps are reported under forceDebug',
   logged2.some(l => l.includes('still being written')),
   logged2.filter(l => l.includes('Kept')).join(' | ') || 'no report');
 
+// 3c-bis. isOwnFile is deliberately looser than the pid regex: an older version
+//     wrote a fixed 'smart-cache.json.tmp' (no pid), and savePersistentCache's own
+//     comment notes it was simply overwritten each save. Such a leftover is still
+//     ours, and has no pid to be alive, so it must be collected.
+dir = tmpDir('legacy-tmp');
+const legacyTmp = path.join(dir, 'smart-cache.json.tmp');
+fs.writeFileSync(legacyTmp, 'leftover from an older version');
+r = clearPersistentCache({ silent: true, cachePath: dir });
+check('a legacy fixed-name temp is collected', !fs.existsSync(legacyTmp) && r.clearedItems >= 1,
+  `gone=${!fs.existsSync(legacyTmp)} clearedItems=${r.clearedItems}`);
+
 // 3d. A symlinked cache directory: our file goes, the link and its target stay,
 //     and the clear does NOT report a failure. rmdir on a symlink fails with
 //     ENOTDIR, which used to surface as a spurious error.
