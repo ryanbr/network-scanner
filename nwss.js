@@ -6081,7 +6081,7 @@ function setupFrameHandling(page, forceDebug) {
     }
     
     // IMPROVED: Only check health if we have indicators of problems
-    let healthCheck = { shouldRestart: false, reason: null };
+    let healthCheck = { shouldRestart: false, severity: 'none', reason: null };
     const recentResults = results.slice(-8); // Check more results for better pattern detection
     // Single-pass count for both failure rate and critical-error tally —
     // was two .filter(...).length calls allocating two intermediate arrays.
@@ -6128,8 +6128,12 @@ function setupFrameHandling(page, forceDebug) {
          if (healthTimer) clearTimeout(healthTimer);
        }
      } catch (healthError) {
-       console.log(formatLogMessage('warn', `[HEALTH CHECK] Timeout, assuming restart needed`));
-       healthCheck = { shouldRestart: true, reason: 'Health check timeout' };
+       // A probe that cannot answer within 30s means a wedged browser, and this branch
+       // always said "assuming restart needed" while the verdict it built restarted
+       // nothing -- first because the prose matched no pattern, then because it carried
+       // no severity. Now it says and does the same thing.
+       console.log(formatLogMessage('warn', `[HEALTH CHECK] Timeout after 30s, restarting the browser`));
+       healthCheck = { shouldRestart: true, severity: 'critical', reason: 'Health check timeout' };
      }
     } else if (forceDebug && urlsSinceLastCleanup > 10) {
       console.log(formatLogMessage('debug', `Skipping health check: failure rate ${Math.round(recentFailureRate * 100)}%, critical errors: ${hasCriticalErrors ? 'yes' : 'no'}`));
@@ -6144,9 +6148,15 @@ function setupFrameHandling(page, forceDebug) {
     const wouldExceedLimit = urlsSinceLastCleanup + batchSize >= Math.min(RESOURCE_CLEANUP_INTERVAL, 100);
     const isNotLastBatch = batchEnd < totalUrls;
     // IMPROVED: More restrictive health-based restart conditions
-    const shouldRestartFromHealth = healthCheck.shouldRestart && 
-      !healthCheck.reason?.includes('Scheduled cleanup') && 
-      (healthCheck.reason?.includes('Critical') || healthCheck.reason?.includes('disconnected'));
+    // Branch on the severity browserhealth reports, not on its prose. This used to
+    // read `reason.includes('Critical') || reason.includes('disconnected')`, which
+    // acted on 2 of the 9 verdicts that function emits: it ignored "Browser
+    // connectivity lost - WebSocket/CDP failure" (the browser is gone), and ignored
+    // `Browser health: critical` because assessment.overall is lowercase and the
+    // pattern wanted a capital C. The user still saw "Browser restart needed before
+    // site (N/M): ..." printed by the monitor, and then no restart happened.
+    // 'scheduled' stays excluded here because the interval logic below owns it.
+    const shouldRestartFromHealth = healthCheck.shouldRestart && healthCheck.severity === 'critical';
     
     // Restart conditions split into hang recovery vs proactive triggers.
     // Hang recovery (forceRestartFlag set by 2.5-min HANG CHECK or a per-URL
