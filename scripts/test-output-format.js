@@ -47,7 +47,7 @@ check('short domains get correct adblock syntax', wrongAdblock.length === 0,
 // 'abc.d' and 'foobar.x' are long enough to clear the 4-character floor, so
 // they are what actually exercises the TLD check -- without them, deleting it
 // leaves every check green (found by mutating it out).
-const MALFORMED = ['', 'a.b', 'x.y', 'abc.d', 'foobar.x', 'localhost', '.com', 'foo.', 'a..b', 'ab', '.', 'a.b/very/long/path/'];
+const MALFORMED = ['', 'a.b', 'x.y', 'abc.d', 'foobar.x', 'localhost', '.com', 'foo.', 'a..b', 'ab', '.', 'example.com..', 'a.b/very/long/path/'];
 const leaked = MALFORMED.filter(d => formatDomain(d, { plain: true }) !== null);
 check('malformed keys are refused', leaked.length === 0,
   leaked.length ? `leaked: ${leaked.map(d => JSON.stringify(d)).join(', ')}` : `${MALFORMED.length} checked, none leaked`);
@@ -66,6 +66,25 @@ check('path rule on a valid short host is emitted', formatDomain('t.co/ads/', {}
   JSON.stringify(formatDomain('t.co/ads/', {})));
 check('path rule on a malformed host is refused', formatDomain('a.b/ads/', {}) === null,
   JSON.stringify(formatDomain('a.b/ads/', {})));
+
+// --- 4b. A trailing dot is the root-anchored form of the same host, and Chrome
+//         preserves it (new URL('http://ads.example.com./t.js').hostname keeps
+//         the dot). It must not be dropped -- and must not be emitted raw as
+//         ||ads.example.com.^, which matches nothing -- so it is normalised.
+check('trailing-dot host is normalised, not dropped', formatDomain('ads.example.com.', {}) === '||ads.example.com^',
+  JSON.stringify(formatDomain('ads.example.com.', {})));
+check('trailing-dot host normalised in plain too', formatDomain('ads.example.com.', { plain: true }) === 'ads.example.com',
+  JSON.stringify(formatDomain('ads.example.com.', { plain: true })));
+check('trailing-dot host normalised on a path rule', formatDomain('ads.example.com./ads/', {}) === '||ads.example.com/ads/',
+  JSON.stringify(formatDomain('ads.example.com./ads/', {})));
+
+// --- 4c. The IP allowance is IPv4 only. A bare IPv6 host is wrong in most
+//         formats (local=/::1/, 0.0.0.0 ::1) and cannot reach formatDomain from
+//         a scan -- URL parsing keeps the brackets, and '[::1]' has no dot.
+const IPV6 = ['::1', '2001:db8::1', 'fe80::1', '[::1]', '[2001:db8::1]'];
+const leakedV6 = IPV6.filter(d => formatDomain(d, { plain: true }) !== null);
+check('IPv6 hosts are refused', leakedV6.length === 0,
+  leakedV6.length ? `leaked: ${leakedV6.join(', ')}` : `${IPV6.length} checked`);
 
 // --- 5. Every output format stays valid for a short domain.
 const FORMATS = [
