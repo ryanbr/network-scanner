@@ -89,16 +89,21 @@ const stubPage = (onCall, url) => ({
     const signal = { cancelled: false };
     const page = {
       isClosed: () => false,
-      mouse: { wheel: async () => { wheels++; await slow(120); }, move: async () => {} },
+      // Cancel from the third wheel itself rather than on a timer: the outcome is
+      // then a property of the code, not of how loaded the machine is. A timer
+      // version let ~8 wheels through when the event loop was busy, which is close
+      // enough to the threshold to flake.
+      mouse: {
+        wheel: async () => { wheels++; if (wheels === 3) signal.cancelled = true; },
+        move: async () => {}
+      },
       evaluate: async () => ({ width: 1280, height: 800 }),
       viewport: () => ({ width: 1280, height: 800 })
     };
-    const scrolling = simulateScrolling(page, { amount: 1, smoothness: 20, signal });
-    setTimeout(() => { signal.cancelled = true; }, 400);   // ~3 wheels in
-    await scrolling;
+    await simulateScrolling(page, { amount: 1, smoothness: 20, signal });
     check('a cancelled scroll abandons the rest of its smoothness loop',
-      wheels > 0 && wheels < 8,
-      `${wheels} of 20 wheel call(s) ran before cancellation took effect`);
+      wheels === 3,
+      `${wheels} of 20 wheel call(s) ran (3 = it stopped at the cancellation; 20 = it ran the loop out)`);
   }
 
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
