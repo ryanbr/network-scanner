@@ -83,6 +83,43 @@ const check = (name, ok, detail) => {
     await closeAllRelays(false);
   }
 
+  // A high relay count is a consequence of keying on credentials: a provider that
+  // rotates a session token in the PASSWORD gets one loopback listener per site.
+  // That is correct, but each costs an fd competing with Chrome's, so it warns
+  // once past a threshold. Checked here because the warning is the only signal a
+  // user gets before hitting an fd limit (tight on macOS: 256 by default).
+  {
+    await closeAllRelays(false);                       // resets the one-shot
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => warned.push(a.join(' ').replace(/\x1b\[[0-9;]*m/g, ''));
+    try {
+      for (let i = 0; i < 63; i++) await ensureRelay(parseProxyUrl(`socks5://u:p${i}@10.0.0.9:1080`), false);
+      const quietAt63 = warned.filter(w => /relays are open/.test(w)).length;
+      await ensureRelay(parseProxyUrl('socks5://u:p63@10.0.0.9:1080'), false);   // 64th
+      const atThreshold = warned.filter(w => /relays are open/.test(w)).length;
+      for (let i = 64; i < 70; i++) await ensureRelay(parseProxyUrl(`socks5://u:p${i}@10.0.0.9:1080`), false);
+      const afterMore = warned.filter(w => /relays are open/.test(w)).length;
+      check('no relay-count warning below the threshold', quietAt63 === 0, `${quietAt63} warning(s) at 63 relays`);
+      check('one warning when the threshold is reached', atThreshold === 1, `${atThreshold} warning(s) at 64 relays`);
+      check('the warning does not repeat per relay', afterMore === 1, `${afterMore} warning(s) at 70 relays`);
+
+      // The one-shot resets with the relays it described, so a second phase is
+      // judged on its own count. nwss only tears relays down at shutdown, so
+      // this is for a library caller running several phases in one process --
+      // covered rather than annotated, so the reset line is not decorative.
+      await closeAllRelays(false);
+      const beforeSecondPhase = warned.filter(w => /relays are open/.test(w)).length;
+      for (let i = 0; i < 64; i++) await ensureRelay(parseProxyUrl(`socks5://v:q${i}@10.0.0.9:1080`), false);
+      const secondPhase = warned.filter(w => /relays are open/.test(w)).length;
+      check('a rebuilt set of relays warns again', secondPhase === beforeSecondPhase + 1,
+        `${beforeSecondPhase} before, ${secondPhase} after a fresh 64`);
+    } finally {
+      console.warn = realWarn;
+      await closeAllRelays(false);
+    }
+  }
+
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness error:', e); process.exit(2); });
