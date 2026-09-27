@@ -142,6 +142,8 @@ no-op "skips" on the next refactor of the files they target.
 
 ## Adblock Parity Tests
 
+`scripts/test-whois-retry.js` drives the whois path with a fake `whois` on `PATH` and reads the attempt count from what the subprocess was invoked with. It covers the handler running at all without a `siteConfig` (that used to throw and be swallowed at debug level), the documented 2-attempt default, `whois_max_retries` being honoured, `--dry-run` reporting the count the run really uses, and an unexpected error being reported without `--debug`. ~1s, no network.
+
 `scripts/test-dig-resolver.js` asserts what `dig` is actually invoked with for a given `--dns` spec, by putting a fake `dig` on `PATH` and reading the recorded argv. It exists because `--dns` feeds both the pre-check and `dig`, and nettools used to strip an explicit `:port` — pointing the two paths at different servers, silently. ~1s, no browser, no network.
 
 `scripts/test-adblock-parity.js` asserts that `lib/adblock.js` and

@@ -283,7 +283,7 @@ When a page redirects to a new domain, first-party/third-party detection is base
 |:---------------------|:-------|:-------:|:------------|
 | `whois`              | Array | - | Check whois data for ALL specified terms (AND logic) |
 | `whois-or`           | Array | - | Check whois data for ANY specified term (OR logic) |
-| `whois_delay`        | Integer | `3000` | Delay whois requests to avoid throttling | 
+| `whois_delay`        | Integer | `3000` | Base delay between whois attempts, to avoid throttling. Multiplied into a progressive backoff on retries (attempt 2 waits `delay*1 + 4s`, attempt 3 `delay*2 + 6s`), not a flat per-request pause | 
 | `whois_server`       | String or Array | - | Custom whois server(s) - single server or randomized list |
 | `whois_server_mode`  | String | `"random"` | Server selection mode: `"random"` or `"cycle"` |
 | `whois_max_retries`  | Integer | `2` | Maximum retry attempts per domain |

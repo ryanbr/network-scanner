@@ -88,7 +88,10 @@ async function digArgvFor(spec, { servfail = false } = {}) {
   const handler = createNetToolsHandler({
     digTerms: ['127.0.0.1'],
     processedDigDomains: new Set(),
-    processedWhoisDomains: new Set()
+    processedWhoisDomains: new Set(),
+    // a real match sink, so these checks exercise the whole path instead of
+    // stopping at an unguarded matchedDomains.add() deep inside it
+    matchedDomains: new Set()
   });
   // A fresh domain per case: the dig cache is global and keyed by domain+type.
   await handler(`case${++caseNo}.example.test`, `case${caseNo}.example.test`);
@@ -153,8 +156,14 @@ async function digArgvFor(spec, { servfail = false } = {}) {
     setDigExtraRetries(1);
     setDigRetryBackoff(1500);
 
-    const slow = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set() });
-    const fast = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set() });
+    const slow = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set(),
+    // a real match sink, so these checks exercise the whole path instead of
+    // stopping at an unguarded matchedDomains.add() deep inside it
+    matchedDomains: new Set() });
+    const fast = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set(),
+    // a real match sink, so these checks exercise the whole path instead of
+    // stopping at an unguarded matchedDomains.add() deep inside it
+    matchedDomains: new Set() });
     setDigResolvers(['127.0.0.1']);
 
     // Per-domain failure: only A's name SERVFAILs, so A runs its full ladder
@@ -189,7 +198,10 @@ async function digArgvFor(spec, { servfail = false } = {}) {
         fs.writeFileSync(ignoreFile, '# test\nignored.example.test\n');
         const loaded = loadDnsIgnore();
         setDigResolvers([]);
-        const h = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set() });
+        const h = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set(),
+    // a real match sink, so these checks exercise the whole path instead of
+    // stopping at an unguarded matchedDomains.add() deep inside it
+    matchedDomains: new Set() });
 
         fs.writeFileSync(argvLog, '');
         await h('ignored.example.test', 'ignored.example.test');
