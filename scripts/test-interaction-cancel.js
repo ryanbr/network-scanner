@@ -25,7 +25,7 @@
  * debug line rather than by waiting out a 30s interaction.
  */
 
-const { performPageInteraction, computeInteractionCeilingMs } = require('../lib/interaction');
+const { performPageInteraction, computeInteractionCeilingMs, simulateScrolling } = require('../lib/interaction');
 
 let failures = 0;
 let checks = 0;
@@ -76,6 +76,30 @@ const stubPage = (onCall, url) => ({
   await slow(9000);
   check('the capped work stops instead of running on', callsAfterReturn <= 1,
     `${callsAfterReturn} page call(s) after the cap (1 = the one already in flight, which cannot be recalled)`);
+
+  // 4. simulateScrolling's INNER smoothness loop, tested directly. Going through
+  //    performPageInteraction cannot exercise it: the impl passes
+  //    `smoothness: 1 + random(2)`, so that loop is 1-2 iterations and the outer
+  //    per-scroll check already covers it -- an earlier version of this check went
+  //    through the cap and passed with the inner guard deleted, i.e. proved
+  //    nothing. Direct callers do use more (the JSDoc example is smoothness 8), and
+  //    that is where a cancelled scroll would otherwise run to completion.
+  {
+    let wheels = 0;
+    const signal = { cancelled: false };
+    const page = {
+      isClosed: () => false,
+      mouse: { wheel: async () => { wheels++; await slow(120); }, move: async () => {} },
+      evaluate: async () => ({ width: 1280, height: 800 }),
+      viewport: () => ({ width: 1280, height: 800 })
+    };
+    const scrolling = simulateScrolling(page, { amount: 1, smoothness: 20, signal });
+    setTimeout(() => { signal.cancelled = true; }, 400);   // ~3 wheels in
+    await scrolling;
+    check('a cancelled scroll abandons the rest of its smoothness loop',
+      wheels > 0 && wheels < 8,
+      `${wheels} of 20 wheel call(s) ran before cancellation took effect`);
+  }
 
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
