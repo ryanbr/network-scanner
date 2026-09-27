@@ -3747,6 +3747,7 @@ function setupFrameHandling(page, forceDebug) {
             // means the same thing for popups as for the main page.
             if (hasNetTools) {
               const popupNetToolsHandler = createNetToolsHandler({
+                logWrite: bufferedLogWrite,   // share nwss's 2s log batch so these lines stay in write order
                 whoisTerms, whoisOrTerms,
                 processedWhoisDomains: globalProcessedWhoisDomains,
                 processedDigDomains: globalProcessedDigDomains,
@@ -4254,6 +4255,7 @@ function setupFrameHandling(page, forceDebug) {
             if (hasNetTools && !hasSearchString && !hasSearchStringAnd) {
               // Create and execute nettools handler
               const netToolsHandler = createNetToolsHandler({
+                logWrite: bufferedLogWrite,   // share nwss's 2s log batch so these lines stay in write order
                 whoisTerms,
                 whoisOrTerms,
                processedWhoisDomains: globalProcessedWhoisDomains,
@@ -4366,6 +4368,7 @@ function setupFrameHandling(page, forceDebug) {
              
              // Create nettools handler with cache callbacks (if cache is enabled)
              const netToolsHandler = createNetToolsHandler({
+               logWrite: bufferedLogWrite,   // share nwss's 2s log batch so these lines stay in write order
                whoisTerms,
                whoisOrTerms,
                processedWhoisDomains: globalProcessedWhoisDomains,
