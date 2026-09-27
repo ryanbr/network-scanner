@@ -2886,16 +2886,35 @@ function setupFrameHandling(page, forceDebug) {
       
       // Apply flowProxy timeouts if detection is enabled
       if (flowproxyDetection) {
+        // Apply the configured values as configured. These previously ran
+        // through Math.min against nwss's own reduced defaults -- and against
+        // the CROSSED constants, pairing the page timeout with
+        // DEFAULT_NAVIGATION (25000) and the nav timeout with DEFAULT_PAGE
+        // (35000) -- so both documented 45000 defaults were capped and
+        // raising either option above its cap did nothing at all. That
+        // inverted the point of the options: they exist because protection
+        // pages are slow, and the block above has already set the fast-failure
+        // ceilings (min(timeout, 15000) / min(timeout, 25000)) that these are
+        // meant to lift. No clamp replaces it: the blast radius is small and
+        // known. Every goto/reload in this file passes an explicit timeout
+        // (<= min(timeout, 15000)), so the default NAVIGATION timeout is not
+        // read by anything today; the default PAGE timeout has exactly one
+        // implicit consumer in the repo, lib/cloudflare.js's page.click(selector),
+        // and a value large enough to matter there is the user's own config
+        // choice. getFlowProxyTimeouts rejects zero/negative/non-numeric.
         const flowproxyTimeouts = getFlowProxyTimeouts(siteConfig);
-        page.setDefaultTimeout(Math.min(flowproxyTimeouts.pageTimeout, TIMEOUTS.DEFAULT_NAVIGATION));
-        page.setDefaultNavigationTimeout(Math.min(flowproxyTimeouts.navigationTimeout, TIMEOUTS.DEFAULT_PAGE));
+        page.setDefaultTimeout(flowproxyTimeouts.pageTimeout);
+        page.setDefaultNavigationTimeout(flowproxyTimeouts.navigationTimeout);
         // Attach the response/header listener BEFORE navigation so the
         // document response's own headers (Server, Set-Cookie, X-FlowProxy-*,
         // etc.) are observed. The listener accumulates state in a WeakMap
         // keyed by page; analyzeFlowProxyProtection reads from it later.
         attachFlowProxyHeaderListener(page);
         if (forceDebug) {
-          console.log(formatLogMessage('debug', `Applied flowProxy timeouts - page: ${flowproxyTimeouts.pageTimeout}ms, nav: ${flowproxyTimeouts.navigationTimeout}ms`));
+          // Reports what was handed to puppeteer. Before the clamp above was
+          // removed this line printed the requested values while smaller ones
+          // were applied -- "page: 45000ms" for a page that actually got 25000.
+          console.log(formatLogMessage('debug', `Applied flowProxy timeouts - page: ${flowproxyTimeouts.pageTimeout}ms, nav: ${flowproxyTimeouts.navigationTimeout}ms (replacing ${Math.min(timeout, TIMEOUTS.DEFAULT_PAGE_REDUCED)}ms / ${Math.min(timeout, TIMEOUTS.DEFAULT_NAVIGATION)}ms)`));
         }
       }
 

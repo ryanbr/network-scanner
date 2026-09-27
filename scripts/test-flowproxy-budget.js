@@ -20,7 +20,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getFlowProxyOverheadMs } = require('../lib/flowproxy');
+const { getFlowProxyOverheadMs, getFlowProxyTimeouts } = require('../lib/flowproxy');
 
 let passed = 0, failed = 0;
 function check(name, cond, detail) {
@@ -147,6 +147,44 @@ const aggressive = { timeout: 35000, delay: 5000, flowproxy_detection: true, flo
 const restartWithout = shippedRestart(budgetFor(aggressive, 0, { flowproxy: 0 }));
 check(`pre-fix behaviour reproduced: restart ${restartWithout}ms < spend ${spendFor(aggressive)}ms`,
   restartWithout < spendFor(aggressive));
+
+console.log('\n=== getFlowProxyTimeouts: values reach puppeteer as configured ===');
+const PAGE_TIMEOUT_DEFAULT = 45000, NAVIGATION_TIMEOUT_DEFAULT = 45000;
+eq('page default', getFlowProxyTimeouts({}).pageTimeout, PAGE_TIMEOUT_DEFAULT);
+eq('nav default', getFlowProxyTimeouts({}).navigationTimeout, NAVIGATION_TIMEOUT_DEFAULT);
+eq('page honoured above the old 25000 cap',
+  getFlowProxyTimeouts({ flowproxy_page_timeout: 60000 }).pageTimeout, 60000);
+eq('nav honoured above the old 35000 cap',
+  getFlowProxyTimeouts({ flowproxy_nav_timeout: 90000 }).navigationTimeout, 90000);
+eq('zero falls back', getFlowProxyTimeouts({ flowproxy_page_timeout: 0 }).pageTimeout, PAGE_TIMEOUT_DEFAULT);
+eq('negative falls back, never reaching setDefaultTimeout',
+  getFlowProxyTimeouts({ flowproxy_page_timeout: -1000 }).pageTimeout, PAGE_TIMEOUT_DEFAULT);
+eq('non-numeric falls back',
+  getFlowProxyTimeouts({ flowproxy_nav_timeout: 'slow' }).navigationTimeout, NAVIGATION_TIMEOUT_DEFAULT);
+
+// The clamp that used to sit here paired the page timeout with DEFAULT_NAVIGATION
+// (25000) and the nav timeout with DEFAULT_PAGE (35000), so both 45000 defaults
+// were capped and raising either option did nothing. Evaluate what nwss.js
+// actually hands to puppeteer.
+const fpBlock = src.slice(src.indexOf('const flowproxyTimeouts = getFlowProxyTimeouts(siteConfig);'));
+const applied = {};
+for (const [label, fn] of [['page', 'setDefaultTimeout'], ['nav', 'setDefaultNavigationTimeout']]) {
+  const m = fpBlock.match(new RegExp(`page\\.${fn}\\(([^;]*)\\);`));
+  if (!m) { console.error(`FATAL: could not locate page.${fn} in the flowproxy block`); process.exit(1); }
+  applied[label] = new Function('flowproxyTimeouts', 'timeout', 'TIMEOUTS',
+    `return ${m[1]};`);
+}
+const NWSS_TIMEOUTS = { DEFAULT_PAGE: 35000, DEFAULT_NAVIGATION: 25000, DEFAULT_PAGE_REDUCED: 15000 };
+const want = getFlowProxyTimeouts({ flowproxy_page_timeout: 60000, flowproxy_nav_timeout: 90000 });
+eq('nwss applies the configured page timeout unclamped',
+  applied.page(want, 35000, NWSS_TIMEOUTS), 60000);
+eq('nwss applies the configured nav timeout unclamped',
+  applied.nav(want, 35000, NWSS_TIMEOUTS), 90000);
+const wantDefaults = getFlowProxyTimeouts({});
+eq('the documented 45000 page default now actually applies',
+  applied.page(wantDefaults, 35000, NWSS_TIMEOUTS), 45000);
+eq('the documented 45000 nav default now actually applies',
+  applied.nav(wantDefaults, 35000, NWSS_TIMEOUTS), 45000);
 
 console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
 process.exit(failed === 0 ? 0 : 1);
