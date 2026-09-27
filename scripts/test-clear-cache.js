@@ -112,9 +112,9 @@ check('in-flight temps are reported under forceDebug',
   logged2.filter(l => l.includes('Kept')).join(' | ') || 'no report');
 
 // 3c-bis. isOwnFile is deliberately looser than the pid regex: an older version
-//     wrote a fixed 'smart-cache.json.tmp' (no pid), and savePersistentCache's own
-//     comment notes it was simply overwritten each save. Such a leftover is still
-//     ours, and has no pid to be alive, so it must be collected.
+//     wrote a fixed 'smart-cache.json.tmp' (no pid), overwritten on each save,
+//     before the pid suffix was introduced. Such a leftover is still ours, and
+//     has no pid that could be alive, so it must be collected.
 dir = tmpDir('legacy-tmp');
 const legacyTmp = path.join(dir, 'smart-cache.json.tmp');
 fs.writeFileSync(legacyTmp, 'leftover from an older version');
