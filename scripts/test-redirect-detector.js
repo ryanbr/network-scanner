@@ -36,6 +36,11 @@ const fmt = (level, msg) => `[${level}] ${msg}`;
 (async () => {
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
+    if (req.url.startsWith('/landed')) return res.end('<html><body>landed</body></html>');
+    // /meta carries a refresh that fires inside the poll budget; /x does not
+    if (req.url.startsWith('/meta')) {
+      return res.end('<html><head><meta http-equiv="refresh" content="2;url=/landed"></head><body>go</body></html>');
+    }
     res.end('<html><head><title>t</title></head><body>redirect detector fixture</body></html>');
   });
   await new Promise(r => server.listen(0, '127.0.0.1', r));
@@ -54,6 +59,11 @@ const fmt = (level, msg) => `[${level}] ${msg}`;
   const counts = [];
   try {
     for (let i = 0; i < 3; i++) {
+      // 300ms deliberately, shorter than the 2s meta refresh used below: the
+      // de-duplicated observer belongs to the FIRST script installed, and each
+      // script closes over its own budget, so a stale 300 here would reject the
+      // later 2000ms refresh as unable-to-fire. That is the bug this ordering
+      // exists to catch.
       await navigateWithRedirectHandling(page, url, { js_redirect_timeout: 300 },
         { waitUntil: 'domcontentloaded', timeout: 8000 }, false, fmt);
       counts.push(await page.evaluate(() => window.__moCount));
@@ -63,6 +73,29 @@ const fmt = (level, msg) => `[${level}] ${msg}`;
       `observers after each of 3 navigations: ${counts.join(', ')} (1, 2, 3 = the script accumulating)`);
     check('the guard sentinel is set in the page',
       (await page.evaluate(() => window.__nwssMetaRefreshWatch)) === true);
+
+    // Behaviour, not counts. De-duplicating the observer means the copy that
+    // installs it is the FIRST one, and each copy closes over the maxWaitMs of
+    // the call that installed it -- so a naive guard freezes the first call's
+    // budget for every later navigation on that page. Measured when this check
+    // was first written: /x navigations at 300ms followed by a 2s meta refresh at
+    // 3000ms produced detected=false on all three attempts, and the page never
+    // followed the refresh. The budget therefore lives on window and every copy
+    // updates it; this asserts that end to end.
+    const metaCounts = [];
+    for (let i = 0; i < 3; i++) {
+      const logged = [];
+      const collect = (level, msg) => { logged.push(`[${level}] ${msg}`); return ''; };
+      const r = await navigateWithRedirectHandling(page, `${url.replace(/\/x$/, '')}/meta`,
+        { js_redirect_timeout: 3000 }, { waitUntil: 'domcontentloaded', timeout: 9000 }, true, collect);
+      metaCounts.push({
+        landed: /\/landed/.test((r && r.finalUrl) || ''),
+        fired: logged.some(l => /JS redirect detected|meta\.refresh/i.test(l))
+      });
+    }
+    check('detection uses the CURRENT call budget, not the first script\'s',
+      metaCounts.every(m => m.fired && m.landed),
+      metaCounts.map((m, i) => `#${i + 1} fired=${m.fired} landed=${m.landed}`).join(', '));
   } finally {
     await browser.close();
     server.close();
