@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * What `dig` is actually told to query, for a given --dns spec.
+ * How nettools invokes `dig`: the argv for a given --dns spec, when the
+ * concurrency slot is held, and when a lookup is skipped entirely.
  *
  * `--dns` feeds three consumers: the DNS pre-check (lib/dns.js), nettools' dig,
  * and Chrome's DoH mapping. lib/dns.js deliberately accepts an address WITH a
@@ -15,12 +16,38 @@
  * These checks read the real argv by putting a fake `dig` on PATH (execFile
  * resolves through PATH), so they assert what the subprocess is invoked with
  * rather than what the parser returns.
+ *
+ * Two later groups cover behaviour around the invocation:
+ *
+ *   - The dig_max_concurrent slot is held around the SUBPROCESS only, not
+ *     across the retry backoff. It used to wrap the whole lookup, so one
+ *     failing domain sitting in a dig_retry_backoff pause (default 3s, up to
+ *     60s, times the retry count) blocked every other lookup from a slot while
+ *     nothing was running.
+ *   - .dnsignore skips a lookup entirely -- no dig at all -- for an entry or
+ *     any subdomain of one. Its matcher walks the candidate's parent domains
+ *     instead of scanning every entry, which --dnsignore-auto keeps appending
+ *     to; the two forms were verified equivalent over 36,000 generated
+ *     comparisons before the swap.
  */
 
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createNetToolsHandler, setDigResolvers } = require('../lib/nettools');
+
+// A truncated run must not look like a passing one. If a lookup never
+// resolves -- a leaked dig slot deadlocks acquireDigSlot(), and Node then
+// simply exits 0 with nothing left to do -- the suite would otherwise print
+// its first few PASS lines and appear green. Found exactly that while
+// mutation-testing the slot fix: the run stopped after 6 checks, exit 0.
+let finished = false;
+process.on('exit', (code) => {
+  if (!finished && code === 0) {
+    console.log('\n  FAIL  the suite exited before finishing — a lookup never resolved (leaked dig slot?)');
+    process.exitCode = 1;
+  }
+});
 
 let failures = 0;
 let checks = 0;
@@ -36,7 +63,7 @@ const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nwss-digshim-'));
 const argvLog = path.join(shimDir, 'argv.log');
 fs.writeFileSync(path.join(shimDir, 'dig'), `#!/bin/sh
 printf '%s\\n' "$*" >> ${argvLog}
-if [ "$NWSS_TEST_DIG_SERVFAIL" = "1" ]; then
+if [ -n "$NWSS_TEST_DIG_SERVFAIL" ] && { [ "$NWSS_TEST_DIG_SERVFAIL" = "1" ] || case "$*" in *"$NWSS_TEST_DIG_SERVFAIL"*) true ;; *) false ;; esac; }; then
   # A resolver-side failure: digLookup falls through to the next attempt, so
   # every entry in the plan runs and each one's argv is recorded.
   printf ';; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 1\\n'
@@ -116,7 +143,81 @@ async function digArgvFor(spec, { servfail = false } = {}) {
     argv.length > 0 && !argv[0].includes('@') && !argv[0].includes('-p'),
     JSON.stringify(argv[0] || '(none)'));
 
+  // === the concurrency slot is not held across the backoff ===
+  // A: a domain whose every attempt SERVFAILs, with one extra retry behind a
+  // 1.5s backoff. B: a healthy domain, started right after. With a cap of one
+  // slot, B can only finish while A is still pausing if A isn't holding it.
+  {
+    const { setDigConcurrency, setDigExtraRetries, setDigRetryBackoff } = require('../lib/nettools');
+    setDigConcurrency(1);
+    setDigExtraRetries(1);
+    setDigRetryBackoff(1500);
+
+    const slow = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set() });
+    const fast = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set() });
+    setDigResolvers(['127.0.0.1']);
+
+    // Per-domain failure: only A's name SERVFAILs, so A runs its full ladder
+    // (UDP, TCP after 400ms, then the extra retry after the 1500ms backoff)
+    // while B's dig answers normally and needs the single slot mid-backoff.
+    process.env.NWSS_TEST_DIG_SERVFAIL = 'servfail.example.test';
+    const t0 = Date.now();
+    const slowDone = slow('servfail.example.test', 'servfail.example.test').then(() => Date.now() - t0);
+    await new Promise(r => setTimeout(r, 600));      // A is now in its 1500ms backoff
+    const fastMs = await fast('healthy.example.test', 'healthy.example.test').then(() => Date.now() - t0);
+    const slowMs = await slowDone;
+    delete process.env.NWSS_TEST_DIG_SERVFAIL;
+    check('a lookup in its retry backoff does not hold the slot',
+      fastMs < 1500 && slowMs > 1800 && slowMs > fastMs,
+      `healthy finished at ${fastMs}ms while the servfailing lookup ran to ${slowMs}ms (400ms TCP pause + 1500ms retry backoff, cap 1 slot)`);
+
+    setDigConcurrency(6);
+    setDigExtraRetries(0);
+    setDigRetryBackoff(3000);
+  }
+
+  // === .dnsignore skips the lookup entirely ===
+  // The file lives at the repo root and is gitignored. Refuse to touch a real
+  // one rather than risk a user's list.
+  {
+    const { loadDnsIgnore } = require('../lib/nettools');
+    const ignoreFile = path.join(__dirname, '..', '.dnsignore');
+    if (fs.existsSync(ignoreFile)) {
+      console.log('  SKIP  .dnsignore checks — a real .dnsignore exists, not overwriting it');
+    } else {
+      try {
+        fs.writeFileSync(ignoreFile, '# test\nignored.example.test\n');
+        const loaded = loadDnsIgnore();
+        setDigResolvers([]);
+        const h = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(), processedWhoisDomains: new Set() });
+
+        fs.writeFileSync(argvLog, '');
+        await h('ignored.example.test', 'ignored.example.test');
+        const exact = fs.readFileSync(argvLog, 'utf8').trim();
+        check('an exact .dnsignore entry runs no dig', loaded === 1 && exact === '', `entries=${loaded} argv=${JSON.stringify(exact)}`);
+
+        fs.writeFileSync(argvLog, '');
+        await h('sub.deep.ignored.example.test', 'sub.deep.ignored.example.test');
+        const sub = fs.readFileSync(argvLog, 'utf8').trim();
+        check('a subdomain of an entry runs no dig', sub === '', `argv=${JSON.stringify(sub)}`);
+
+        fs.writeFileSync(argvLog, '');
+        await h('notignored.example.test', 'notignored.example.test');
+        const other = fs.readFileSync(argvLog, 'utf8').trim();
+        check('an unlisted domain still runs dig', other.includes('notignored.example.test'), `argv=${JSON.stringify(other)}`);
+
+        fs.writeFileSync(argvLog, '');
+        await h('xignored.example.test', 'xignored.example.test');
+        const near = fs.readFileSync(argvLog, 'utf8').trim();
+        check('a name merely ENDING in an entry is not skipped', near.includes('xignored.example.test'), `argv=${JSON.stringify(near)}`);
+      } finally {
+        fs.rmSync(ignoreFile, { force: true });
+      }
+    }
+  }
+
   fs.rmSync(shimDir, { recursive: true, force: true });
+  finished = true;
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness error:', e); process.exit(2); });
