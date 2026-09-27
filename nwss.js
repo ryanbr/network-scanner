@@ -2922,7 +2922,8 @@ function setupFrameHandling(page, forceDebug) {
         cdpSessionManager = await createCDPSession(page, currentUrl, {
           enableCDP,
           siteSpecificCDP: shouldEnableCDPForThisUrl,
-          forceDebug
+          forceDebug,
+          silentMode   // --silent suppresses the "CDP requested but --debug off" notice
         });
       } catch (cdpErr) {
         if (cdpErr.message.includes('Browser protocol broken')) {
