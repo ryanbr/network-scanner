@@ -1778,6 +1778,17 @@ function flushLogBuffersSync() {
 
 // Start periodic flush if any logging is enabled
 if (forceDebug || dumpUrls) {
+  // Last-resort flush. The periodic timer is unref'd and gets cleared at the end
+  // of the run, and the inline flush happens before that point, so an entry
+  // buffered afterwards would otherwise die with the process. Nothing
+  // demonstrably arrives that late today -- nettools' lookups are bounded by
+  // their own 5-8s timeouts and finish well before the final flush, verified by
+  // comparing line counts against a 6s and a 25s whois -- but the buffer is
+  // shared by every writer, so the guarantee should not rest on that timing.
+  // Safe to double up: flushLogBuffersSync empties each array after writing it,
+  // so this and the SIGINT / SIGTERM / inline calls cannot duplicate lines.
+  // Synchronous work only, which is all an 'exit' listener may do.
+  process.on('exit', flushLogBuffersSync);
   _logFlushTimer = setInterval(flushLogBuffers, LOG_FLUSH_INTERVAL);
   _logFlushTimer.unref(); // Don't keep process alive just for flushing
 }
