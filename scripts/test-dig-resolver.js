@@ -36,6 +36,12 @@ const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nwss-digshim-'));
 const argvLog = path.join(shimDir, 'argv.log');
 fs.writeFileSync(path.join(shimDir, 'dig'), `#!/bin/sh
 printf '%s\\n' "$*" >> ${argvLog}
+if [ "$NWSS_TEST_DIG_SERVFAIL" = "1" ]; then
+  # A resolver-side failure: digLookup falls through to the next attempt, so
+  # every entry in the plan runs and each one's argv is recorded.
+  printf ';; ->>HEADER<<- opcode: QUERY, status: SERVFAIL, id: 1\\n'
+  exit 0
+fi
 cat <<'OUT'
 ; <<>> DiG fake <<>>
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1
@@ -47,9 +53,11 @@ OUT
 process.env.PATH = shimDir + path.delimiter + process.env.PATH;
 
 let caseNo = 0;
-async function digArgvFor(spec) {
+async function digArgvFor(spec, { servfail = false } = {}) {
   fs.writeFileSync(argvLog, '');
-  setDigResolvers(spec === null ? [] : [spec]);
+  if (servfail) process.env.NWSS_TEST_DIG_SERVFAIL = '1';
+  else delete process.env.NWSS_TEST_DIG_SERVFAIL;
+  setDigResolvers(spec === null ? [] : (Array.isArray(spec) ? spec : [spec]));
   const handler = createNetToolsHandler({
     digTerms: ['127.0.0.1'],
     processedDigDomains: new Set(),
@@ -82,12 +90,26 @@ async function digArgvFor(spec) {
 
   // lib/dns.js validates only \d{1,5}, so :0 and :99999 can reach nettools. A
   // bad -p makes dig fail outright, so they fall back to the default port.
+  // (:0 is belt-and-braces -- 0 is falsy at the call-site guard, so removing
+  // digSpecPort's lower bound leaves this case passing and only :99999 red.)
   for (const bad of ['127.0.0.1:0', '127.0.0.1:99999']) {
     argv = await digArgvFor(bad);
     check(`an out-of-range port (${bad.split(':')[1]}) is ignored, not passed`,
       argv.length > 0 && argv[0].includes('@127.0.0.1') && !argv[0].includes('-p'),
       JSON.stringify(argv[0] || '(none)'));
   }
+
+  // Mixed list: the port belongs to its own entry, not to the lookup. Every
+  // resolver is tried in turn for one lookup (rotation + failover), so a port
+  // hoisted out of the per-entry mapping would leak onto the wrong server.
+  // Each attempt is a separate dig invocation, hence separate log lines.
+  argv = await digArgvFor(['1.1.1.1', '127.0.0.1:5353'], { servfail: true });
+  const portedLines = argv.filter(l => l.includes('@127.0.0.1'));
+  const plainLines = argv.filter(l => l.includes('@1.1.1.1'));
+  check('in a mixed list each resolver carries only its own port',
+    portedLines.length > 0 && portedLines.every(l => / -p 5353( |$)/.test(l)) &&
+    plainLines.length > 0 && plainLines.every(l => !l.includes('-p')),
+    `ported=${JSON.stringify(portedLines)} plain=${JSON.stringify(plainLines)}`);
 
   argv = await digArgvFor(null);
   check('no --dns means no @server and no -p',
