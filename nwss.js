@@ -2645,7 +2645,6 @@ function setupFrameHandling(page, forceDebug) {
     // purpose -- it dies with the page, so there is nothing to undo.
     let seededLocalStorage = [];
     let seededStorageScope = null;
-    let cdpSession = null;
     let cdpSessionManager = null;
     // Use Map to track domains and their resource types for --adblock-rules or --dry-run
     const matchedDomains = (adblockRulesMode || siteConfig.adblock_rules || dryRunMode) ? new Map() : new Set();
