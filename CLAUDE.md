@@ -144,6 +144,8 @@ no-op "skips" on the next refactor of the files they target.
 
 `scripts/test-socks-relay-identity.js` checks what makes two authenticated SOCKS5 upstreams the same local relay: the password is part of the identity (hashed), identical credentials still dedupe, and neither the key nor `getRelayStats` output carries a credential. ~1s, no network — `ensureRelay` binds a local listener and the upstream is never dialled.
 
+`scripts/test-flowproxy-budget.js` checks that flowproxy_detection's deliberate waits are represented in nwss.js's per-URL ceiling, so the hang check's emergency restart can't fire during a rate-limit or challenge wait. It extracts the shipped PER_URL_TIMEOUT_MS and restartAfterMs expressions from nwss.js and evaluates them, rather than re-typing the formula, and asserts the term is one-time (not multiplied by reloadCount). <1s, no browser.
+
 `scripts/test-redirect-detector.js` checks that the injected JS-redirect detector installs one MutationObserver per document however many times navigateWithRedirectHandling adds it (nwss can call it three times for one page, and evaluateOnNewDocument scripts accumulate). It counts real constructions by wrapping window.MutationObserver from a script installed first. ~5s, needs a browser.
 
 `scripts/test-interaction-cancel.js` checks that a hard-capped interaction stops rather than running on (a stub page with 3s calls, asserting at most one further call — the one already in flight), and that the impl receives the work-aware budget instead of a hardcoded 15000. ~25s, no browser, no network.

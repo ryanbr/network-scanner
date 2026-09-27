@@ -35,7 +35,7 @@ const {
   cleanup: cleanupCloudflareCache
 } = require('./lib/cloudflare');
 // FP Bypass
-const { handleFlowProxyProtection, getFlowProxyTimeouts, attachFlowProxyHeaderListener } = require('./lib/flowproxy');
+const { handleFlowProxyProtection, getFlowProxyTimeouts, getFlowProxyOverheadMs, attachFlowProxyHeaderListener } = require('./lib/flowproxy');
 // ignore_similar rules
 const { shouldIgnoreSimilarDomain, calculateSimilarity } = require('./lib/ignore_similar');
 // Graceful exit
@@ -1133,7 +1133,7 @@ FlowProxy Protection Options:
   flowproxy_nav_timeout: <milliseconds>        Navigation timeout for flowProxy sites (default: 45000)
   flowproxy_js_timeout: <milliseconds>         JavaScript challenge timeout (default: 15000)
   flowproxy_delay: <milliseconds>              Delay for rate limiting (default: 30000)
-  flowproxy_additional_delay: <milliseconds>   Additional processing delay (default: 5000)
+  flowproxy_additional_delay: <milliseconds>   Additional processing delay (default: 3000)
 
 Advanced Options:
   evaluateOnNewDocument: true/false           Inject fetch/XHR interceptor in page (for this site)
@@ -6466,12 +6466,25 @@ function setupFrameHandling(page, forceDebug) {
        ? Math.min(Number(task.config.click_wait) || 5000, Math.floor((task.config.timeout || 35000) / 2))
        : 0;
      const CLICK_ELEMENTS_OVERHEAD_MS = clickEls.length * (clickWaitMs + 2000);
+     // flowproxy_detection spends real time on purpose: the handler's rate-limit
+     // pause / JS-challenge wait / settle delay (getFlowProxyOverheadMs owns
+     // those numbers) plus this file's own post-delay flowProxy wait below. Both
+     // sit on the initial-load path, before the reload loop, so like the click
+     // phase this is NOT multiplied by reloadCount. Without the term, a config
+     // with flowproxy_delay: 120000 could spend ~185s while the hang check's
+     // emergency browser restart fired at 150s -- killing a wait the config
+     // asked for. Defaults reserve ~55s.
+     const FLOWPROXY_OVERHEAD_MS = getFlowProxyOverheadMs(task.config)
+       + (task.config.flowproxy_detection === true
+           ? Math.min(Number(task.config.flowproxy_additional_delay) || 3000, 3000)
+           : 0);
      const PER_URL_TIMEOUT_MS = Math.max(
        75000,
        (task.config.timeout || 35000)
          + ((task.config.delay || 0) + INTERACTION_OVERHEAD_MS) * (1 + reloadCount)
          + CLICK_ELEMENTS_OVERHEAD_MS
          + DIG_RETRY_OVERHEAD_MS  // room for the extended nettools drain under --dig-retry-failed
+         + FLOWPROXY_OVERHEAD_MS
          + 30000
      );
      // Feed the hang-check restart so it never escalates before this URL's own
