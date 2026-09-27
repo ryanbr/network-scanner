@@ -142,6 +142,8 @@ no-op "skips" on the next refactor of the files they target.
 
 ## Adblock Parity Tests
 
+`scripts/test-dig-resolver.js` asserts what `dig` is actually invoked with for a given `--dns` spec, by putting a fake `dig` on `PATH` and reading the recorded argv. It exists because `--dns` feeds both the pre-check and `dig`, and nettools used to strip an explicit `:port` — pointing the two paths at different servers, silently. ~1s, no browser, no network.
+
 `scripts/test-adblock-parity.js` asserts that `lib/adblock.js` and
 `lib/adblock-rust.js` return the same VERDICT (`blocked`), not the same `reason` —
 each names its own matching bucket. It exists because the two are swapped by one

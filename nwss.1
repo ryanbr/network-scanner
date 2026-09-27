@@ -149,11 +149,14 @@ When a \fBdig\fR lookup exhausts its normal UDP failover + TCP fallback without 
 Milliseconds to wait before each \fB\--dig-retry-failed\fR attempt (default 3000; capped at 60000). Raise it to outlast longer resolver bursts \(em a short pause only clears a brief drop, a longer one waits out a resolver that stays flaky for tens of seconds. The end-of-URL nettools drain and per-URL timeout budgets scale with this value so a late-completing retry is still captured. Only meaningful alongside \fB\--dig-retry-failed\fR. Also settable as \fBdig_retry_backoff\fR in \fB.nwssconfig\fR.
 
 .TP
-.BR \--dns " \fIIP\fR[,\fIIP\fR...]"
+.BR \--dns " \fIIP\fR[:\fIport\fR][,\fIIP\fR...]"
 Nameserver(s) for the DNS pre-check, nettools' dig, and \(em when they map to a
 known public DoH provider \(em Chrome's page navigation via DNS-over-HTTPS on
 direct connections (does not affect whois). A single address pins all queries
-to it; several are rotated per query (each leading once, the rest as failover)
+to it; several are rotated per query (each leading once, the rest as failover).
+An explicit port (127.0.0.1:5353, [2001:db8::1]:5353) is honoured by both the
+pre-check and dig, so a resolver on a non-standard port is queried there rather
+than on 53; an out-of-range port is ignored. DoH mapping always uses 443
 to spread the load. Routing dig through these avoids dig timeouts on a flaky
 system resolver silently dropping dig-gated domains. Overrides
 /etc/resolv.conf. Invalid entries are warned and dropped.
