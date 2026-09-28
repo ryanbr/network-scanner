@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [4.0.0] - 2026-09-28
 
 ### Removed
 Nothing in a per-site config needs changing for this release: no site-config key was removed (five were added — `cookies`, `local_storage`, `session_storage`, `interact_popups`, `capture_popups_signal`). What went away is code and documentation that could not do what it claimed:
