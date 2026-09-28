@@ -44,7 +44,7 @@ function loadInternals() {
     '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
-    'clickInShadowDOM, FAST_TIMEOUTS };\n';
+    'clickInShadowDOM, attemptChallengeSolveWithTimeout, FAST_TIMEOUTS, TIMEOUTS };\n';
   const m = new Module(CF_PATH, null);
   m.filename = CF_PATH;
   m.paths = Module._nodeModulePaths(path.dirname(CF_PATH));
@@ -289,6 +289,19 @@ const DETACHED = 'Attempted to use detached Frame';
       if (req.url.startsWith('/cdn-cgi/challenge-platform/')) {
         res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end('// cf');
       }
+      if (req.url.startsWith('/js-clears')) {
+        // A classic JS challenge that clears itself in place after N ms, which
+        // is what a real one does before redirecting.
+        const clearAt = parseInt((req.url.match(/(\d+)/) || [])[1] || '4000', 10);
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Just a moment...</title></head><body>' +
+          '<div class="cf-challenge-running">Checking your browser before accessing</div>' +
+          '<script src="/cdn-cgi/challenge-platform/x"></script><script>setTimeout(() => {' +
+          'document.title = "Real Site";' +
+          'document.querySelector(".cf-challenge-running").remove();' +
+          'document.querySelectorAll(\'script[src*="challenge-platform"]\').forEach(s => s.remove());' +
+          `}, ${clearAt});</script></body></html>`);
+      }
       if (req.url === '/phish-stuck') {
         // A phishing interstitial whose continue link is an in-page anchor: the
         // click lands, nothing navigates, the warning stays.
@@ -407,6 +420,25 @@ const DETACHED = 'Attempted to use detached Frame';
       await page.goto(`http://127.0.0.1:${PORT}/widget-only`, { waitUntil: 'domcontentloaded' });
       const jsWidgetOnly = await I.waitForJSChallengeCompletion(page, false);
       eq('a page still showing a Turnstile widget is not completed', jsWidgetOnly.success, false);
+
+      // --- a solved challenge must survive the solve cap -----------------
+      // The post-solve redirect wait used to be 10000ms and timed out in full
+      // on every solve (the completion predicate already proves the
+      // interstitial is gone), pushing the total past CHALLENGE_SOLVING: a
+      // challenge clearing in 4s came back success=false method=null.
+      check(`the post-solve redirect wait is small (${I.TIMEOUTS.POST_SOLVE_REDIRECT_MS}ms)`,
+        I.TIMEOUTS.POST_SOLVE_REDIRECT_MS <= 3000, `${I.TIMEOUTS.POST_SOLVE_REDIRECT_MS}ms`);
+      for (const clearAt of [1000, 4000]) {
+        await page.goto(`http://127.0.0.1:${PORT}/js-clears${clearAt}`, { waitUntil: 'domcontentloaded' });
+        const ci = await I.analyzeCloudflareChallenge(page);
+        const t = Date.now();
+        const capped = await I.attemptChallengeSolveWithTimeout(page, 'x', ci, false);
+        const ms = Date.now() - t;
+        eq(`a challenge clearing in ${clearAt}ms is reported solved through the cap`, capped.success, true);
+        eq(`  ...with the method named (clearAt=${clearAt})`, capped.method, 'js_challenge_wait');
+        check(`  ...and returns inside the ${I.FAST_TIMEOUTS.CHALLENGE_SOLVING}ms cap (took ${ms}ms)`,
+          ms < I.FAST_TIMEOUTS.CHALLENGE_SOLVING, `${ms}ms`);
+      }
 
       // --- phishing bypass must confirm the warning is gone -------------
       await page.goto(`http://127.0.0.1:${PORT}/phish-stuck`, { waitUntil: 'domcontentloaded' });
