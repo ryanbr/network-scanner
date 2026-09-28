@@ -661,15 +661,11 @@ Boolean. Auto-solve Cloudflare "Verify you are human" challenges (default: false
 
 .TP
 .B cloudflare_parallel_detection
-Boolean. Use parallel detection for faster Cloudflare checks (default: true).
+Boolean. Log which challenge types a page carries, under \fB--debug\fR (default: true). Diagnostics only \(em it does not feed the bypass logic.
 
 .TP
 .B cloudflare_max_retries
-Number. Maximum retry attempts for Cloudflare operations (default: 3).
-
-.TP
-.B cloudflare_cache_ttl
-Milliseconds. TTL for Cloudflare detection cache (default: 300000 - 5 minutes).
+Number. Maximum retry attempts for Cloudflare operations (default: 2).
 
 .TP
 .B cloudflare_retry_on_error

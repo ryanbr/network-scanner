@@ -266,9 +266,8 @@ When a page redirects to a new domain, first-party/third-party detection is base
 |:---------------------|:-------|:-------:|:------------|
 | `cloudflare_phish`   | Boolean | `false` | Auto-click through Cloudflare phishing warnings |
 | `cloudflare_bypass`  | Boolean | `false` | Auto-solve Cloudflare "Verify you are human" challenges |
-| `cloudflare_parallel_detection` | Boolean | `true` | Use parallel detection for faster Cloudflare checks |
-| `cloudflare_max_retries` | Integer | `3` | Maximum retry attempts for Cloudflare operations |
-| `cloudflare_cache_ttl` | Milliseconds | `300000` | TTL for Cloudflare detection cache (5 minutes) |
+| `cloudflare_parallel_detection` | Boolean | `true` | Log which challenge types a page carries, under `--debug` (diagnostics only) |
+| `cloudflare_max_retries` | Integer | `2` | Maximum retry attempts for Cloudflare operations |
 | `cloudflare_retry_on_error` | Boolean | `true` | Enable retry logic for Cloudflare operations |
 | `flowproxy_detection` | Boolean | `false` | Enable flowProxy protection detection and handling |
 | `flowproxy_page_timeout` | Milliseconds | `45000` | Page timeout for flowProxy sites |

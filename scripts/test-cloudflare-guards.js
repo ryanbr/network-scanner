@@ -1,0 +1,326 @@
+#!/usr/bin/env node
+/**
+ * test-cloudflare-guards.js
+ *
+ * Pins the correctness guards in lib/cloudflare.js, all of which shared one
+ * failure mode: reporting success (or "clean") on evidence that could not
+ * support it.
+ *
+ *   1. A failed quick detection is not cached, is not reported as
+ *      "no indicators", and does not suppress handling on the whole domain
+ *   2. checkChallengeCompletion never passes safePageEvaluate's truthy
+ *      defaults object back as `isCompleted`
+ *   3. cf_clearance is read over CDP (it is HttpOnly, so document.cookie
+ *      cannot see it)
+ *   4. The retry ladder stops when the caller's adaptive timeout gives up,
+ *      before the page.reload() in betweenAttempts
+ *   5. The JS-challenge wait requires positive evidence, and does not
+ *      pre-empt the Turnstile solver on a page carrying both
+ *
+ * Run: node scripts/test-cloudflare-guards.js          (browser part needs puppeteer)
+ */
+
+const fs = require('fs');
+const path = require('path');
+const Module = require('module');
+const http = require('http');
+
+let passed = 0, failed = 0;
+function check(name, cond, detail) {
+  if (cond) { console.log(`  ✓ ${name}`); passed++; }
+  else { console.log(`  ✗ ${name}${detail ? ` — ${detail}` : ''}`); failed++; }
+}
+function eq(name, actual, expected) {
+  check(name, actual === expected, `expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+}
+
+const CF_PATH = path.join(__dirname, '..', 'lib', 'cloudflare.js');
+
+// The module keeps its public surface deliberately narrow, so the internals
+// these guards live in aren't exported. Compile the real file with one extra
+// line appended to expose them, rather than widening module.exports for tests.
+function loadInternals() {
+  const code = fs.readFileSync(CF_PATH, 'utf8') +
+    '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
+    'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
+    'runWithRetries, getRetryConfig };\n';
+  const m = new Module(CF_PATH, null);
+  m.filename = CF_PATH;
+  m.paths = Module._nodeModulePaths(path.dirname(CF_PATH));
+  m._compile(code, CF_PATH);
+  return m.exports;
+}
+
+const DETACHED = 'Attempted to use detached Frame';
+
+(async () => {
+  // =====================================================================
+  console.log('\n=== quick detection: a failure is not an answer ===');
+  {
+    // Fresh module instance per case so the detection cache starts empty.
+    const cf = loadInternals();
+    let evaluateCalls = 0;
+    const page = {
+      isClosed: () => false,
+      url: async () => 'https://flaky.test/page1',
+      frames: () => [], cookies: async () => [],
+      evaluate: async () => {
+        evaluateCalls++;
+        if (evaluateCalls === 1) throw new Error(DETACHED);
+        return { hasIndicators: true, title: 'Just a moment', url: 'https://flaky.test/', bodySnippet: '' };
+      }
+    };
+    // No explicit config: the early return stands, but must say WHY honestly.
+    const r1 = await cf.handleCloudflareProtection(page, 'https://flaky.test/page1', {}, false);
+    eq('no config: reported as detection_failed, not no_indicators', !!r1.quickDetectionFailed, true);
+    eq('no config: skippedNoIndicators is not claimed', !!r1.skippedNoIndicators, false);
+    eq('nothing was cached', cf.getCacheStats().size, 0);
+
+    // Second URL on the same host must re-detect rather than read a cached
+    // "clean" verdict. Before the fix this was 1 evaluate total, forever.
+    const before = evaluateCalls;
+    page.url = async () => 'https://flaky.test/page2';
+    const r2 = await cf.handleCloudflareProtection(page, 'https://flaky.test/page2', {}, false);
+    check('next URL on the domain re-detects', evaluateCalls > before,
+      `evaluate calls stayed at ${evaluateCalls}`);
+    eq('and now finds the indicators it missed', !!r2.skippedNoIndicators, false);
+  }
+  {
+    const cf = loadInternals();
+    const page = {
+      isClosed: () => false, url: async () => 'https://flaky2.test/a',
+      frames: () => [], cookies: async () => [],
+      evaluate: async () => { throw new Error(DETACHED); }
+    };
+    // With explicit config the handler must attempt handling anyway: skipping
+    // on a transient failure is how a challenge page gets scanned as the site.
+    const r = await cf.handleCloudflareProtection(page, 'https://flaky2.test/a', { cloudflare_bypass: true }, false);
+    eq('cloudflare_bypass set: handling is attempted despite the failure', !!r.skippedNoIndicators, false);
+  }
+  {
+    // No regression: a SUCCESSFUL detection is still cached per hostname.
+    const cf = loadInternals();
+    let calls = 0;
+    const page = {
+      isClosed: () => false, url: async () => 'https://ok.test/a',
+      frames: () => [], cookies: async () => [],
+      evaluate: async () => { calls++; return { hasIndicators: false, title: 'Shop', url: 'https://ok.test/a', bodySnippet: '' }; }
+    };
+    await cf.handleCloudflareProtection(page, 'https://ok.test/a', {}, false);
+    page.url = async () => 'https://ok.test/b';
+    await cf.handleCloudflareProtection(page, 'https://ok.test/b', {}, false);
+    eq('a clean result is still cached domain-wide (1 evaluate for 2 URLs)', calls, 1);
+    eq('cache holds the one hostname', cf.getCacheStats().size, 1);
+  }
+
+  // =====================================================================
+  console.log('\n=== checkChallengeCompletion: a failed evaluation is not a solve ===');
+  {
+    const { _internals: I } = loadInternals();
+    const failing = {
+      isClosed: () => false, url: async () => 'https://x.test/',
+      cookies: async () => [],
+      evaluate: async () => { throw new Error(DETACHED); }
+    };
+    const fallback = await I.safePageEvaluate(failing, () => true, 100, { maxRetries: 1 });
+    check('safePageEvaluate still returns its truthy defaults object', !!fallback && typeof fallback === 'object');
+
+    const r = await I.checkChallengeCompletion(failing);
+    eq('isCompleted is strictly false, not a truthy object', r.isCompleted, false);
+    check('and carries the reason', typeof r.error === 'string' && r.error.length > 0);
+  }
+  {
+    const { _internals: I } = loadInternals();
+    const mk = (payload, cookies = []) => ({
+      isClosed: () => false, url: async () => 'https://x.test/',
+      cookies: async () => cookies,
+      evaluate: async () => payload
+    });
+    eq('DOM clear of challenge markers -> completed',
+      (await I.checkChallengeCompletion(mk({ __cfCheck: true, domClear: true, hasToken: false }))).isCompleted, true);
+    eq('Turnstile token present -> completed',
+      (await I.checkChallengeCompletion(mk({ __cfCheck: true, domClear: false, hasToken: true }))).isCompleted, true);
+    eq('neither, and no cookie -> not completed',
+      (await I.checkChallengeCompletion(mk({ __cfCheck: true, domClear: false, hasToken: false }))).isCompleted, false);
+    // document.cookie cannot see an HttpOnly cf_clearance; page.cookies() can.
+    eq('cf_clearance read over CDP -> completed',
+      (await I.checkChallengeCompletion(
+        mk({ __cfCheck: true, domClear: false, hasToken: false }, [{ name: 'cf_clearance', value: 'abc' }]))).isCompleted, true);
+    // Comment lines stripped: the fix's own explanation names the dead call.
+    const cfCode = fs.readFileSync(CF_PATH, 'utf8').split('\n')
+      .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    check('no executable line tests document.cookie for cf_clearance',
+      !/document\.cookie\.includes\('cf_clearance'\)/.test(cfCode),
+      'an HttpOnly cookie is invisible to document.cookie, so that term was dead');
+  }
+
+  // =====================================================================
+  console.log('\n=== retry ladder stops when the caller gives up ===');
+  {
+    const { _internals: I } = loadInternals();
+    const retryConfig = I.getRetryConfig({ cloudflare_max_retries: 5 });
+
+    let attempts = 0, reloads = 0;
+    const signal = { cancelled: true };
+    const res = await I.runWithRetries({
+      label: 'Challenge', retryConfig, forceDebug: false, signal,
+      attemptFn: async () => { attempts++; return { success: false, error: 'nope' }; },
+      betweenAttempts: async () => { reloads++; }
+    });
+    eq('pre-cancelled: no attempt is made', attempts, 0);
+    eq('pre-cancelled: no reload is made', reloads, 0);
+    eq('pre-cancelled: reports cancelled', !!res.cancelled, true);
+    eq('pre-cancelled: does not claim success', res.success, false);
+  }
+  {
+    const { _internals: I } = loadInternals();
+    const retryConfig = I.getRetryConfig({ cloudflare_max_retries: 5 });
+    let attempts = 0, reloads = 0;
+    const signal = { cancelled: false };
+    const res = await I.runWithRetries({
+      label: 'Challenge', retryConfig, forceDebug: false, signal,
+      // Cancel during the first attempt, the way the adaptive timeout does.
+      attemptFn: async () => { attempts++; signal.cancelled = true; return { success: false, error: 'nope' }; },
+      betweenAttempts: async () => { reloads++; }
+    });
+    eq('cancelled mid-flight: the first attempt still ran', attempts, 1);
+    eq('cancelled mid-flight: page.reload() is skipped', reloads, 0);
+    eq('cancelled mid-flight: no further attempts', attempts, 1);
+    eq('cancelled mid-flight: reports cancelled', !!res.cancelled, true);
+  }
+  {
+    // Not cancelled: the ladder must still retry and still reload.
+    const { _internals: I } = loadInternals();
+    const retryConfig = I.getRetryConfig({ cloudflare_max_retries: 3 });
+    let attempts = 0, reloads = 0;
+    await I.runWithRetries({
+      label: 'Challenge', retryConfig, forceDebug: false, signal: null,
+      attemptFn: async () => { attempts++; return { success: false, error: 'nope' }; },
+      betweenAttempts: async () => { reloads++; }
+    });
+    eq('no signal: all attempts run', attempts, 3);
+    eq('no signal: reload still happens between them', reloads, 2);
+  }
+  {
+    // The wiring: the adaptive timeout must trip the signal it passes down.
+    const src = fs.readFileSync(CF_PATH, 'utf8');
+    const block = src.slice(src.indexOf('const cfSignal = { cancelled: false };'),
+                            src.indexOf('// Cache timeout results at domain level'));
+    check('the adaptive timeout sets cfSignal.cancelled', /cfSignal\.cancelled = true;/.test(block));
+    check('and cfSignal reaches performCloudflareHandling',
+      /performCloudflareHandling\([^)]*cfSignal\)/.test(block.replace(/\n/g, ' ')));
+  }
+
+  // =====================================================================
+  console.log('\n=== JS-challenge wait: positive evidence only (browser) ===');
+  let puppeteer = null;
+  try { puppeteer = require('puppeteer'); } catch { /* optional */ }
+  if (!puppeteer) {
+    console.log('  … skipped (puppeteer not resolvable)');
+  } else {
+    const PORT = 8299;
+    const srv = http.createServer((req, res) => {
+      if (req.url.startsWith('/cdn-cgi/challenge-platform/')) {
+        res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end('// cf');
+      }
+      if (req.url === '/title-only') {
+        // The title is the only interstitial signal: no challenge-platform
+        // script, no widget, no telltale body text. Cloudflare serves this
+        // shape when the markers sit in a closed shadow root, and
+        // analyzeCloudflareChallenge treats the title alone as a challenge.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Just a moment...</title></head><body><div>loading</div></body></html>');
+      }
+      if (req.url === '/widget-only') {
+        // A Turnstile widget whose page gives away nothing else: neutral
+        // title, no challenge-platform script, none of the telltale phrases.
+        // The widget term in the predicate is the only thing that catches it.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Attention Required!</title></head><body>' +
+          '<p>Please complete the security check to continue.</p><div class="cf-turnstile"></div></body></html>');
+      }
+      if (req.url === '/clean') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Real Site</title></head><body><h1>content</h1></body></html>');
+      }
+      // A Turnstile interstitial: carries the challenge-platform script (so
+      // the detector sets isJSChallenge) but none of the phrases the old
+      // predicate tested for.
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<html><head><title>Just a moment...</title></head><body>
+        <div class="cf-turnstile"></div>
+        <p>Verify you are human by completing the action below.</p>
+        <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>
+      </body></html>`);
+    });
+    await new Promise(r => srv.listen(PORT, '127.0.0.1', r));
+    const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
+    try {
+      const { _internals: I } = loadInternals();
+      const page = await browser.newPage();
+
+      await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+      const info = await I.analyzeCloudflareChallenge(page);
+      check('fixture is seen as both a JS and a Turnstile challenge',
+        info.isJSChallenge === true && info.isTurnstile === true,
+        `js=${info.isJSChallenge} turnstile=${info.isTurnstile}`);
+
+      const t0 = Date.now();
+      const js = await I.waitForJSChallengeCompletion(page, false);
+      const ms = Date.now() - t0;
+      eq('interstitial is NOT reported as a completed JS challenge', js.success, false);
+      check('it waited for its timeout instead of resolving instantly', ms > 1000, `returned in ${ms}ms`);
+
+      const solve = await I.attemptChallengeSolve(page, `http://127.0.0.1:${PORT}/`, info, false);
+      check('the JS wait no longer claims the solve on a Turnstile page',
+        solve.method !== 'js_challenge_wait', `method=${solve.method}`);
+      eq('an unsolved Turnstile page is reported unsolved', solve.success, false);
+
+      // Ordering: on a page carrying a Turnstile widget the interactive
+      // method must be tried BEFORE the passive wait. The predicate fix alone
+      // stops the false claim, so only the order proves the deferral works --
+      // capture the module's own debug lines and compare their positions.
+      await page.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+      const lines = [];
+      const realLog = console.log;
+      console.log = (...a) => { lines.push(a.join(' ')); };
+      try {
+        await I.attemptChallengeSolve(page, `http://127.0.0.1:${PORT}/`, info, true);
+      } finally {
+        console.log = realLog;
+      }
+      const iTurnstile = lines.findIndex(l => l.includes('Attempting Turnstile method'));
+      const iJsWait = lines.findIndex(l => l.includes('Attempting JS challenge wait'));
+      check('Turnstile is attempted on a Turnstile page', iTurnstile !== -1);
+      check('the passive JS wait runs AFTER it, not before',
+        iTurnstile !== -1 && iJsWait !== -1 && iTurnstile < iJsWait,
+        `turnstile@${iTurnstile} jsWait@${iJsWait}`);
+      check('and the deferral is announced',
+        lines.some(l => l.includes('Deferring JS challenge wait')));
+
+      // A title-only interstitial must not read as a completed JS challenge:
+      // the title test is the only guard that catches this shape.
+      await page.goto(`http://127.0.0.1:${PORT}/title-only`, { waitUntil: 'domcontentloaded' });
+      const jsTitleOnly = await I.waitForJSChallengeCompletion(page, false);
+      eq('a page whose only signal is the "Just a moment" title is not completed',
+        jsTitleOnly.success, false);
+
+      // A live Turnstile widget means unsolved, whatever the title and body say.
+      await page.goto(`http://127.0.0.1:${PORT}/widget-only`, { waitUntil: 'domcontentloaded' });
+      const jsWidgetOnly = await I.waitForJSChallengeCompletion(page, false);
+      eq('a page still showing a Turnstile widget is not completed', jsWidgetOnly.success, false);
+
+      // Positive case: a page with no challenge markers must still pass, or
+      // the fix would have broken real JS-challenge detection.
+      await page.goto(`http://127.0.0.1:${PORT}/clean`, { waitUntil: 'domcontentloaded' });
+      const jsOk = await I.waitForJSChallengeCompletion(page, false);
+      eq('a cleared page IS reported as completed', jsOk.success, true);
+    } finally {
+      await browser.close();
+      srv.close();
+    }
+  }
+
+  console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
+  process.exit(failed === 0 ? 0 : 1);
+})().catch(e => { console.error('FATAL', e); process.exit(1); });

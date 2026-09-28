@@ -1120,12 +1120,10 @@ Redirect Handling Options:
 Cloudflare Protection Options:
   cloudflare_phish: true/false                 Auto-click through Cloudflare phishing warnings (default: false)
   cloudflare_bypass: true/false               Auto-solve Cloudflare "Verify you are human" challenges (default: false)
-  cloudflare_parallel_detection: true/false    Use parallel detection for faster Cloudflare checks (default: true)
-  cloudflare_max_retries: <number>            Maximum retry attempts for Cloudflare operations (default: 3)
-  cloudflare_cache_ttl: <milliseconds>        TTL for Cloudflare detection cache (default: 300000 - 5 minutes)
+  cloudflare_parallel_detection: true/false    Log which challenge types a page carries, under --debug (default: true)
+  cloudflare_max_retries: <number>            Maximum retry attempts for Cloudflare operations (default: 2)
   cloudflare_retry_on_error: true/false       Enable retry logic for Cloudflare operations (default: true)
                                                Note: Automatically detects and exits on redirect loops to prevent endless loading
-  cloudflare_retry_on_error: true/false       Enable retry logic for Cloudflare operations (default: true)
 
 FlowProxy Protection Options:
   flowproxy_detection: true/false              Enable flowProxy protection detection and handling (default: false)
@@ -4907,10 +4905,14 @@ function setupFrameHandling(page, forceDebug) {
         // Enhanced Cloudflare handling with parallel detection
         // Only run parallel detection if cloudflare handling is explicitly configured
         const hasCloudflareConfig = siteConfig.cloudflare_bypass || siteConfig.cloudflare_phish;
-        if (hasCloudflareConfig && siteConfig.cloudflare_parallel_detection !== false) {
+        // forceDebug-gated: the result is only ever logged, never fed into the
+        // bypass decision (handleCloudflareProtection runs its own detection),
+        // so without --debug this was a page.evaluate per CF-configured URL
+        // whose answer was thrown away.
+        if (forceDebug && hasCloudflareConfig && siteConfig.cloudflare_parallel_detection !== false) {
           try {
             const parallelResult = await parallelChallengeDetection(page, forceDebug);
-            if (parallelResult.hasAnyChallenge && forceDebug) {
+            if (parallelResult.hasAnyChallenge) {
               console.log(formatLogMessage('debug', `[cloudflare] Parallel detection found: ${parallelResult.challenges.join(', ')}`));
             }
           } catch (parallelErr) {
