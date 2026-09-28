@@ -129,6 +129,25 @@ jobs:
             echo "::warning::No CHANGELOG section found for $NEW_VERSION -- release body will be empty"
           fi
 
+          # GitHub rejects a release body over 125,000 characters. Check it
+          # HERE rather than discovering it at the API call: this step runs
+          # before both `npm publish` and the push, so an oversized section
+          # aborts the release with nothing shipped and nothing to unpick
+          # (an npm version is immutable once it lands). v4.0.0's notes were
+          # 101,927 characters -- 82% of the cap, after four months of
+          # accumulated entries -- so another release of that size would hit
+          # it, which is why this is a hard failure and not a warning.
+          LIMIT=125000
+          LEN=$(printf '%s' "$NOTES" | wc -c)
+          echo "Release notes: $LEN / $LIMIT characters"
+          if [ "$LEN" -gt "$LIMIT" ]; then
+            echo "::error::Release notes for $NEW_VERSION are $LEN characters, over GitHub's $LIMIT-character limit. Trim the CHANGELOG [$NEW_VERSION] section before re-running -- nothing has been published or pushed."
+            exit 1
+          fi
+          if [ "$LEN" -gt $((LIMIT * 90 / 100)) ]; then
+            echo "::warning::Release notes are $LEN characters, over 90% of GitHub's $LIMIT-character limit -- the next release of this size will fail."
+          fi
+
           # Multi-line GITHUB_OUTPUT requires a delimited heredoc
           {
             echo "notes<<NOTES_EOF"
