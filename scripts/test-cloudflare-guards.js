@@ -43,7 +43,8 @@ function loadInternals() {
   const code = fs.readFileSync(CF_PATH, 'utf8') +
     '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
-    'runWithRetries, getRetryConfig, performCloudflareHandling };\n';
+    'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
+    'clickInShadowDOM, FAST_TIMEOUTS };\n';
   const m = new Module(CF_PATH, null);
   m.filename = CF_PATH;
   m.paths = Module._nodeModulePaths(path.dirname(CF_PATH));
@@ -232,6 +233,18 @@ const DETACHED = 'Attempted to use detached Frame';
     eq('and the stage really was skipped', res.verificationChallenge.attempted, false);
   }
 
+  {
+    // byOutcome already names the solve method, so a parallel bySolveMethod
+    // tally was a duplicate kept per URL that no caller read.
+    const cf = loadInternals();
+    const snap = cf.getAggregateStats();
+    check('getAggregateStats no longer carries a bySolveMethod duplicate',
+      !('bySolveMethod' in snap), Object.keys(snap).join(','));
+    check('byOutcome is still there to carry the breakdown', 'byOutcome' in snap);
+    const nwssSrc0 = fs.readFileSync(path.join(__dirname, '..', 'nwss.js'), 'utf8');
+    check('and nwss does not reference the dropped field', !/bySolveMethod/.test(nwssSrc0));
+  }
+
   // =====================================================================
   console.log('\n=== end-of-scan summary counts detection_failed honestly ===');
   {
@@ -275,6 +288,38 @@ const DETACHED = 'Attempted to use detached Frame';
     const srv = http.createServer((req, res) => {
       if (req.url.startsWith('/cdn-cgi/challenge-platform/')) {
         res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end('// cf');
+      }
+      if (req.url === '/phish-stuck') {
+        // A phishing interstitial whose continue link is an in-page anchor: the
+        // click lands, nothing navigates, the warning stays.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Attention Required!</title></head><body>' +
+          '<p>This website has been reported for potential phishing.</p>' +
+          '<a href="#continue-anyway">Continue to site</a></body></html>');
+      }
+      if (req.url === '/phish-ok') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Attention Required!</title></head><body>' +
+          '<p>This website has been reported for potential phishing.</p>' +
+          '<a href="/clean?continue=1">Continue to site</a></body></html>');
+      }
+      if (req.url === '/shadow-late') {
+        // Only a LATER candidate matches, and it renders after 800ms -- the
+        // shape the shortened per-selector probe must still catch.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body><div id="host"></div><script>' +
+          'setTimeout(() => { document.getElementById("host").innerHTML = ' +
+          '\'<span class="ctp-checkbox" style="display:block;width:20px;height:20px"></span>\'; }, 800);' +
+          '</script></body></html>');
+      }
+      if (req.url === '/shadow-now') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body><span class="ctp-checkbox" ' +
+          'style="display:block;width:20px;height:20px"></span></body></html>');
+      }
+      if (req.url === '/shadow-none') {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body><div class="cf-turnstile"><span>widget</span></div></body></html>');
       }
       if (req.url === '/title-only') {
         // The title is the only interstitial signal: no challenge-platform
@@ -362,6 +407,42 @@ const DETACHED = 'Attempted to use detached Frame';
       await page.goto(`http://127.0.0.1:${PORT}/widget-only`, { waitUntil: 'domcontentloaded' });
       const jsWidgetOnly = await I.waitForJSChallengeCompletion(page, false);
       eq('a page still showing a Turnstile widget is not completed', jsWidgetOnly.success, false);
+
+      // --- phishing bypass must confirm the warning is gone -------------
+      await page.goto(`http://127.0.0.1:${PORT}/phish-stuck`, { waitUntil: 'domcontentloaded' });
+      const stuck = await I.handlePhishingWarning(page, `http://127.0.0.1:${PORT}/phish-stuck`, false);
+      eq('a continue click that changes nothing is not a bypass', stuck.success, false);
+      check('and it says why', /still present/.test(stuck.error || ''), stuck.error);
+      const stuckPage = await page.evaluate(() => document.body.textContent.includes('reported for potential phishing'));
+      check('the warning really is still on screen', stuckPage === true);
+
+      await page.goto(`http://127.0.0.1:${PORT}/phish-ok`, { waitUntil: 'domcontentloaded' });
+      const okPhish = await I.handlePhishingWarning(page, `http://127.0.0.1:${PORT}/phish-ok`, false);
+      eq('a continue click that clears the warning IS a bypass', okPhish.success, true);
+      eq('and it is marked as attempted', okPhish.attempted, true);
+
+      // --- the rendering wait is paid once, not per selector -------------
+      const SELS = ['input[type="checkbox"]', '.ctp-checkbox', '.ctp-checkbox-label',
+                    '[role="checkbox"]', 'label.cb-lb', 'label'];
+      await page.goto(`http://127.0.0.1:${PORT}/shadow-none`, { waitUntil: 'domcontentloaded' });
+      const tMiss = Date.now();
+      const miss = await I.clickInShadowDOM(page, SELS, false);
+      const missMs = Date.now() - tMiss;
+      eq('all-miss finds nothing', miss.found, false);
+      // Two of these run per solve attempt, inside one CHALLENGE_SOLVING cap.
+      check(`all-miss cost (${missMs}ms) leaves room for two calls inside the ${I.FAST_TIMEOUTS.CHALLENGE_SOLVING}ms cap`,
+        missMs * 2 < I.FAST_TIMEOUTS.CHALLENGE_SOLVING,
+        `2 x ${missMs}ms vs ${I.FAST_TIMEOUTS.CHALLENGE_SOLVING}ms`);
+
+      await page.goto(`http://127.0.0.1:${PORT}/shadow-now`, { waitUntil: 'domcontentloaded' });
+      const nowHit = await I.clickInShadowDOM(page, SELS, false);
+      check('a later candidate present from the start is still clicked',
+        nowHit.found === true && nowHit.clicked === true, JSON.stringify(nowHit));
+
+      await page.goto(`http://127.0.0.1:${PORT}/shadow-late`, { waitUntil: 'domcontentloaded' });
+      const lateHit = await I.clickInShadowDOM(page, SELS, false);
+      check('a later candidate that renders after 800ms is still clicked',
+        lateHit.found === true && lateHit.clicked === true, JSON.stringify(lateHit));
 
       // Positive case: a page with no challenge markers must still pass, or
       // the fix would have broken real JS-challenge detection.
