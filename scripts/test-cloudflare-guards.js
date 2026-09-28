@@ -43,7 +43,7 @@ function loadInternals() {
   const code = fs.readFileSync(CF_PATH, 'utf8') +
     '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
-    'runWithRetries, getRetryConfig };\n';
+    'runWithRetries, getRetryConfig, performCloudflareHandling };\n';
   const m = new Module(CF_PATH, null);
   m.filename = CF_PATH;
   m.paths = Module._nodeModulePaths(path.dirname(CF_PATH));
@@ -209,6 +209,59 @@ const DETACHED = 'Attempted to use detached Frame';
     check('the adaptive timeout sets cfSignal.cancelled', /cfSignal\.cancelled = true;/.test(block));
     check('and cfSignal reaches performCloudflareHandling',
       /performCloudflareHandling\([^)]*cfSignal\)/.test(block.replace(/\n/g, ' ')));
+  }
+
+  {
+    // A cancelled stage must not be reported as one the user disabled: the
+    // signal check shares its else-branch with the "disabled" log.
+    const { _internals: I } = loadInternals();
+    const page = { isClosed: () => false, url: async () => 'https://c.test/', frames: () => [], cookies: async () => [] };
+    const lines = [];
+    const realLog = console.log;
+    console.log = (...a) => { lines.push(a.join(' ')); };
+    let res;
+    try {
+      res = await I.performCloudflareHandling(page, 'https://c.test/', {}, true,
+        { cfBypassEnabled: true, cfPhishEnabled: false }, {}, { cancelled: true });
+    } finally { console.log = realLog; }
+    check('a cancelled challenge stage is not reported as "disabled"',
+      !lines.some(l => l.includes('Challenge bypass disabled')),
+      lines.filter(l => l.includes('Challenge bypass')).join(' | '));
+    check('it says the caller stopped waiting',
+      lines.some(l => l.includes('caller stopped waiting')));
+    eq('and the stage really was skipped', res.verificationChallenge.attempted, false);
+  }
+
+  // =====================================================================
+  console.log('\n=== end-of-scan summary counts detection_failed honestly ===');
+  {
+    // Extract nwss.js's own arithmetic rather than re-typing it. A
+    // detection that never completed is not evidence the URL met
+    // Cloudflare: before lib/cloudflare.js started labelling it, that URL
+    // counted as no_indicators and so was suppressed, and counting it as
+    // notable would make a scan of Cloudflare-free pages announce
+    // "1 of 1 URL(s) met Cloudflare" off one flaky evaluation.
+    const nwssSrc = fs.readFileSync(path.join(__dirname, '..', 'nwss.js'), 'utf8');
+    const m = nwssSrc.match(/const quiet = ([\s\S]*?)\n\s*const notable = ([^;]*);/);
+    if (!m) { console.error('FATAL: could not locate the Cloudflare summary arithmetic in nwss.js'); process.exit(1); }
+    const quietExpr = m[1].split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n').trim().replace(/;$/, '');
+    const detectionFailedExpr = (m[1].match(/const detectionFailed = ([^;]*);/) || [])[1];
+    check('nwss computes a detectionFailed term', !!detectionFailedExpr);
+    const notableFn = new Function('outcomes', 'cf',
+      `const quiet = ${quietExpr.replace(/const detectionFailed[\s\S]*$/, '').trim().replace(/;$/, '')};
+       const detectionFailed = ${detectionFailedExpr || '0'};
+       const notable = ${m[2]};
+       return { notable, detectionFailed };`);
+
+    const flaky = notableFn({ no_indicators: 4, detection_failed: 1 }, { total: 5 });
+    eq('a flaky Cloudflare-free scan reports 0 as having met Cloudflare', flaky.notable, 0);
+    eq('and surfaces the failure count separately', flaky.detectionFailed, 1);
+
+    const real = notableFn({ no_indicators: 8, 'solved(turnstile)': 2, detection_failed: 1 }, { total: 11 });
+    eq('genuine Cloudflare URLs are still counted', real.notable, 2);
+
+    const clean = notableFn({ no_indicators: 10 }, { total: 10 });
+    eq('a clean scan stays quiet', clean.notable, 0);
   }
 
   // =====================================================================

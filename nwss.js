@@ -7204,16 +7204,29 @@ function setupFrameHandling(page, forceDebug) {
         // clean run, and label from the module's own outcome keys rather than
         // inventing names that can drift from buildOutcomeString().
         const quiet = (outcomes['no_indicators'] || 0) + (outcomes['skipped(non-http)'] || 0);
-        const notable = (cf ? cf.total : 0) - quiet;
+        // 'detection_failed' means the page evaluation never completed, so
+        // whether that URL met Cloudflare is exactly what is not known -- it
+        // must not be counted as one that did. (It used to land in
+        // 'no_indicators' and so sat inside `quiet`; lib/cloudflare.js now
+        // labels it honestly, which would otherwise have made a scan of
+        // Cloudflare-free pages announce "1 of 1 URL(s) met Cloudflare" off a
+        // single flaky evaluation.) It still gets its own line, because a
+        // domain that was never bypass-checked is worth knowing about.
+        const detectionFailed = outcomes['detection_failed'] || 0;
+        const notable = (cf ? cf.total : 0) - quiet - detectionFailed;
         if (notable > 0) {
           const detail = Object.entries(outcomes)
-            .filter(([k]) => k !== 'no_indicators' && k !== 'skipped(non-http)')
+            .filter(([k]) => k !== 'no_indicators' && k !== 'skipped(non-http)' && k !== 'detection_failed')
             .sort((a, b) => b[1] - a[1])
             .map(([k, n]) => `${k} ${n}`)
             .join(', ');
           console.log(messageColors.info(`Cloudflare: ${notable} of ${cf.total} URL(s) met Cloudflare`) +
             (detail ? ` — ${detail}` : '') +
             ` (handling avg ${cf.avgDurationMs}ms, max ${cf.maxDurationMs}ms)`);
+        }
+        if (detectionFailed > 0) {
+          console.log(messageColors.info(`Cloudflare: detection did not complete on ${detectionFailed} URL(s)`) +
+            ' — those pages were not bypass-checked; set cloudflare_bypass/cloudflare_phish to attempt handling anyway');
         }
       } catch (cfStatsErr) {
         if (forceDebug) console.log(formatLogMessage('debug', `Cloudflare stats summary failed: ${cfStatsErr.message}`));
