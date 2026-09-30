@@ -253,6 +253,7 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
             userAgent: navigator.userAgent,
             hasUserAgentData: ('userAgentData' in navigator) || ('userAgentData' in Navigator.prototype),
             productSub: navigator.productSub,
+            appVersion: navigator.appVersion,
             buildID: navigator.buildID,
             oscpu: navigator.oscpu,
             vendor: navigator.vendor,
@@ -319,6 +320,14 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
         ` removed from JS; its value is blanked instead`);
     }
     eqJSON("productSub is Firefox's 20100101, not 20030107", f.productSub, '20100101');
+    // Gecko builds appVersion as legacyAppVersion + " (" + platform + ")"
+    // (dom/base/Navigator.cpp + netwerk/protocol/http/nsHttpHandler.cpp), NOT
+    // Chromium's "UA minus Mozilla/". The collections' firefox entry is the
+    // Windows one, so "Windows" is the expected platform literal.
+    eqJSON('appVersion is Gecko\'s short form, not Chromium\'s derived UA',
+      f.appVersion, '5.0 (Windows)');
+    check('appVersion does not leak the whole UA',
+      !(f.appVersion || '').includes('Gecko/'), String(f.appVersion));
     eqJSON('vendor is empty, as Gecko reports it', f.vendor, '');
     // Real Firefox freezes buildID at a 14-digit YYYYMMDDHHMMSS stamp. The
     // previous value was the 8-char Gecko trail, catchable on length alone.
