@@ -213,6 +213,113 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
   eqJSON('model', hi.model, strip(h['sec-ch-ua-model']));
   eqJSON('formFactors', hi.formFactors, [strip(h['sec-ch-ua-form-factors'])]);
 
+  // =====================================================================
+  // Firefox has no UA-Client-Hints at all, so "coherent" means something
+  // different: the Chromium-only surfaces must be ABSENT and the Gecko-only
+  // ones present and correctly shaped. A Firefox UA that still answers
+  // navigator.userAgentData, or reports Chrome's productSub, contradicts
+  // itself in one line.
+  console.log('\n=== Firefox family coherence ===');
+  const ffUa = USER_AGENT_COLLECTIONS.get('firefox');
+  const ffMajor = (ffUa.match(/Firefox\/(\d+)/) || [])[1];
+  const ffRv = (ffUa.match(/rv:(\d+)/) || [])[1];
+  eqJSON('rv: and Firefox/ carry the same major', ffRv, ffMajor);
+  check('Gecko trail is the frozen 20100101, not a release date',
+    /Gecko\/20100101/.test(ffUa), ffUa);
+
+  const ffCaptured = { js: null };
+  const FF_PORT = 8355;
+  const ffSrv = http.createServer((req, res) => {
+    if (req.url === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end(`<html><body><script>
+        (async () => {
+          const img = new Image();
+          img.src = '/report?d=' + encodeURIComponent(JSON.stringify({
+            userAgent: navigator.userAgent,
+            hasUserAgentData: ('userAgentData' in navigator) || ('userAgentData' in Navigator.prototype),
+            productSub: navigator.productSub,
+            buildID: navigator.buildID,
+            oscpu: navigator.oscpu,
+            vendor: navigator.vendor,
+            // Chromium-only globals that must not exist under a Gecko UA.
+            hasChromeObj: 'chrome' in window,
+            chromeType: typeof window.chrome,
+            chromeKeys: window.chrome ? Object.keys(window.chrome).slice(0, 6) : null,
+            chromeDescriptor: (d => d ? { configurable: d.configurable, writable: d.writable } : null)(
+              Object.getOwnPropertyDescriptor(window, 'chrome')),
+            plugins: navigator.plugins.length,
+            mimeTypes: navigator.mimeTypes.length
+          }));
+        })();
+      </script></body></html>`);
+    }
+    if (req.url.startsWith('/report')) {
+      try { ffCaptured.js = JSON.parse(decodeURIComponent(req.url.split('?d=')[1])); } catch { /* reported below */ }
+      res.writeHead(200, { 'Content-Type': 'image/gif' });
+      return res.end();
+    }
+    res.writeHead(404); res.end();
+  });
+  await new Promise(r => ffSrv.listen(FF_PORT, '127.0.0.1', r));
+
+  const ffTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nwss-ff-'));
+  const ffCfg = path.join(ffTmp, 'cfg.json');
+  fs.writeFileSync(ffCfg, JSON.stringify({ sites: [{
+    url: `http://127.0.0.1:${FF_PORT}/`, filterRegex: 'never-matches-anything',
+    userAgent: 'firefox', fingerprint_protection: true,
+    resourceTypes: ['document', 'image'], timeout: 20000, delay: 2500
+  }] }));
+  await new Promise((resolve) => {
+    execFile(process.execPath, [path.join(REPO, 'nwss.js'),
+      '--custom-json', ffCfg, '-o', path.join(ffTmp, 'out.txt')],
+      { cwd: REPO, timeout: 180000 }, (err) => {
+        if (err) { console.log(`  ✗ the Firefox scan did not complete: ${err.message}`); failed++; }
+        resolve();
+      });
+  });
+  ffSrv.close();
+  fs.rmSync(ffTmp, { recursive: true, force: true });
+
+  if (!ffCaptured.js) {
+    console.log('  ✗ Firefox capture incomplete — cannot compare');
+    failed++;
+  } else {
+    const f = ffCaptured.js;
+    eqJSON('navigator.userAgent is the pinned Firefox entry', f.userAgent, ffUa);
+    // Not "returns undefined" — ABSENT. The real browser under the spoof is
+    // Chrome, so an un-overridden userAgentData is the genuine Chromium API
+    // reporting the genuine Chrome.
+    check('navigator.userAgentData is ABSENT (Gecko has no UA-CH)',
+      f.hasUserAgentData === false, `hasUserAgentData=${f.hasUserAgentData}`);
+    // window.chrome is non-configurable on some Chrome builds (measured:
+    // system Chrome 145 yes, puppeteer's bundled 154 no), so `delete` cannot
+    // always remove the property. What IS always achievable is blanking the
+    // value, which is the part that carries the Chromium API surface. Assert
+    // the achievable invariant; report the unreachable residue.
+    check('window.chrome exposes no Chromium surface (typeof undefined, as in Gecko)',
+      f.chromeType === 'undefined', `typeof window.chrome = ${f.chromeType}, keys=${JSON.stringify(f.chromeKeys)}`);
+    if (f.hasChromeObj) {
+      console.log(`  … note: 'chrome' in window is still true — this browser build has it` +
+        ` non-configurable (${JSON.stringify(f.chromeDescriptor)}), so the property cannot be` +
+        ` removed from JS; its value is blanked instead`);
+    }
+    eqJSON("productSub is Firefox's 20100101, not 20030107", f.productSub, '20100101');
+    eqJSON('vendor is empty, as Gecko reports it', f.vendor, '');
+    // Real Firefox freezes buildID at a 14-digit YYYYMMDDHHMMSS stamp. The
+    // previous value was the 8-char Gecko trail, catchable on length alone.
+    check('buildID is present', typeof f.buildID === 'string' && f.buildID.length > 0, String(f.buildID));
+    check(`buildID is 14 digits (got ${f.buildID && f.buildID.length})`,
+      /^\d{14}$/.test(f.buildID || ''), String(f.buildID));
+    check('buildID is not the Gecko trail copied from the UA',
+      f.buildID !== '20100101', String(f.buildID));
+    check('oscpu is present (Gecko-only, absent in Chromium)',
+      typeof f.oscpu === 'string' && f.oscpu.length > 0, String(f.oscpu));
+    check('plugins and mimeTypes agree (0 plugins must mean 0 mimeTypes)',
+      (f.plugins === 0) === (f.mimeTypes === 0),
+      `plugins=${f.plugins} mimeTypes=${f.mimeTypes}`);
+  }
+
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   process.exit(failed === 0 ? 0 : 1);
 })().catch(e => { console.error('FATAL', e); process.exit(1); });
