@@ -68,6 +68,27 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
   // The brand order with 'grease' resolved to the configured brand string.
   const expectedOrder = derived.order.map(n => (n === 'grease' ? CHROME_GREASE_BRAND : n));
 
+  // The UA strings are the whole point of the spoof, so check their SHAPE
+  // strictly rather than comparing them to themselves: asserting
+  // navigator.userAgent === USER_AGENT_COLLECTIONS.get('chrome') passes even
+  // if someone edits that entry. These templates allow exactly the tokens a
+  // real reduced Chrome / Gecko UA carries and nothing else, and the majors
+  // are checked against the vendors' own release data further down.
+  const UA_SHAPES = {
+    chrome: /^Mozilla\/5\.0 \(Windows NT 10\.0; Win64; x64\) AppleWebKit\/537\.36 \(KHTML, like Gecko\) Chrome\/(\d+)\.0\.0\.0 Safari\/537\.36$/,
+    firefox: /^Mozilla\/5\.0 \(Windows NT 10\.0; Win64; x64; rv:(\d+)\.0\) Gecko\/20100101 Firefox\/(\d+)\.0$/
+  };
+  console.log('\n=== UA strings have exactly the expected shape ===');
+  const chromeShape = UA_SHAPES.chrome.exec(USER_AGENT_COLLECTIONS.get('chrome'));
+  check('chrome UA matches the reduced-Chrome template exactly',
+    !!chromeShape, USER_AGENT_COLLECTIONS.get('chrome'));
+  const ffShape = UA_SHAPES.firefox.exec(USER_AGENT_COLLECTIONS.get('firefox'));
+  check('firefox UA matches the Gecko template exactly',
+    !!ffShape, USER_AGENT_COLLECTIONS.get('firefox'));
+  if (ffShape) {
+    eqJSON('firefox UA: rv: and Firefox/ are the same major', ffShape[1], ffShape[2]);
+  }
+
   console.log(`\n=== pinned identity: Chrome ${major}, build ${CHROME_BUILD} ===`);
   console.log(`=== GREASE re-derived from major ${major} ===`);
   check(`brand matches the algorithm (${derived.brand})`,
@@ -103,6 +124,22 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
         .reduce((a, r) => a + (r.fraction || 0), 0) / tot * 100).toFixed(1)}%`);
   } catch (e) {
     console.log(`  … skipped the real-build check (no network: ${e.message})`);
+  }
+
+  // Firefox major against Mozilla's product-details API, mirroring the Chrome
+  // check above: a UA claiming a major that is not current Stable stands out
+  // regardless of how internally consistent the rest of the spoof is.
+  // Network-optional.
+  try {
+    const res = await fetch('https://product-details.mozilla.org/1.0/firefox_versions.json',
+      { signal: AbortSignal.timeout(15000) });
+    const v = await res.json();
+    const latest = String(v.LATEST_FIREFOX_VERSION || '');
+    const ffUaMajor = (USER_AGENT_COLLECTIONS.get('firefox').match(/Firefox\/(\d+)/) || [])[1];
+    eqJSON(`firefox UA major is Mozilla's current Stable (${latest})`,
+      ffUaMajor, latest.split('.')[0]);
+  } catch (e) {
+    console.log(`  … skipped the Firefox Stable check (no network: ${e.message})`);
   }
 
   // --- local server: records the document request's headers, and receives the
