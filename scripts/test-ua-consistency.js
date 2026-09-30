@@ -119,9 +119,18 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
           const hi = d ? await d.getHighEntropyValues(['architecture','bitness','model',
             'platformVersion','uaFullVersion','fullVersionList','wow64','formFactors']) : null;
           const img = new Image();
+          // chrome.runtime.getManifest().version is derived from the UA, so a
+          // tracker can cross-check it against navigator.userAgent's major.
+          let manifestVersion = null;
+          try {
+            if (window.chrome && window.chrome.runtime && window.chrome.runtime.getManifest) {
+              manifestVersion = window.chrome.runtime.getManifest().version;
+            }
+          } catch (e) { manifestVersion = 'threw: ' + e.message; }
           img.src = '/report?d=' + encodeURIComponent(JSON.stringify({
             userAgent: navigator.userAgent, brands: d ? d.brands : null,
-            platform: d ? d.platform : null, mobile: d ? d.mobile : null, high: hi }));
+            platform: d ? d.platform : null, mobile: d ? d.mobile : null, high: hi,
+            manifestVersion }));
         })();
       </script></body></html>`);
     }
@@ -172,6 +181,11 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
   console.log('\n=== user agent ===');
   eqJSON('navigator.userAgent is the pinned collection entry', js.userAgent, chromeUa);
   eqJSON('HTTP User-Agent equals the JS one', h['user-agent'], js.userAgent);
+
+  console.log('\n=== chrome.runtime manifest agrees with the UA ===');
+  check('chrome.runtime.getManifest().version is present',
+    typeof js.manifestVersion === 'string' && /^\d/.test(js.manifestVersion), String(js.manifestVersion));
+  eqJSON('manifest major equals the UA major', String(js.manifestVersion || '').split('.')[0], String(major));
 
   console.log('\n=== brand order: all four surfaces must be identical ===');
   eqJSON('Sec-CH-UA (HTTP)', parseCH(h['sec-ch-ua']).map(([b]) => b), expectedOrder);
