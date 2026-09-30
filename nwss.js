@@ -3107,11 +3107,11 @@ function setupFrameHandling(page, forceDebug) {
 
           const chHeaders = {
             // Brand list order + grease match real Chrome of this major exactly
-            // (deterministic GREASE). For major 151 the order is <grease>,
-            // Google Chrome, Chromium — same order/grease/version the JS brands
+            // (deterministic GREASE). For major 154 the order is Chromium,
+            // Google Chrome, <grease> — same order/grease/version the JS brands
             // spoof uses (lib/fingerprint), so HTTP and JS agree. Recompute the
             // order when bumping the major (see CHROME_GREASE_* module header).
-            'Sec-CH-UA': `"${CHROME_GREASE_BRAND}";v="${CHROME_GREASE_VERSION}", "Google Chrome";v="${chromeMajor}", "Chromium";v="${chromeMajor}"`,
+            'Sec-CH-UA': `"Chromium";v="${chromeMajor}", "Google Chrome";v="${chromeMajor}", "${CHROME_GREASE_BRAND}";v="${CHROME_GREASE_VERSION}"`,
             'Sec-CH-UA-Platform': `"${platform}"`,
             'Sec-CH-UA-Platform-Version': `"${platformVersion}"`,
             'Sec-CH-UA-Mobile': '?0',
@@ -3120,7 +3120,7 @@ function setupFrameHandling(page, forceDebug) {
             'Sec-CH-UA-WoW64': '?0',
             'Sec-CH-UA-Model': '""',
             'Sec-CH-UA-Full-Version': `"${fullVer}"`,
-            'Sec-CH-UA-Full-Version-List': `"${CHROME_GREASE_BRAND}";v="${CHROME_GREASE_VERSION}.0.0.0", "Google Chrome";v="${fullVer}", "Chromium";v="${fullVer}"`,
+            'Sec-CH-UA-Full-Version-List': `"Chromium";v="${fullVer}", "Google Chrome";v="${fullVer}", "${CHROME_GREASE_BRAND}";v="${CHROME_GREASE_VERSION}.0.0.0"`,
             // Real Chrome (128+) sends this for desktop; pairs with the
             // formFactors value in fingerprint.js's getHighEntropyValues spoof.
             'Sec-CH-UA-Form-Factors': '"Desktop"'
