@@ -72,13 +72,30 @@ $profileDir = Join-Path $OutDir "capture-profile"
 $userJs     = Join-Path $profileDir "user.js"
 $pacFile    = Join-Path $OutDir "$Name-bait.pac"
 
-# Registrable domain, good enough for the .com/.cc/.net hosts these use. A
-# PAC blocks the root and every subdomain, since the shards live on
-# 0.stg.<root> .. 9.stg.<root>.
+# Registrable domain. The PAC blocks the root and every subdomain, since the
+# shards live on 0.stg.<root> .. 9.stg.<root>.
+#
+# Taking the last two labels is WRONG for multi-part suffixes: bait.example.co.uk
+# would yield "co.uk", and the PAC would then block every .co.uk host for the
+# rest of the walk -- wrecking the capture and masking real traffic. Every bait
+# seen so far is .com/.cc so this is latent, but a rotation onto a country
+# domain would hit it. There is no PSL here (node lives in WSL, this runs on
+# Windows), so a short list of the common multi-part suffixes is used and the
+# root takes one more label when the last two match.
+$script:MultiPartSuffixes = @(
+  'co.uk','org.uk','me.uk','ac.uk','gov.uk','co.jp','ne.jp','or.jp','ac.jp',
+  'com.au','net.au','org.au','co.nz','net.nz','org.nz','com.br','com.cn',
+  'com.tw','co.kr','co.za','com.mx','com.ar','co.in','com.sg','com.hk','com.tr'
+)
 function Get-Root([string]$h) {
   $p = $h.Split('.')
   if ($p.Count -le 2) { return $h }
-  return ($p[-2..-1] -join '.')
+  $lastTwo = ($p[-2..-1] -join '.')
+  if ($script:MultiPartSuffixes -contains $lastTwo) {
+    if ($p.Count -le 3) { return $h }
+    return ($p[-3..-1] -join '.')
+  }
+  return $lastTwo
 }
 
 function Write-Pac([string[]]$roots) {
@@ -137,9 +154,22 @@ try {
       Write-Host "`n  round $round : blocking $($blocked.Count) host(s): $($blocked -join ', ')"
     }
 
+    # A capture that SKIPS (lock held by the scheduled task) exits 0, exactly
+    # like a successful one. Without checking that the file actually advanced,
+    # the walk would analyse the PREVIOUS capture and draw conclusions from
+    # stale data -- reporting "nothing new" when nothing was captured at all.
+    $roundLog = Join-Path $OutDir "$roundName.log.moz_log"
+    $before = if (Test-Path $roundLog) { (Get-Item $roundLog).LastWriteTimeUtc } else { [datetime]::MinValue }
+
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CaptureScript `
         -Urls $Urls -OutDir $OutDir -Name $roundName -SecondsPerUrl $SecondsPerUrl | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Host "    capture failed; stopping"; break }
+
+    $after = if (Test-Path $roundLog) { (Get-Item $roundLog).LastWriteTimeUtc } else { [datetime]::MinValue }
+    if ($after -le $before) {
+      Write-Host "    capture did not run (another capture holds the lock); stopping"
+      break
+    }
 
     $hosts = Get-BaitHosts (Join-Path $OutDir "$roundName.log")
     if (-not $hosts -or $hosts.Count -eq 0) { Write-Host "    no loader urls in this capture; stopping"; break }

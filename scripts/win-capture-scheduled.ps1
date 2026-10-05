@@ -190,13 +190,12 @@ if ($Status) {
     $f = Get-Item $cap
     $age = [int]((Get-Date) - $f.LastWriteTime).TotalMinutes
     Write-Host ("  capture   : {0:N1}MB, {1} min old ({2})" -f ($f.Length/1MB), $age, $f.LastWriteTime)
-    # Which page the capture is really of -- the document request, not what was asked for.
-    $doc = Select-String -Path $cap -Pattern 'uri=https?://[^ ]+' -List -ErrorAction SilentlyContinue
+    # Top hosts, read from the capture's CONTENTS -- this is the line that shows
+    # which site was really visited, rather than which one was requested.
     $hosts = Select-String -Path $cap -Pattern 'uri=https?://([^/ ]+)' -AllMatches -ErrorAction SilentlyContinue |
       ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
       Group-Object | Sort-Object Count -Descending | Select-Object -First 3
     if ($hosts) { Write-Host ("  top hosts : {0}" -f (($hosts | ForEach-Object { "$($_.Name) ($($_.Count))" }) -join ", ")) }
-    if ($doc) { }
   } else { Write-Host "  capture   : none at $cap" }
 
   $runs = Join-Path $OutDir "$Name-runs.log"
