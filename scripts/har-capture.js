@@ -5,7 +5,39 @@
  *
  *   node scripts/har-capture.js <url> [--config <cfg.json>] [--site <sel>] [--wait 45]
  *
- * Firefox can export a HAR on every page load by itself, driven by prefs:
+ * PARKED -- does not work. Read this before spending time on it.
+ *
+ * What was verified working:
+ *   - launching Windows Firefox from WSL via interop, with cleanup that matches
+ *     processes by COMMAND LINE (never a PID diff -- see the note below)
+ *   - building a capture profile and installing the real uBO xpi into it
+ *     (confirmed active, v1.75.0, from extensions.json after a run)
+ *   - `--devtools` (two dashes) DOES open the toolbox: window title read back as
+ *     "Developer Tools - ...", with devtools.toolbox.selectedTool=netmonitor and
+ *     devtools.everOpened written back to prefs.js
+ *   - HarAutomation is live code, not dead: toolbox.js:4685 constructs it from
+ *     initHarAutomation(), called at toolbox open (toolbox.js:1153), gated only
+ *     on devtools.netmonitor.har.enableAutoExportToFile
+ *
+ * What never happened: a HAR file. Tried defaultLogDir as an absolute path and
+ * as "" (Firefox's documented <profile>/har/logs default), with
+ * pageLoadedTimeout at 2500 and 12000. No file, and no <profile>/har/logs
+ * directory was created at all -- so the export step is never reached, which
+ * rules out path and permission problems.
+ *
+ * Best remaining theory: HarAutomation collects around a PAGE LOAD event, and
+ * here the toolbox finishes opening after the URL (passed on the command line)
+ * has already begun loading, so there is no load for it to bracket.
+ * `forceExport` only governs whether an empty HAR is written for a load that
+ * WAS seen. Testing that means opening devtools on a blank page, letting the
+ * toolbox settle, and only then navigating -- which needs a way to drive an
+ * already-open window, i.e. remote control, which is what this whole approach
+ * existed to avoid.
+ *
+ * Use scripts/har-rules.js with a manually saved HAR instead (F12 > Network >
+ * right-click > Save All As HAR). That path is proven end to end.
+ *
+ * Firefox can in principle export a HAR on every page load by itself, via:
  *   devtools.netmonitor.har.enableAutoExportToFile / defaultLogDir / forceExport
  * There is no CDP, no remote-debugging port and no interaction with whatever
  * browser the user already has open. HarAutomation attaches to the devtools
@@ -26,7 +58,7 @@ const FF = '/mnt/c/Program Files/Mozilla Firefox/firefox.exe';
 const PS = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
 const WIN_ROOT = 'C:\\Temp\\nwss-har';
 const WSL_ROOT = '/mnt/c/Temp/nwss-har';
-const MARKER = 'nwss-har-capture';           // appears in our command line only
+const MARKER = 'nwss-har';                   // the profile path, which only our processes carry
 
 const args = process.argv.slice(2);
 const url = args.find(a => !a.startsWith('--'));
@@ -81,9 +113,13 @@ fs.writeFileSync(path.join(profile, 'user.js'), [
 // --- 2. launch, wait for a HAR to appear -----------------------------------
 const before = new Set(fs.readdirSync(harDir));
 console.log(`  launching Firefox (devtools open, ${waitSec}s budget) …`);
+// --devtools (two dashes, per firefox --help) opens DevTools on load, which is
+// what HarAutomation needs to attach to. No synthetic marker flag: Firefox
+// rejects unknown options, and the profile path already identifies our
+// processes uniquely for cleanup.
 const child = execFile(FF, [
-  '-no-remote', '-profile', `${WIN_ROOT}\\profile`, '-devtools',
-  '-new-instance', url, `-${MARKER}`
+  '-no-remote', '-profile', `${WIN_ROOT}\\profile`, '--devtools',
+  '-new-instance', url
 ], () => {});
 child.unref();
 
