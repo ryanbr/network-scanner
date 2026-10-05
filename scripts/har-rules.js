@@ -28,28 +28,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { parseHar, matchEntries } = require('../lib/har');
-const { parseNetLog } = require('../lib/netlog');
-const { parseMozLog } = require('../lib/mozlog');
+const { matchEntries } = require('../lib/har');
+const { parseCapture } = require('../lib/capture');
 const { formatRules } = require('../lib/output');
-
-/**
- * Tell the two capture formats apart by looking at the head of the file: a
- * net-log opens {"constants":{, a HAR has a top-level "log". Extension is no
- * guide -- both are commonly .json, and Firefox names HARs .har.
- */
-function sniffFormat(filePath) {
-  const fd = fs.openSync(filePath, 'r');
-  try {
-    const buf = Buffer.allocUnsafe(4096);
-    const n = fs.readSync(fd, buf, 0, 4096, 0);
-    const head = buf.toString('utf8', 0, n);
-    if (/^\s*\{\s*"constants"\s*:/.test(head)) return 'netlog';
-    if (/"log"\s*:/.test(head)) return 'har';
-    if (/[A-Z]\/nsHttp /.test(head)) return 'mozlog';
-    return 'unknown';
-  } finally { fs.closeSync(fd); }
-}
 
 const args = process.argv.slice(2);
 const harPath = args.find(a => !a.startsWith('--'));
@@ -61,15 +42,7 @@ if (!harPath) {
   console.error('usage: node scripts/har-rules.js <capture.har|netlog.json> [--config <config.json>] [--site <n|url>] [--include-blocked] [--show-skipped]');
   process.exit(1);
 }
-if (!fs.existsSync(harPath)) {
-  console.error(`not found: ${harPath}`);
-  process.exit(1);
-}
-const format = sniffFormat(harPath);
-if (format === 'unknown') {
-  console.error(`${harPath}: not a DevTools HAR, a Chrome net-log or a Firefox MOZ_LOG`);
-  process.exit(1);
-}
+
 
 const configPath = argOf('--config');
 let siteConfig = {}, ignoreDomains = [];
@@ -83,10 +56,15 @@ if (configPath) {
     (Array.isArray(s.url) ? s.url : [s.url]).some(u => String(u).includes(sel))) || sites[0] || {};
 }
 
-const PARSERS = { netlog: parseNetLog, mozlog: parseMozLog, har: parseHar };
-const LABELS = { netlog: 'net-log', mozlog: 'MOZ_LOG', har: 'HAR' };
-const har = PARSERS[format](harPath);
-console.log(`\n${LABELS[format]}: ${path.basename(harPath)}`);
+let har;
+try {
+  har = parseCapture(harPath);
+} catch (err) {
+  console.error(err.message);
+  process.exit(1);
+}
+const format = har.format;
+console.log(`\n${har.formatLabel}: ${path.basename(harPath)}`);
 console.log(`  saved by      : ${har.creator}`);
 console.log(`  page          : ${String(har.pageUrl).slice(0, 72)}`);
 console.log(`  requests      : ${har.entries.length}`);

@@ -46,6 +46,7 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
 const { processResults } = require('./lib/post-processing');
+const { parseCapture, selectSitesForCapture, matchEntries: matchCaptureEntries } = require('./lib/capture');
 // Colorize various text when used
 const { messageColors, formatLogMessage } = require('./lib/colorize');
 const TIMEOUT_TAG = messageColors.processing('[TIMEOUT]');
@@ -221,26 +222,34 @@ if (args.length === 0) {
   args.push('--help');
 }
 
+// --- Positional config file support ---
+// `node nwss.js myconfig.json` must load myconfig.json. This wiring used to
+// live inside the .nwssconfig block below, so without that optional file the
+// positional path was ignored and the scan silently ran against config.json --
+// the wrong sites, with no warning. It belongs here, where it always runs.
+{
+  const customJsonIdx = args.findIndex(arg => arg === '--custom-json');
+  if (customJsonIdx === -1) {
+    const positionalJson = args.find(a => a.endsWith('.json') && !a.startsWith('--'));
+    if (positionalJson) {
+      args.push('--custom-json', positionalJson);
+      process.argv.push('--custom-json', positionalJson);
+    }
+  }
+}
+
 // --- .nwssconfig support: inject per-config settings into args ---
 const NWSSCONFIG_PATH = path.join(__dirname, '.nwssconfig');
 if (fs.existsSync(NWSSCONFIG_PATH)) {
   try {
     const nwssConfig = JSON.parse(fs.readFileSync(NWSSCONFIG_PATH, 'utf-8'));
     // Find which config file is being used (--custom-json <file> or positional .json arg)
+    // --custom-json is guaranteed present by now for a positional config too,
+    // so this no longer needs its own positional lookup.
     const customJsonIdx = args.findIndex(arg => arg === '--custom-json');
-    const positionalJson = (customJsonIdx === -1)
-      ? args.find(a => a.endsWith('.json') && !a.startsWith('--'))
-      : null;
     const configFilename = (customJsonIdx !== -1 && args[customJsonIdx + 1])
       ? args[customJsonIdx + 1]
-      : positionalJson;
-
-    // If a positional .json was used (not --custom-json), wire it to --custom-json
-    // so the real config loader picks it up instead of defaulting to config.json
-    if (positionalJson && customJsonIdx === -1) {
-      args.push('--custom-json', positionalJson);
-      process.argv.push('--custom-json', positionalJson);
-    }
+      : null;
 
     if (configFilename && nwssConfig.configs && nwssConfig.configs[configFilename]) {
       const settings = nwssConfig.configs[configFilename];
@@ -339,6 +348,17 @@ const headfulMode = args.includes('--headful');
 // primary headless path. --allow-fullscreen restores native behavior.
 const allowFullscreen = args.includes('--allow-fullscreen');
 const SOURCES_FOLDER = 'sources';
+
+const captureIndex = args.findIndex(a => a === '--har' || a === '--capture');
+const captureFile = captureIndex !== -1 && args[captureIndex + 1] && !args[captureIndex + 1].startsWith('--')
+  ? args[captureIndex + 1] : null;
+if (captureIndex !== -1 && !captureFile) {
+  console.error('--har needs a file: --har <capture.har|netlog.json|ff.log.moz_log>');
+  process.exit(1);
+}
+const captureSiteIndex = args.indexOf('--site');
+const captureSiteSel = captureSiteIndex !== -1 && args[captureSiteIndex + 1] && !args[captureSiteIndex + 1].startsWith('--')
+  ? args[captureSiteIndex + 1] : null;
 
 let outputFile = null;
 const outputIndex = args.findIndex(arg => arg === '--output' || arg === '-o');
@@ -927,6 +947,20 @@ Options:
   -o, --output <file>            Output file for rules. If omitted, prints to console
   --compare <file>               Remove rules that already exist in this file before output
   --append                       Append new rules to output file instead of overwriting (requires -o)
+
+Capture Mode (no browser is launched):
+  --har <file>                   Build rules from a saved browser capture instead of scanning.
+                                 Takes any of three formats, detected by content, not extension:
+                                   DevTools HAR   F12 > Network > right-click > Save All As HAR
+                                   Chrome net-log chrome --log-net-log=out.json <url>
+                                   Firefox MOZ_LOG MOZ_LOG=timestamp,nsHttp:5 MOZ_LOG_FILE=... firefox <url>
+                                 Exists because a real browser with a real content blocker sees
+                                 request chains this scanner cannot reproduce. Matching, output
+                                 formats, --output, --append and --compare all behave as in a scan.
+                                 (--capture is an alias.)
+  --site <index|substring>       Which configured site the capture belongs to. Without it, the site
+                                 is matched to the capture's own page by domain; if none matches,
+                                 nwss stops rather than attribute rules to pages never loaded.
     
 Output Format Options:
   --localhost[=IP]               Output as IP domain.com (default: 127.0.0.1)
@@ -2175,6 +2209,123 @@ function setupFrameHandling(page, forceDebug) {
 // --- Main Asynchronous IIFE (Immediately Invoked Function Expression) ---
 // This is the main entry point and execution block for the network scanner script.
 (async () => {
+
+  // === CAPTURE MODE (--har / --capture) ===
+  // Read a browser's own saved capture instead of driving a browser. The point
+  // is that a real browser with a real content blocker sees request chains this
+  // scanner cannot reproduce: anti-adblock loaders of the AdShield family walk a
+  // fallback host list that no local configuration triggers -- not CDP
+  // interception, and not a declarativeNetRequest extension producing a genuine
+  // ERR_BLOCKED_BY_CLIENT -- but a real Firefox with real uBO walks in full.
+  //
+  // Everything downstream is the live path's: the same per-site matching, the
+  // same formatRules(), the same processResults() and handleOutput(), so every
+  // output format, --output, --append, --compare, --dnsmasq and the rest work
+  // exactly as they do for a scan.
+  if (captureFile) {
+    let capture;
+    try {
+      capture = parseCapture(captureFile);
+    } catch (err) {
+      console.error(messageColors.error(`❌ ${err.message}`));
+      process.exit(1);
+    }
+
+    const chosenSites = selectSitesForCapture(sites, capture, captureSiteSel);
+    if (chosenSites.length === 0) {
+      const pageNote = capture.pageUrl ? ` (captured page: ${capture.pageUrl})` : '';
+      console.error(messageColors.error(
+        `❌ No site in the config matches this capture${pageNote}.`));
+      console.error('   Pass --site <index|url-substring> to choose one explicitly.');
+      process.exit(1);
+    }
+
+    if (!silentMode) {
+      console.log(`\n${messageColors.processing('Capture:')} ${captureFile}`);
+      console.log(`  format        : ${capture.formatLabel}`);
+      console.log(`  page          : ${String(capture.pageUrl).slice(0, 72)}`);
+      console.log(`  requests      : ${capture.entries.length}`);
+      if (capture.truncated) {
+        console.log(messageColors.warn('  truncated     : browser was killed, not closed -- using everything up to the cut'));
+      }
+      const blocked = capture.entries.filter(e => e.blocked);
+      if (capture.format === 'har') {
+        console.log(`  blocked       : ${blocked.length} (status 0 -- your content blocker)`);
+      } else if (capture.format === 'netlog') {
+        console.log('  note          : a net-log omits extension-blocked requests entirely');
+      } else {
+        console.log('  note          : a MOZ_LOG logs channels before a blocker cancels them,');
+        console.log('                  so blocked requests appear -- nothing is marked blocked');
+      }
+      console.log(`  sites matched : ${chosenSites.length}`);
+    }
+
+    // ONE result per site, not per configured URL. A capture is a single page
+    // load, so matching it once per URL in a multi-URL site emitted the same
+    // rules two or three times over.
+    const results0 = [];
+    for (const siteConfig of chosenSites) {
+      const siteUrls = Array.isArray(siteConfig.url) ? siteConfig.url : [siteConfig.url];
+      const siteUrl = capture.pageUrl || siteUrls.filter(Boolean)[0] || '';
+      // even_blocked means "a request we blocked still counts as evidence". A
+      // capture's blocked flag means the USER'S blocker cancelled it, which is
+      // the same question asked of a different blocker, so the site's own
+      // setting decides here too.
+      const { matchedDomains, stats } = matchCaptureEntries(capture.entries, siteConfig, {
+        pageUrl: capture.pageUrl || siteUrl,
+        ignoreDomains,
+        includeBlocked: siteConfig.even_blocked === true
+      });
+      if (!silentMode) {
+        console.log(`  matching      : ${stats.total} requests -> ${stats.considered} considered -> ${stats.matched} matched` +
+          (stats.skippedBlocked ? ` (${stats.skippedBlocked} skipped as blocked)` : ''));
+      }
+      results0.push({
+        url: siteUrl,
+        originalUrl: siteUrl,
+        // The same globalOptions the live path builds -- without these the
+        // output-format flags (--plain, --dnsmasq, --unbound, --pihole,
+        // --localhost, --adblock-rules) are silently ignored and every format
+        // emits adblock syntax.
+        rules: formatRules(matchedDomains, siteConfig, {
+          localhostIP,
+          plainOutput,
+          adblockRulesMode,
+          dnsmasqMode,
+          dnsmasqOldMode,
+          unboundMode,
+          privoxyMode,
+          piholeMode,
+          forceDebug
+        }),
+        success: true,
+        finalUrl: siteUrl,
+        redirectDomains: [],
+        matchedRegexes: []
+      });
+    }
+    let results = results0;
+
+    results = processResults(results, sites, { forceDebug, silentMode, ignoreDomains });
+
+    const outputResult = handleOutput(results, {
+      outputFile,
+      appendMode,
+      compareFile,
+      forceDebug,
+      showTitles,
+      removeDupes: removeDupes && outputFile,
+      silentMode,
+      dumpUrls,
+      adblockRulesLogFile,
+      ignoreDomains
+    });
+    if (!outputResult || outputResult.success === false) {
+      console.error(messageColors.error('❌ Failed to write output files'));
+      process.exit(1);
+    }
+    return;
+  }
 
   // Declare userDataDir in outer scope for cleanup access
   let userDataDir = null;
