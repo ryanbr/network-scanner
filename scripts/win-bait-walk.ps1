@@ -36,7 +36,10 @@ param(
   [string]$OutDir = "C:\nwss-har",
   [string]$Name = "capture",
   [int]$SecondsPerUrl = 20,
-  [int]$MaxRounds = 5,
+  [int]$MaxRounds = 6,
+  [string]$Config = "",
+  [string]$Site = "",
+  [switch]$NoDigMatch,
   [string]$Detect = "",
   [string]$CaptureScript = "",
   [switch]$KeepPac
@@ -66,6 +69,71 @@ if (-not $Detect) {
 } else {
   Write-Host "  target  : $targetHost"
   Write-Host "  detect  : $Detect  (supplied)"
+}
+
+# --- dig matching -------------------------------------------------------------
+# The same bait_dig / bait_dig-or keys bait-confirm.js reads, so the fingerprint
+# lives in ONE place. Applied DURING the walk, not just in the report: a host
+# that does not match is not blocked and not added, so a stray regex match
+# cannot drag an unrelated domain into the block set and distort later rounds.
+$digAll = @(); $digAny = @()
+if (-not $NoDigMatch -and $Config) {
+  if (-not (Test-Path $Config)) { throw "config not found: $Config" }
+  $cfg = Get-Content -Raw -LiteralPath $Config | ConvertFrom-Json
+  $siteObj = $null
+  foreach ($sc in $cfg.sites) {
+    $urls = @($sc.url)
+    if (-not $Site) { if ($urls -match [regex]::Escape($targetHost)) { $siteObj = $sc; break } }
+    elseif ($urls -match [regex]::Escape($Site)) { $siteObj = $sc; break }
+  }
+  $pick = {
+    param($key)
+    if ($siteObj -and $siteObj.PSObject.Properties.Name -contains $key) { return @($siteObj.$key) }
+    if ($cfg.PSObject.Properties.Name -contains $key) { return @($cfg.$key) }
+    return @()
+  }
+  $digAll = @(& $pick 'bait_dig')    | Where-Object { $_ }
+  $digAny = @(& $pick 'bait_dig-or') | Where-Object { $_ }
+
+  # bait_rounds lives beside the other bait_* keys so the walk is configured in
+  # ONE place. An explicit -MaxRounds still wins, for a one-off deeper or
+  # shallower run; without this the count sat in both the parameter default and
+  # the caller's command line, which is how the two drift apart.
+  if (-not $PSBoundParameters.ContainsKey('MaxRounds')) {
+    $cfgRounds = @(& $pick 'bait_rounds') | Where-Object { $_ }
+    if ($cfgRounds.Count -and [int]$cfgRounds[0] -gt 0) {
+      $MaxRounds = [int]$cfgRounds[0]
+      Write-Host "  rounds  : $MaxRounds (from bait_rounds)"
+    }
+  }
+  if ($digAll.Count -or $digAny.Count) {
+    Write-Host "  dig gate: ALL[$($digAll -join ', ')] ANY[$($digAny -join ', ')]"
+  } else {
+    Write-Host "  dig gate: no bait_dig/bait_dig-or in config -- discovery ungated"
+  }
+}
+
+# Returns 'match' | 'mismatch' | 'unknown'. A FAILED lookup is never a mismatch:
+# dropping a real bait because dns blipped is the expensive direction to be
+# wrong in, so unknown is allowed through and flagged.
+function Test-DigMatch([string]$domain) {
+  if (-not $digAll.Count -and -not $digAny.Count) { return 'match' }
+  $recs = @()
+  foreach ($t in @('A','NS')) {
+    try {
+      $r = Resolve-DnsName -Name $domain -Type $t -ErrorAction SilentlyContinue
+      if ($r) { $recs += ($r | ForEach-Object { "$($_.IPAddress) $($_.NameHost) $($_.Name)" }) }
+    } catch { }
+  }
+  if (-not $recs.Count) { return 'unknown' }
+  $blob = ($recs -join ' ').ToLower()
+  foreach ($t in $digAll) { if ($blob -notlike "*$($t.ToLower())*") { return 'mismatch' } }
+  if ($digAny.Count) {
+    $any = $false
+    foreach ($t in $digAny) { if ($blob -like "*$($t.ToLower())*") { $any = $true; break } }
+    if (-not $any) { return 'mismatch' }
+  }
+  return 'match'
 }
 
 $profileDir = Join-Path $OutDir "capture-profile"
@@ -179,9 +247,18 @@ try {
 
     $newRoots = @()
     foreach ($h in $hosts) {
-      if (-not $found.Contains($h)) { $found.Add($h) }
       $r = Get-Root $h
-      if (-not $blocked.Contains($r)) { $blocked.Add($r); $newRoots += $r }
+      if ($blocked.Contains($r)) { if (-not $found.Contains($h)) { $found.Add($h) }; continue }
+      $verdict = Test-DigMatch $r
+      if ($verdict -eq 'mismatch') {
+        Write-Host "    SKIP $r -- dig does not match the fingerprint (not blocked, not listed)"
+        continue
+      }
+      if ($verdict -eq 'unknown') {
+        Write-Host "    WARN $r -- dig lookup failed; allowing (a failed lookup is not a mismatch)"
+      }
+      if (-not $found.Contains($h)) { $found.Add($h) }
+      $blocked.Add($r); $newRoots += $r
     }
     Write-Host "    hosts serving the loader: $($hosts -join ', ')"
     if ($newRoots.Count -eq 0) { Write-Host "    nothing new -- the list is exhausted"; $completed = $true; $stopReason = "exhausted"; break }
