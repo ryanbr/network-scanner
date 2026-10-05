@@ -59,8 +59,17 @@ function Close-Chrome {
   }
   Write-Host "closing Chrome gracefully (so your session is saved) ..."
   foreach ($p in $procs) {
-    $h = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
-    if ($h) { $null = $h.CloseMainWindow() }
+    # A browser spawns and retires content processes constantly, so one can
+    # exit between the enumeration above and this call. CloseMainWindow then
+    # throws, and with $ErrorActionPreference='Stop' that aborts the whole
+    # script -- after the capture has already been written, but before it is
+    # reported. Losing a race with a process we wanted dead anyway is success.
+    try {
+      $h = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+      if ($h -and -not $h.HasExited) { $null = $h.CloseMainWindow() }
+    } catch {
+      # already gone
+    }
   }
   for ($i = 0; $i -lt 25; $i++) {
     Start-Sleep -Seconds 1

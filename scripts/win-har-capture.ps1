@@ -76,7 +76,7 @@ function Close-Firefox {
   }
   if (Get-Process firefox -ErrorAction SilentlyContinue) {
     Write-Host "  still running after ${TimeoutSeconds}s -- forcing" -ForegroundColor Yellow
-    Get-Process firefox -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process firefox -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 3
   }
   # A crashed/killed instance can leave the profile lock behind.
