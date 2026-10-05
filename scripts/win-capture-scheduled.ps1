@@ -255,6 +255,47 @@ if ($RefreshProfile -or -not (Test-Path (Join-Path $CaptureProfile "extensions")
   New-ProfileClone -Source $SourceProfile -Dest $CaptureProfile
 }
 
+# --- one run at a time ------------------------------------------------------
+# A manual run and the scheduled run can land on the same second, and they share
+# one clone profile and one output path. Firefox refuses the second profile lock
+# and shows "Firefox is already running", the second run deletes the files the
+# first is still writing, and both end with a 0-byte capture. Measured: task at
+# 19:33:41, manual at 19:33:42, Telemetry.FailedProfileLocks.txt written, capture
+# 0 bytes. MultipleInstances=IgnoreNew only stops the TASK double-running; it
+# cannot see a manual run.
+$lockFile = Join-Path $OutDir "$Name.lock"
+$lockMine = $false
+if (Test-Path -LiteralPath $lockFile) {
+  $holder = (Get-Content -LiteralPath $lockFile -ErrorAction SilentlyContinue | Select-Object -First 1)
+  $holderPid = 0; [void][int]::TryParse(($holder -split '\s+')[0], [ref]$holderPid)
+  $alive = $holderPid -gt 0 -and (Get-Process -Id $holderPid -ErrorAction SilentlyContinue)
+  $ageMin = [int]((Get-Date) - (Get-Item $lockFile).LastWriteTime).TotalMinutes
+  if ($alive -and $ageMin -lt 15) {
+    Write-Host "  another capture is already running (pid $holderPid, ${ageMin}min); skipping this one"
+    "[{0}] skipped: capture already running (pid {1})" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $holderPid |
+      Add-Content -Path $transcript
+    exit 0
+  }
+  Write-Host "  clearing a stale lock (pid $holderPid, ${ageMin}min old)"
+  Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue
+}
+"$PID started $(Get-Date -Format s)" | Set-Content -LiteralPath $lockFile -Encoding ASCII
+$lockMine = $true
+
+# A crashed run can leave the clone's profile lock behind, which makes the next
+# Firefox show the same dialog. Safe to clear only because nothing is using it.
+$stillUsing = Get-CimInstance Win32_Process -Filter "Name='firefox.exe'" -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -like "*$CaptureProfile*" }
+if ($stillUsing) {
+  Write-Host "  a Firefox is still on the capture profile; closing it first"
+  $stillUsing | ForEach-Object { try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch { } }
+  Start-Sleep -Seconds 3
+}
+foreach ($stale in @("parent.lock", ".parentlock", "lock")) {
+  $sp = Join-Path $CaptureProfile $stale
+  if (Test-Path -LiteralPath $sp) { Remove-Item -LiteralPath $sp -Force -ErrorAction SilentlyContinue }
+}
+
 $logBase = Join-Path $OutDir "$Name.log"
 
 # Delete the PREVIOUS capture, including every per-process sibling. A run that
@@ -290,12 +331,14 @@ Start-Sleep -Seconds 3
 
 $main = Get-Item "$logBase.moz_log" -ErrorAction SilentlyContinue
 if (-not $main) {
+  if ($lockMine) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
   $msg = "FAILED: no capture written"
   Write-Host "  $msg"; "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg | Add-Content -Path $transcript
   exit 1
 }
 if ($main.Length -eq 0) {
-  $msg = "FAILED: capture is empty (a running Firefox swallowed the url -- is -no-remote present?)"
+  if ($lockMine) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
+  $msg = "FAILED: capture is empty (a running Firefox swallowed the url, or another capture was running)"
   Write-Host "  $msg"; "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg | Add-Content -Path $transcript
   exit 1
 }
@@ -323,3 +366,4 @@ if ($targetHost) {
 $msg = "ok: {0:N1}MB across {1} file(s) | target {2} | {3} contacted: {4}" -f $mb, $all.Count, $Urls[0], $targetHost, $contacted
 Write-Host "  $msg"
 "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg | Add-Content -Path $transcript
+if ($lockMine) { Remove-Item -LiteralPath $lockFile -Force -ErrorAction SilentlyContinue }
