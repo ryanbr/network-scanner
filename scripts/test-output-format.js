@@ -114,5 +114,29 @@ check('rejection is reported under forceDebug',
   logged.length === 1 && logged[0].includes('a.b') && !logged[0].includes('bit.ly'),
   `${logged.length} line(s): ${logged.join(' | ') || 'none'}`);
 
+// --- 7. Filter SYNTAX must not survive from a hostname into a rule.
+// A hostname reaches formatDomain from whatever a page asked the browser to
+// fetch, and several characters that survive URL parsing mean something to the
+// filter language. Measured before the character-set check existed:
+//   https://*.com/x.js       -> ||*.com^        blocks every .com domain
+//   https://a$b.com/x.js     -> ||a$b.com^      '$' begins rule options
+//   https://ads.com$all/x.js -> ||ads.com$all^  '$all' is a real option
+// new URL() accepts every one of those in a host, so a page reaches this with
+// no access to the machine -- and this scanner's output gets published.
+const SYNTAX_HOSTS = ['*.com', 'a*b.com', 'a$b.com', 'ads.com$all', 'a,b.com',
+                      '!x.com', '@@evil.com', '-lead.com', 'trail-.com',
+                      'a'.repeat(300) + '.com', 'a'.repeat(70) + '.com'];
+const leakedSyntax = SYNTAX_HOSTS.filter(h => formatDomain(h, { plain: true }) !== null);
+check('filter-syntax characters are refused in a hostname', leakedSyntax.length === 0,
+  leakedSyntax.length ? `emitted: ${leakedSyntax.join(', ')}` : `${SYNTAX_HOSTS.length} refused`);
+
+// ...without refusing hosts that legitimately look unusual.
+const LEGIT_ODD = ['ads.example.com', '0.stg.example.com', 'xn--xample-2of.com',
+                   'a-b.co.uk', '1.2.3.4', 'my_host.example.com',
+                   's3-eu-west-1.amazonaws.com'];
+const refusedLegit = LEGIT_ODD.filter(h => formatDomain(h, { plain: true }) === null);
+check('legitimate hostnames still emit', refusedLegit.length === 0,
+  refusedLegit.length ? `refused: ${refusedLegit.join(', ')}` : `${LEGIT_ODD.length} accepted`);
+
 console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
