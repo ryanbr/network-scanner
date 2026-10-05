@@ -55,6 +55,20 @@ const LINES = [
   P('V', 'nsHttpConnectionMgr::AddTransaction [trans=2693ef48b10 0]')
 ];
 
+// Child mode for the retention check above: parse the given file, force a
+// collection, and print the heap still held.
+if (process.env.NWSS_MEMCHILD && process.argv[2] === '--memcheck') {
+  const target = process.argv[3];
+  if (global.gc) global.gc();
+  const before = process.memoryUsage().heapUsed;
+  const parsed = parseMozLog(target);
+  if (global.gc) global.gc();
+  const after = process.memoryUsage().heapUsed;
+  if (!parsed.entries.length) { console.log('NaN'); process.exit(0); }
+  console.log(((after - before) / 1048576).toFixed(2));
+  process.exit(0);
+}
+
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nwss-mozlog-'));
 const F = n => path.join(dir, n);
 const write = (file, lines, eol) => { fs.writeFileSync(file, lines.join(eol) + eol); return file; };
@@ -187,6 +201,30 @@ const dirHosts = parseMozLog(runDir).entries.map(e => e.host);
 check('directory picks the newest run', dirHosts.includes('new-run.invalid'), true);
 check('directory does NOT merge an older run', dirHosts.includes('old-run.invalid'), false);
 check("that run's own child log is included", dirHosts.includes('new-run-child.invalid'), true);
+
+// ---- retained strings must not pin the chunk they came from ---------------
+// V8 keeps a substring as a SlicedString holding a reference to its parent, so
+// retaining one 40-character url out of a 4MB read chunk pins the whole 4MB.
+// Measured on a real 49MB capture before lib/mozlog.js flattened them: 43.8MB
+// of heap retained for 350 entries, 187MB RSS. This runs in a child with
+// --expose-gc, because retention is only observable after a forced collection.
+if (!process.env.NWSS_MEMCHILD) {
+  const padLine = P('V', 'nsHttpConnectionMgr ' + 'x'.repeat(2000));
+  const lines = [];
+  for (let i = 0; i < 6000; i++) lines.push(padLine);      // ~12MB of noise
+  lines.push(P('E', 'uri=https://retained.test/a.js'));
+  lines.push(...requestBlock('GET', '/a.js', 'retained.test', 'script'));
+  const bigFile = write(F('big.log.moz_log'), lines, '\r\n');
+
+  const res = require('child_process').spawnSync(
+    process.execPath, ['--expose-gc', __filename, '--memcheck', bigFile],
+    { encoding: 'utf8', env: { ...process.env, NWSS_MEMCHILD: '1' } });
+  const retainedMb = parseFloat((res.stdout || '').trim());
+  // The parsed data is a handful of short strings; anything near the file size
+  // means a chunk is still pinned.
+  check(`retained heap stays small (${isNaN(retainedMb) ? '?' : retainedMb.toFixed(1)}MB for a 12MB log)`,
+    !isNaN(retainedMb) && retainedMb < 2, true);
+}
 
 // ---- a file that is not a MOZ_LOG ----------------------------------------
 const notLog = F('nope.json');
