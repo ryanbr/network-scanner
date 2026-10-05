@@ -152,6 +152,23 @@ if (-not $logs) {
   Write-Host "user or elevated, so the URL went to that instance instead."
   exit 1
 }
+# An EMPTY main log is the signature of a handoff: a second firefox.exe with
+# MOZ_LOG set initialises logging (creating this file) and then hands its URL to
+# an ALREADY-RUNNING instance and exits. The browsing happens in that instance,
+# which was started without MOZ_LOG and logs nothing. Measured: opening a new
+# tab in a running Firefox produces exactly this, a 0-byte file -- which looks
+# like a capture until you read it.
+$main = Get-Item "$logBase.moz_log" -ErrorAction SilentlyContinue
+if ($main -and $main.Length -eq 0) {
+  Write-Host ""
+  Write-Host "The log is EMPTY. Firefox was already running, so the URL opened as a tab in"
+  Write-Host "that instance -- and MOZ_LOG is read when a process STARTS, so a running"
+  Write-Host "Firefox cannot be made to log by opening a tab in it."
+  Write-Host "Re-run with -ForceClose (your tabs are restored: the close is graceful, so"
+  Write-Host "Firefox writes its session first)."
+  exit 1
+}
+
 $total = [math]::Round(($logs | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
 Write-Host ""
 Write-Host "wrote $($logs.Count) file(s), ${total}MB total:"
