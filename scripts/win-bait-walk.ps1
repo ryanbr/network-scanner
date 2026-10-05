@@ -138,6 +138,8 @@ function Get-BaitHosts([string]$base) {
 }
 
 # --- the walk ----------------------------------------------------------------
+$completed  = $false      # true only when a round reveals nothing new
+$stopReason = "max rounds reached ($MaxRounds)"
 $blocked = New-Object System.Collections.Generic.List[string]
 $found   = New-Object System.Collections.Generic.List[string]
 $round   = 0
@@ -163,16 +165,17 @@ try {
 
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CaptureScript `
         -Urls $Urls -OutDir $OutDir -Name $roundName -SecondsPerUrl $SecondsPerUrl | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Host "    capture failed; stopping"; break }
+    if ($LASTEXITCODE -ne 0) { Write-Host "    capture failed; stopping"; $stopReason = "a capture failed"; break }
 
     $after = if (Test-Path $roundLog) { (Get-Item $roundLog).LastWriteTimeUtc } else { [datetime]::MinValue }
     if ($after -le $before) {
       Write-Host "    capture did not run (another capture holds the lock); stopping"
+      $stopReason = "a capture was skipped (lock held)"
       break
     }
 
     $hosts = Get-BaitHosts (Join-Path $OutDir "$roundName.log")
-    if (-not $hosts -or $hosts.Count -eq 0) { Write-Host "    no loader urls in this capture; stopping"; break }
+    if (-not $hosts -or $hosts.Count -eq 0) { Write-Host "    no loader urls in this capture; stopping"; $stopReason = "a capture contained no loader urls"; break }
 
     $newRoots = @()
     foreach ($h in $hosts) {
@@ -181,7 +184,7 @@ try {
       if (-not $blocked.Contains($r)) { $blocked.Add($r); $newRoots += $r }
     }
     Write-Host "    hosts serving the loader: $($hosts -join ', ')"
-    if ($newRoots.Count -eq 0) { Write-Host "    nothing new -- the list is exhausted"; break }
+    if ($newRoots.Count -eq 0) { Write-Host "    nothing new -- the list is exhausted"; $completed = $true; $stopReason = "exhausted"; break }
     Write-Host "    NEW: $($newRoots -join ', ')"
 
   }
@@ -206,11 +209,39 @@ foreach ($r in $roots) {
                Where-Object { $_.NameHost } | ForEach-Object { $_.NameHost } | Sort-Object) -join ' ' } catch { }
   # The operator fingerprint: all known bait domains sit on one Cloudflare
   # account, while unrelated ad domains on the same pages do not.
-  $fp = if ($ns -match 'houston\.ns\.cloudflare\.com' -and $ns -match 'veda\.ns\.cloudflare\.com') { "fingerprint MATCH" } else { "fingerprint differs" }
+  # A failed lookup is NOT a mismatch -- saying "differs" when nothing was
+  # resolved reads as evidence against the domain when there is none.
+  $fp = if (-not $ns) { "fingerprint UNKNOWN (ns lookup failed)" }
+        elseif ($ns -match 'houston\.ns\.cloudflare\.com' -and $ns -match 'veda\.ns\.cloudflare\.com') { "fingerprint MATCH" }
+        else { "fingerprint differs" }
   Write-Host ("    {0,-24} {1}" -f $r, $fp)
   if ($ns) { Write-Host ("        ns: {0}" -f $ns) }
 }
+# An INCOMPLETE walk must not overwrite a complete one. Measured: a run capped
+# at one round replaced a six-host list with two, and the summary still read
+# "enumerated in 1 round(s)" with nothing marking it partial. A lock collision
+# or a failed capture would do the same, and bait-confirm.js would then silently
+# check a shorter list.
 $outFile = Join-Path $OutDir "$Name-baits.txt"
-$roots | Set-Content -LiteralPath $outFile -Encoding ASCII
-Write-Host "`n  written: $outFile"
+if ($completed) {
+  # The pool is cumulative knowledge: a session may simply offer fewer hosts
+  # than a previous one, so union with what is already known rather than
+  # replacing it. A retired bait staying in the list costs nothing.
+  $previous = @()
+  if (Test-Path -LiteralPath $outFile) {
+    $previous = @(Get-Content -LiteralPath $outFile | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+  }
+  $merged = @(($roots + $previous) | Sort-Object -Unique)
+  $added = @($roots | Where-Object { $previous -notcontains $_ })
+  $merged | Set-Content -LiteralPath $outFile -Encoding ASCII
+  Write-Host "`n  walk COMPLETE ($stopReason)"
+  $newNote = if ($added.Count) { "$($added.Count) new this run" } else { "none new" }
+  Write-Host "  written: $outFile  ($($merged.Count) host(s), $newNote)"
+} else {
+  $partFile = Join-Path $OutDir "$Name-baits.partial.txt"
+  $roots | Set-Content -LiteralPath $partFile -Encoding ASCII
+  Write-Host "`n  walk INCOMPLETE -- stopped because $stopReason"
+  Write-Host "  the authoritative list was NOT touched: $outFile"
+  Write-Host "  this run's partial findings: $partFile"
+}
 Write-Host "  capture kept: $(Join-Path $OutDir "$Name.log.moz_log")  (round 1, undistorted)"

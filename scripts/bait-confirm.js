@@ -101,7 +101,10 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
       // nameserver fingerprint. One call each, concatenated.
       const [a, ns] = await Promise.all([tool('dig', ['+short', d, 'A']), tool('dig', ['+short', d, 'NS'])]);
       const out = `${a.out}\n${ns.out}`;
-      if (!a.ok && !ns.ok) { row.notes.push(`dig failed: ${a.why || ns.why}`); row.dig = false; }
+      // ERROR is not the same as NO MATCH. Conflating them meant a missing dig
+      // binary or a dns blip reported every genuine bait as unconfirmed, and
+      // --strict then rejected the lot -- measured with dig off PATH: 0/6.
+      if (!a.ok && !ns.ok) { row.notes.push(`dig failed: ${a.why || ns.why}`); row.dig = 'error'; }
       else {
         row.dig = (digAll.length ? matchAll(out, digAll) : true) &&
                   (digAny.length ? matchAny(out, digAny) : true);
@@ -110,7 +113,7 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
 
     if (whoisAll.length || whoisAny.length) {
       const w = await tool('whois', [d]);
-      if (!w.ok && !w.out) { row.notes.push(`whois failed: ${w.why}`); row.whois = false; }
+      if (!w.ok && !w.out) { row.notes.push(`whois failed: ${w.why}`); row.whois = 'error'; }
       else {
         row.whois = (whoisAll.length ? matchAll(w.out, whoisAll) : true) &&
                     (whoisAny.length ? matchAny(w.out, whoisAny) : true);
@@ -118,7 +121,10 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
     }
 
     const checks = [row.dig, row.whois].filter(v => v !== null);
-    row.confirmed = checks.length > 0 && checks.every(Boolean);
+    const failed = checks.filter(v => v === false).length;
+    const errored = checks.filter(v => v === 'error').length;
+    row.verdict = failed > 0 ? 'mismatch' : (errored > 0 ? 'unknown' : (checks.length ? 'confirmed' : 'unknown'));
+    row.confirmed = row.verdict === 'confirmed';
     results.push(row);
   }
 
@@ -132,23 +138,36 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
     if (whoisAny.length) console.log(`  bait_whois-or (ANY) : ${whoisAny.join(', ')}`);
     console.log('');
     for (const r of results) {
-      const f = v => v === null ? '  -  ' : (v ? ' yes ' : ' NO  ');
-      const verdict = r.confirmed ? messageColors.success('confirmed') : messageColors.warn('UNCONFIRMED');
+      const f = v => v === null ? '  -  ' : (v === 'error' ? ' err ' : (v ? ' yes ' : ' NO  '));
+      const verdict = r.verdict === 'confirmed' ? messageColors.success('confirmed')
+        : r.verdict === 'mismatch' ? messageColors.warn('MISMATCH')
+          : messageColors.warn('UNKNOWN (lookup failed)');
       console.log(`  ${r.domain.padEnd(26)} dig:${f(r.dig)} whois:${f(r.whois)}  ${verdict}`);
       r.notes.forEach(n => console.log(formatLogMessage('debug', `${TAG}   ${n}`)));
     }
-    const bad = results.filter(r => !r.confirmed);
+    const mismatched = results.filter(r => r.verdict === 'mismatch');
+    const unknown = results.filter(r => r.verdict === 'unknown');
     console.log('');
-    console.log(`  ${results.length - bad.length}/${results.length} confirmed` +
-      (bad.length ? ` — unconfirmed: ${bad.map(r => r.domain).join(', ')}` : ''));
-    if (bad.length && !strict) {
+    console.log(`  ${results.filter(r => r.confirmed).length}/${results.length} confirmed` +
+      (mismatched.length ? ` — MISMATCH: ${mismatched.map(r => r.domain).join(', ')}` : '') +
+      (unknown.length ? ` — could not check: ${unknown.map(r => r.domain).join(', ')}` : ''));
+    if (unknown.length) {
+      console.log(formatLogMessage('warn',
+        `${TAG} ${unknown.length} domain(s) could not be checked (tool missing or lookup failed) — that is NOT a mismatch`));
+    }
+    if (mismatched.length && !strict) {
       console.log(formatLogMessage('warn',
         `${TAG} reported, not enforced. A genuine bait moved to other DNS would fail this; use --strict to exit non-zero.`));
     }
   }
 
-  const bad = results.filter(r => !r.confirmed).length;
-  process.exit(strict && bad ? 1 : 0);
+  // Exit codes keep the two apart: 1 means a domain really did not match, 2
+  // means it could not be checked. Treating a dns failure as a rejection is
+  // how a transient blip would drop a real bait from the list.
+  const mismatched = results.filter(r => r.verdict === 'mismatch').length;
+  const unknown = results.filter(r => r.verdict === 'unknown').length;
+  if (!strict) process.exit(0);
+  process.exit(mismatched ? 1 : (unknown ? 2 : 0));
 })().catch(err => {
   console.error(formatLogMessage('error', `${TAG} ${err.message}`));
   process.exit(1);
