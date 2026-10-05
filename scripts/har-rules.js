@@ -93,14 +93,21 @@ if (configPath) {
   console.log(`  filterRegex   : ${siteConfig.filterRegex || '(none)'}`);
 }
 
+// Honour the site's own even_blocked, exactly as nwss.js --har does. Without
+// this the two tools gave DIFFERENT rules for the same config and the same
+// capture -- this script excluded blocked requests while nwss included them --
+// which is the sort of disagreement that quietly discredits both.
+const includeBlocked = args.includes('--include-blocked') || siteConfig.even_blocked === true;
 const { matchedDomains, stats } = matchEntries(har.entries, siteConfig, {
   pageUrl: har.pageUrl,
   ignoreDomains,
-  includeBlocked: args.includes('--include-blocked')
+  includeBlocked
 });
 
 console.log(`\nmatching: ${stats.total} requests -> ${stats.considered} considered -> ${stats.matched} matched` +
-  ` (${stats.skippedBlocked} skipped as blocked)`);
+  (includeBlocked
+    ? ` (blocked requests INCLUDED${siteConfig.even_blocked === true ? ' -- even_blocked is set on this site' : ''})`
+    : ` (${stats.skippedBlocked} skipped as blocked)`));
 
 if (args.includes('--show-skipped') && siteConfig.filterRegex) {
   const re = new RegExp(siteConfig.filterRegex);

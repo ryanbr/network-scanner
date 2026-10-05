@@ -47,7 +47,10 @@ const HAR = {
       harEntry('https://example.test/', 'document', 'text/html'),
       harEntry('https://tracker.invalid/script/abcdefghij.js', 'script', 'application/javascript'),
       harEntry('https://other.invalid/script/klmnopqrst.js', 'script', 'application/javascript'),
-      harEntry('https://cdn.example.test/app.js', 'script', 'application/javascript')
+      harEntry('https://cdn.example.test/app.js', 'script', 'application/javascript'),
+      // status 0 == the USER'S content blocker cancelled it. Whether this
+      // becomes a rule is what even_blocked decides.
+      harEntry('https://blockedbyubo.invalid/script/uvwxyzabcd.js', 'script', '', 0)
     ]
   }
 };
@@ -139,6 +142,39 @@ check('a capture matching no site is refused, not guessed',
 const badCap = run([cfgPath, '--har', cfgPath]);
 check('a non-capture file is refused with a useful message',
   /not a recognised capture/.test(badCap), true);
+
+// ---- even_blocked, and the two tools agreeing --------------------------
+// har-rules.js and `nwss --har` read the same config and the same capture, so
+// they must produce the same rules. They did not: har-rules excluded blocked
+// requests while nwss honoured the site's even_blocked, so the same inputs gave
+// different answers depending on which tool you reached for.
+const HAR_RULES = path.join(__dirname, 'har-rules.js');
+const runHarRules = (cfg, sel) => {
+  let out;
+  try {
+    out = execFileSync(process.execPath, [HAR_RULES, harPath, '--config', cfg, '--site', String(sel)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
+  const i = out.indexOf('rules:');
+  return i === -1 ? [] : out.slice(i).split('\n').map(l => l.trim()).filter(l => l.startsWith('||')).sort();
+};
+
+for (const evenBlocked of [false, true]) {
+  const cfg = JSON.parse(JSON.stringify(CONFIG));
+  cfg.sites[1].even_blocked = evenBlocked;
+  const cfgFile = F(`cfg-eb-${evenBlocked}.json`);
+  fs.writeFileSync(cfgFile, JSON.stringify(cfg));
+
+  const outFile = F(`eb-${evenBlocked}.txt`);
+  run([cfgFile, '--har', harPath, '--site', '1', '--output', outFile, '--silent']);
+  const viaNwss = outLines(outFile).sort();
+  const viaHarRules = runHarRules(cfgFile, 1);
+
+  check(`even_blocked:${evenBlocked} -- blocked host ${evenBlocked ? 'included' : 'excluded'}`,
+    viaNwss.includes('||blockedbyubo.invalid^'), evenBlocked);
+  check(`even_blocked:${evenBlocked} -- har-rules.js and nwss --har agree`,
+    viaHarRules, viaNwss);
+}
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed\n`);
