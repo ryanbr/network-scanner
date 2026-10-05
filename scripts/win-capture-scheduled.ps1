@@ -100,6 +100,41 @@ function New-ProfileClone {
   Write-Host ("  profile clone: {0:N0}MB  -> {1}" -f $mb, $Dest)
 }
 
+# A browsing session fills the clone with disposable state: one run took it from
+# 35MB to 177MB (cache2 42MB, startupCache 33MB, security_state 24MB, site
+# storage 32MB, safebrowsing, places/favicons). Unattended and 4-hourly, that
+# grows without bound, so everything regenerable is dropped after each capture.
+#
+# What is NOT dropped is what makes the blocker real: extensions/, prefs.js,
+# extensions.json, addonStartup.json.lz4, cookies.sqlite, and
+# storage/default/moz-extension* -- uBO's filter lists and the user's custom
+# rules live in that last one.
+function Clear-ProfileJunk {
+  param([string]$Profile)
+  if (-not (Test-Path $Profile)) { return }
+  $before = ((Get-ChildItem $Profile -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum) / 1MB
+  foreach ($d in @("cache2","startupCache","safebrowsing","thumbnails","sessionstore-backups",
+                   "datareporting","crashes","minidumps","gmp","gmp-gmpopenh264","shader-cache",
+                   "security_state","saved-telemetry-pings","bookmarkbackups")) {
+    $p = Join-Path $Profile $d
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+  foreach ($f in @("places.sqlite","favicons.sqlite","sessionstore.jsonlz4","webappsstore.sqlite",
+                   "content-prefs.sqlite","storage.sqlite","protections.sqlite")) {
+    Get-ChildItem -LiteralPath $Profile -Filter "$f*" -File -ErrorAction SilentlyContinue |
+      Remove-Item -Force -ErrorAction SilentlyContinue
+  }
+  # Site storage grows per visited origin; extension storage must survive.
+  $sd = Join-Path $Profile "storage\default"
+  if (Test-Path $sd) {
+    Get-ChildItem $sd -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -notlike "moz-extension*" } |
+      Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  $after = ((Get-ChildItem $Profile -Recurse -File -ErrorAction SilentlyContinue | Measure-Object -Property Length -Sum).Sum) / 1MB
+  Write-Host ("  pruned clone: {0:N0}MB -> {1:N0}MB" -f $before, $after)
+}
+
 # --- install / uninstall ----------------------------------------------------
 if ($Uninstall) {
   if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
@@ -194,6 +229,8 @@ if ($main.Length -eq 0) {
   Write-Host "  $msg"; "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg | Add-Content -Path $transcript
   exit 1
 }
+
+Clear-ProfileJunk -Profile $CaptureProfile
 
 $all = Get-ChildItem "$logBase*" -ErrorAction SilentlyContinue
 $mb  = (($all | Measure-Object -Property Length -Sum).Sum) / 1MB
