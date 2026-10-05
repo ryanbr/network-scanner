@@ -44,3 +44,8 @@ eztvoutput-*
 
 # Capture targets: sites under test are not published
 targets.txt
+
+# Local automation: contains absolute home paths and the operator's own
+# workflow. Untracked already -- ignored so a `git add -A` cannot publish it.
+automate*.sh
+banned-list.txt
