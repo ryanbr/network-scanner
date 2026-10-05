@@ -36,12 +36,21 @@
   powershell -ExecutionPolicy Bypass -File C:\nwss-har\win-capture-scheduled.ps1 -Uninstall
 #>
 
+<#
+  WHY 20s AND NOT 45: measured across three captures, every host that produced
+  a rule appeared within 3.2 seconds of the first request -- the anti-adblock
+  chain at +1.2s to +2.7s, the Google hosts by +3.2s. Traffic continues for the
+  rest of the window (one capture was still logging at +44.9s) but none of it
+  reaches the filter regex, so it only costs time and log volume. 20s leaves
+  roughly six times the margin over the slowest observed. Raise it with
+  -SecondsPerUrl if a site turns out to load its ads lazily.
+#>
 param(
   [string[]]$Urls,
   [string]$TargetsFile = "",
   [string]$OutDir = "C:\nwss-har",
   [string]$Name = "capture",
-  [int]$SecondsPerUrl = 45,
+  [int]$SecondsPerUrl = 20,
   [ValidateRange(1,5)][int]$LogLevel = 1,
   [string]$SourceProfile = "",
   [string]$CaptureProfile = "",

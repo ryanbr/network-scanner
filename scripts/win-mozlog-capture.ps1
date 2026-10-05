@@ -43,7 +43,7 @@ param(
   [string[]]$Urls,
   [string]$TargetsFile = "",
   [string]$OutDir = "C:\nwss-har",
-  [int]$SecondsPerUrl = 45,
+  [int]$SecondsPerUrl = 20,
   [string]$Name = "capture",
   [ValidateRange(1,5)][int]$LogLevel = 1,
   [switch]$Timestamped,
