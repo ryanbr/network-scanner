@@ -6,9 +6,10 @@
  *   node scripts/har-rules.js <capture> [--config <config.json>] [--site <n|url>]
  *                             [--include-blocked] [--show-skipped]
  *
- * Takes either capture format, detected by content, not by extension:
+ * Takes any of three capture formats, detected by content, not by extension:
  *   - a DevTools HAR            (F12 > Network > right-click > Save All As HAR)
  *   - a Chrome net-log          (chrome --log-net-log=out.json <url>)
+ *   - a Firefox MOZ_LOG         (MOZ_LOG=timestamp,nsHttp:5 MOZ_LOG_FILE=... firefox <url>)
  *
  * The point: a real browser with a real content blocker sees request chains the
  * scanner cannot reproduce on its own. Apply the same filterRegex /
@@ -16,16 +17,20 @@
  * formatRules() the scanner uses, so the output is identical in shape to a
  * normal run.
  *
- * Which format to reach for: the net-log needs no clicking, just a flag, so it
- * is the one to automate. But it omits extension-blocked requests entirely
- * (measured -- see lib/netlog.js), so if the question is "what did my blocker
- * stop", save a HAR, where those arrive as status 0.
+ * Which format to reach for: the net-log and MOZ_LOG need no clicking, just a
+ * flag or an environment variable, so they are the ones to automate. Prefer
+ * MOZ_LOG when the blocker matters -- Chrome is MV3-only now, so uBO there is
+ * uBO Lite on declarativeNetRequest, a weaker blocker, while Firefox still runs
+ * full uBO with the user's own rules. Save a HAR when the question is
+ * specifically "what did my blocker stop": only there is a blocked request
+ * distinguishable, as status 0.
  */
 
 const fs = require('fs');
 const path = require('path');
 const { parseHar, matchEntries } = require('../lib/har');
 const { parseNetLog } = require('../lib/netlog');
+const { parseMozLog } = require('../lib/mozlog');
 const { formatRules } = require('../lib/output');
 
 /**
@@ -41,6 +46,7 @@ function sniffFormat(filePath) {
     const head = buf.toString('utf8', 0, n);
     if (/^\s*\{\s*"constants"\s*:/.test(head)) return 'netlog';
     if (/"log"\s*:/.test(head)) return 'har';
+    if (/[A-Z]\/nsHttp /.test(head)) return 'mozlog';
     return 'unknown';
   } finally { fs.closeSync(fd); }
 }
@@ -61,7 +67,7 @@ if (!fs.existsSync(harPath)) {
 }
 const format = sniffFormat(harPath);
 if (format === 'unknown') {
-  console.error(`${harPath}: not a DevTools HAR or a Chrome net-log (expected a top-level "log" or "constants")`);
+  console.error(`${harPath}: not a DevTools HAR, a Chrome net-log or a Firefox MOZ_LOG`);
   process.exit(1);
 }
 
@@ -77,8 +83,10 @@ if (configPath) {
     (Array.isArray(s.url) ? s.url : [s.url]).some(u => String(u).includes(sel))) || sites[0] || {};
 }
 
-const har = format === 'netlog' ? parseNetLog(harPath) : parseHar(harPath);
-console.log(`\n${format === 'netlog' ? 'net-log' : 'HAR'}: ${path.basename(harPath)}`);
+const PARSERS = { netlog: parseNetLog, mozlog: parseMozLog, har: parseHar };
+const LABELS = { netlog: 'net-log', mozlog: 'MOZ_LOG', har: 'HAR' };
+const har = PARSERS[format](harPath);
+console.log(`\n${LABELS[format]}: ${path.basename(harPath)}`);
 console.log(`  saved by      : ${har.creator}`);
 console.log(`  page          : ${String(har.pageUrl).slice(0, 72)}`);
 console.log(`  requests      : ${har.entries.length}`);
@@ -87,7 +95,11 @@ if (har.truncated) {
     'everything up to the cut is used');
 }
 const blockedList = har.entries.filter(e => e.blocked);
-if (format === 'netlog') {
+if (format === 'mozlog') {
+  console.log('  (a MOZ_LOG logs the channel before a blocker cancels it, so blocked');
+  console.log('   requests generally DO appear -- it shows what the page TRIED to load.');
+  console.log('   Nothing is marked blocked from this source; save a HAR for that.)');
+} else if (format === 'netlog') {
   const failed = har.entries.filter(e => e.failed && !e.blocked);
   console.log(`  failed        : ${failed.length}` +
     (failed.length ? '  ' + [...new Set(failed.map(e => e.netError))].slice(0, 5).join(', ') : ''));
