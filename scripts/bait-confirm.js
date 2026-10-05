@@ -31,10 +31,23 @@
 const fs = require('fs');
 const path = require('path');
 const { runProcess } = require('../lib/spawn-async');
+const { loadDiskCache, saveDiskCache } = require('../lib/nettools');
 const { messageColors, formatLogMessage } = require('../lib/colorize');
 
 const TAG = messageColors.processing('[bait-confirm]');
 const TOOL_TIMEOUT_MS = 15000;
+
+// Same mechanics and TTLs as the scan's dig/whois caches, but a SEPARATE file.
+// Sharing .whoiscache would mean writing a different entry shape into it --
+// nettools stores { result: <whoisResult>, timestamp, hostname } and reads
+// cachedEntry.result expecting its own object -- so a shared file would corrupt
+// the scan's whois path. Caching matters most for whois: registries rate-limit
+// aggressively, and re-running the walk re-queries the same handful of domains.
+const CACHE_FILE = path.join(__dirname, '..', '.baitcache');
+const DIG_TTL_MS = 20 * 60 * 60 * 1000;        // 20h, as the scan uses for dig
+const WHOIS_TTL_MS = 36 * 60 * 60 * 1000;      // 36h, as the scan uses for whois
+const CACHE_MAX = 2000;
+const cache = new Map();
 
 const args = process.argv.slice(2);
 const argOf = (name, dflt = null) => {
@@ -46,6 +59,7 @@ const asList = v => (v === undefined || v === null) ? [] : (Array.isArray(v) ? v
 const configPath = argOf('--config');
 const baitsPath = argOf('--baits', '/mnt/c/nwss-har/capture-baits.txt');
 const strict = args.includes('--strict');
+const useCache = !args.includes('--no-cache');
 const asJson = args.includes('--json');
 
 if (!configPath) {
@@ -80,11 +94,24 @@ if (!digAll.length && !digAny.length && !whoisAll.length && !whoisAny.length) {
 const domains = fs.readFileSync(baitsPath, 'utf8')
   .split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 
-async function tool(cmd, cmdArgs) {
+let cacheHits = 0, cacheMisses = 0;
+
+async function tool(cmd, cmdArgs, cacheKey, ttl) {
+  if (useCache && cacheKey) {
+    const hit = cache.get(cacheKey);
+    if (hit && (Date.now() - hit.timestamp) < ttl) { cacheHits++; return hit.result; }
+  }
   const r = await runProcess(cmd, cmdArgs, { timeout: TOOL_TIMEOUT_MS, maxBuffer: 1 << 20 });
   // runProcess resolves rather than rejects; a missing tool shows as error.
-  if (r.error) return { ok: false, out: '', why: r.error.message || String(r.error) };
-  return { ok: r.code === 0, out: (r.stdout || '') + (r.stderr || ''), why: r.code === 0 ? '' : `exit ${r.code}` };
+  const out = r.error
+    ? { ok: false, out: '', why: r.error.message || String(r.error) }
+    : { ok: r.code === 0, out: (r.stdout || '') + (r.stderr || ''), why: r.code === 0 ? '' : `exit ${r.code}` };
+  // Never cache a FAILURE: a missing binary or a timeout would otherwise pin
+  // "unknown" for the whole TTL and keep reporting it long after the cause is
+  // gone. Only a real answer is worth remembering.
+  if (useCache && cacheKey && out.ok) { cache.set(cacheKey, { result: out, timestamp: Date.now() }); cacheMisses++; }
+  else if (cacheKey) cacheMisses++;
+  return out;
 }
 
 // ALL / ANY exactly as the live-scan dig/whois options define them.
@@ -92,6 +119,7 @@ const matchAll = (out, terms) => terms.every(t => out.toLowerCase().includes(t.t
 const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.toLowerCase()));
 
 (async () => {
+  if (useCache) { try { loadDiskCache(CACHE_FILE, cache, Math.max(DIG_TTL_MS, WHOIS_TTL_MS), CACHE_MAX); } catch { /* cold start */ } }
   const results = [];
   for (const d of domains) {
     const row = { domain: d, dig: null, whois: null, confirmed: null, notes: [] };
@@ -99,7 +127,10 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
     if (digAll.length || digAny.length) {
       // ANY record type the terms might name: A for ip prefixes, NS for the
       // nameserver fingerprint. One call each, concatenated.
-      const [a, ns] = await Promise.all([tool('dig', ['+short', d, 'A']), tool('dig', ['+short', d, 'NS'])]);
+      const [a, ns] = await Promise.all([
+        tool('dig', ['+short', d, 'A'], `dig:A:${d}`, DIG_TTL_MS),
+        tool('dig', ['+short', d, 'NS'], `dig:NS:${d}`, DIG_TTL_MS)
+      ]);
       const out = `${a.out}\n${ns.out}`;
       // ERROR is not the same as NO MATCH. Conflating them meant a missing dig
       // binary or a dns blip reported every genuine bait as unconfirmed, and
@@ -112,7 +143,7 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
     }
 
     if (whoisAll.length || whoisAny.length) {
-      const w = await tool('whois', [d]);
+      const w = await tool('whois', [d], `whois:${d}`, WHOIS_TTL_MS);
       if (!w.ok && !w.out) { row.notes.push(`whois failed: ${w.why}`); row.whois = 'error'; }
       else {
         row.whois = (whoisAll.length ? matchAll(w.out, whoisAll) : true) &&
@@ -164,6 +195,10 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
   // Exit codes keep the two apart: 1 means a domain really did not match, 2
   // means it could not be checked. Treating a dns failure as a rejection is
   // how a transient blip would drop a real bait from the list.
+  if (useCache) {
+    try { saveDiskCache(CACHE_FILE, cache, Math.max(DIG_TTL_MS, WHOIS_TTL_MS), CACHE_MAX); } catch { /* best effort */ }
+    if (!asJson) console.log(formatLogMessage('debug', `${TAG} cache ${cacheHits} hit(s), ${cacheMisses} miss(es) -> ${path.basename(CACHE_FILE)}`));
+  }
   const mismatched = results.filter(r => r.verdict === 'mismatch').length;
   const unknown = results.filter(r => r.verdict === 'unknown').length;
   if (!strict) process.exit(0);

@@ -49,3 +49,4 @@ targets.txt
 # workflow. Untracked already -- ignored so a `git add -A` cannot publish it.
 automate*.sh
 banned-list.txt
+.baitcache
