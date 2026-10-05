@@ -23,11 +23,12 @@
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File C:\nwss-har\win-netlog-capture.ps1 `
-    -Urls "https://jmty.jp/" -OutDir "C:\nwss-har" -SecondsPerUrl 45 -ForceClose
+    -Urls "https://example.com/" -OutDir "C:\nwss-har" -SecondsPerUrl 45 -ForceClose
 #>
 
 param(
-  [string[]]$Urls = @("https://jmty.jp/"),
+  [string[]]$Urls,
+  [string]$TargetsFile = "",
   [string]$OutDir = "C:\nwss-har",
   [int]$SecondsPerUrl = 45,
   [string]$Name = "netlog",
@@ -36,6 +37,25 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# --- target urls -------------------------------------------------------------
+# Targets live in a file OUTSIDE the repo (default <OutDir>\targets.txt), one
+# url per line, # for comments. Change the site there and every script follows.
+# Keeping them out of the tracked tree is deliberate: the sites being worked on
+# are not something to publish, and a default baked into a committed script is
+# exactly how that leaks.
+function Resolve-Targets {
+  param([string[]]$Explicit, [string]$File)
+  if ($Explicit -and $Explicit.Count -gt 0) { return $Explicit }
+  if (Test-Path -LiteralPath $File) {
+    $urls = Get-Content -LiteralPath $File |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -and -not $_.StartsWith("#") }
+    if ($urls.Count -gt 0) { return @($urls) }
+  }
+  throw "No target urls. Create $File with one url per line, or pass -Urls."
+}
+
 
 function Find-Chrome {
   $candidates = @(
@@ -84,6 +104,8 @@ function Close-Chrome {
 
 $chrome = Find-Chrome
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+if (-not $TargetsFile) { $TargetsFile = Join-Path $OutDir "targets.txt" }
+$Urls = Resolve-Targets -Explicit $Urls -File $TargetsFile
 # Fixed filename by default so the reading command never changes;
 # -Timestamped keeps every run instead.
 if ($Timestamped) {
@@ -129,4 +151,5 @@ Write-Host "net-log : $log  (${size}MB)"
 $wsl = ($log -replace '^C:', '/mnt/c') -replace '\\', '/'
 Write-Host ""
 Write-Host "read it with:"
-Write-Host "  node scripts/har-rules.js '$wsl' --config config-media2.json --site jmty"
+$siteSel = try { ([uri]$Urls[0]).Host } catch { "0" }
+Write-Host "  node scripts/har-rules.js '$wsl' --config <your-config>.json --site $siteSel"

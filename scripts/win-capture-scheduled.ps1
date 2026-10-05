@@ -37,7 +37,8 @@
 #>
 
 param(
-  [string[]]$Urls = @("https://jmty.jp/"),
+  [string[]]$Urls,
+  [string]$TargetsFile = "",
   [string]$OutDir = "C:\nwss-har",
   [string]$Name = "capture",
   [int]$SecondsPerUrl = 45,
@@ -52,6 +53,25 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+# --- target urls -------------------------------------------------------------
+# Targets live in a file OUTSIDE the repo (default <OutDir>\targets.txt), one
+# url per line, # for comments. Change the site there and every script follows.
+# Keeping them out of the tracked tree is deliberate: the sites being worked on
+# are not something to publish, and a default baked into a committed script is
+# exactly how that leaks.
+function Resolve-Targets {
+  param([string[]]$Explicit, [string]$File)
+  if ($Explicit -and $Explicit.Count -gt 0) { return $Explicit }
+  if (Test-Path -LiteralPath $File) {
+    $urls = Get-Content -LiteralPath $File |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -and -not $_.StartsWith("#") }
+    if ($urls.Count -gt 0) { return @($urls) }
+  }
+  throw "No target urls. Create $File with one url per line, or pass -Urls."
+}
+
 if (-not $CaptureProfile) { $CaptureProfile = Join-Path $OutDir "capture-profile" }
 
 function Find-Firefox {
@@ -177,6 +197,8 @@ if ($Install) {
 # --- one capture run (this is what the task executes) ------------------------
 $firefox = Find-Firefox
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+if (-not $TargetsFile) { $TargetsFile = Join-Path $OutDir "targets.txt" }
+$Urls = Resolve-Targets -Explicit $Urls -File $TargetsFile
 $transcript = Join-Path $OutDir "$Name-runs.log"
 "[{0}] run start" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss") | Add-Content -Path $transcript
 

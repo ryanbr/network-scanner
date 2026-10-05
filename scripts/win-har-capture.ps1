@@ -42,7 +42,7 @@
 
 .USAGE
   powershell -ExecutionPolicy Bypass -File win-har-capture.ps1 `
-      -Urls "https://jmty.jp/","https://jmty.jp/tokyo/sale-fur/article-1saoos" `
+      -Urls "https://example.com/","https://example.com/some/page" `
       -OutDir "C:\nwss-har" -SecondsPerUrl 45
 
   Firefox must be CLOSED first: the profile is locked while it runs, and the
@@ -51,13 +51,32 @@
   your tabs come back on the next launch, and only force-kills if that fails.
 #>
 param(
-  [string[]]$Urls = @("https://jmty.jp/"),
+  [string[]]$Urls,
+  [string]$TargetsFile = "",
   [string]$OutDir = "C:\nwss-har",
   [int]$SecondsPerUrl = 45,
   [string]$ProfileName = "",          # blank = the install's default profile
   [switch]$KeepPrefs,                  # leave the HAR prefs in place afterwards
   [switch]$ForceClose                  # close a running Firefox instead of refusing
 )
+
+# --- target urls -------------------------------------------------------------
+# Targets live in a file OUTSIDE the repo (default <OutDir>\targets.txt), one
+# url per line, # for comments. Change the site there and every script follows.
+# Keeping them out of the tracked tree is deliberate: the sites being worked on
+# are not something to publish, and a default baked into a committed script is
+# exactly how that leaks.
+function Resolve-Targets {
+  param([string[]]$Explicit, [string]$File)
+  if ($Explicit -and $Explicit.Count -gt 0) { return $Explicit }
+  if (Test-Path -LiteralPath $File) {
+    $urls = Get-Content -LiteralPath $File |
+      ForEach-Object { $_.Trim() } |
+      Where-Object { $_ -and -not $_.StartsWith("#") }
+    if ($urls.Count -gt 0) { return @($urls) }
+  }
+  throw "No target urls. Create $File with one url per line, or pass -Urls."
+}
 
 $ff = "C:\Program Files\Mozilla Firefox\firefox.exe"
 if (-not (Test-Path $ff)) { Write-Error "Firefox not found at $ff"; exit 1 }
@@ -111,6 +130,8 @@ if (-not (Test-Path $profile)) { Write-Error "Profile path not found: $profile";
 Write-Host "profile : $profile"
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+if (-not $TargetsFile) { $TargetsFile = Join-Path $OutDir "targets.txt" }
+$Urls = Resolve-Targets -Explicit $Urls -File $TargetsFile
 Write-Host "har dir : $OutDir"
 
 # --- set the HAR prefs via user.js (applied at startup, removed after) ------
@@ -167,7 +188,8 @@ if ($new) {
   Write-Host ""
   Write-Host "From WSL:" -ForegroundColor Cyan
   $wsl = ($OutDir -replace '^C:','/mnt/c' -replace '\\','/')
-  Write-Host "  node scripts/har-rules.js $wsl/<file>.har --config config-media2.json --site jmty"
+  $siteSel = try { ([uri]$Urls[0]).Host } catch { "0" }
+  Write-Host "  node scripts/har-rules.js $wsl/<file>.har --config <your-config>.json --site $siteSel"
 } else {
   Write-Host ""
   Write-Host "No HAR produced." -ForegroundColor Yellow

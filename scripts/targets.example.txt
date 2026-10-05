@@ -1,0 +1,6 @@
+# Target urls for the Windows capture scripts, one per line. # comments ok.
+# Copy to <OutDir>\targets.txt (default C:\nwss-har\targets.txt) and edit.
+# This file is the ONE place to change the site; every capture script reads it.
+# The real targets.txt is gitignored on purpose -- sites under test are not
+# something to publish.
+https://example.com/

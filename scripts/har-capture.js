@@ -75,7 +75,16 @@ fs.rmSync(profile, { recursive: true, force: true });
 fs.mkdirSync(path.join(profile, 'extensions'), { recursive: true });
 fs.mkdirSync(harDir, { recursive: true });
 
-const ffProfiles = '/mnt/c/Users/' + (process.env.WINUSER || 'mp3ge') + '/AppData/Roaming/Mozilla/Firefox/Profiles';
+// No hardcoded username: WINUSER, else whatever /mnt/c/Users holds that is not
+// a Windows built-in. A real account name does not belong in a published repo.
+const WIN_BUILTINS = new Set(['Public', 'Default', 'Default User', 'All Users', 'desktop.ini']);
+const winUser = process.env.WINUSER ||
+  (() => {
+    try {
+      return fs.readdirSync('/mnt/c/Users').find(d => !WIN_BUILTINS.has(d)) || '';
+    } catch { return ''; }
+  })();
+const ffProfiles = `/mnt/c/Users/${winUser}/AppData/Roaming/Mozilla/Firefox/Profiles`;
 let xpi = null;
 for (const d of fs.existsSync(ffProfiles) ? fs.readdirSync(ffProfiles) : []) {
   const p = path.join(ffProfiles, d, 'extensions', 'uBlock0@raymondhill.net.xpi');

@@ -41,3 +41,6 @@ eztvoutput-*
 *.swp
 *.swo
 *~
+
+# Capture targets: sites under test are not published
+targets.txt

@@ -3,16 +3,16 @@
  * adshield-rule.js — derive the rotation-proof filter for an AdShield-style
  * loader, from the site's own hostname.
  *
- *   node scripts/adshield-rule.js jmty.jp [more.example ...]
+ *   node scripts/adshield-rule.js example.com [more.example ...]
  *   node scripts/adshield-rule.js --har <file.har>     (confirm against a capture)
  *
  * Why this exists: the loader's HOST rotates through a fallback list
  * (html-load.cc -> exceptlone.com -> quitcertify.com -> ...), so a host-anchored
  * rule dies at the next rotation and has to be rediscovered. The PATH does not
- * rotate: it is /script/<base64(site hostname) without padding>.js, identical on
- * every host in the chain -- verified against a real capture where four
- * different hosts all served /script/am10eS5qcA.js, and base64("jmty.jp")
- * reproduces that token exactly.
+ * rotate: it is /script/<base64(site hostname) without padding>.js, identical
+ * on every host in the chain -- verified against a real capture in which four
+ * different hosts all served the same /script/<token>.js, and base64 of that
+ * site's own hostname reproduced the token exactly.
  *
  * So the filter can be written for a site before the next domain is even known,
  * and keeps working after it changes.
