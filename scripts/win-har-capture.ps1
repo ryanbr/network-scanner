@@ -4,21 +4,20 @@
   somewhere WSL can read, so nwss's har-rules.js can turn them into filters.
 
 .STATUS
-  AUTO-EXPORT DOES NOT WORK ON FIREFOX 157. Tested on a fresh profile and on an
-  established profile with uBO: the toolbox opens (window title confirms it),
-  devtools.netmonitor.har.enableAutoExportToFile is set, the log directory is
-  writable -- and no HAR is ever written, nor is any log directory created.
-  toolbox.js:4685 constructs HarAutomation from initHarAutomation() at toolbox
-  open gated only on that pref, so the code path exists; it simply produces
-  nothing. Do not spend more time on the prefs, the paths or the timeouts.
+  Earlier revisions of this script never produced a HAR, and that was recorded
+  here as "auto-export is broken in Firefox 157". That was wrong. The cause was
+  this script: the log directory was written to user.js with four backslashes
+  instead of two, so the pref held "C:\\nwss-har" -- a path that cannot exist,
+  which is why no file and no directory ever appeared. Viewing the pref in
+  about:config is what exposed it. Fixed below; see the $escaped line.
 
-  Everything else here works and is worth keeping: profile resolution from
-  profiles.ini, graceful close with session preservation, pref backup/restore,
-  and driving multiple URLs as tabs in one session. If Mozilla fixes
-  auto-export, this script will start producing HARs with no changes.
+  NOTE ON PREFS: once Firefox has read user.js the values are written into
+  prefs.js, so restoring user.js at the end does NOT unset them -- they stay
+  visible (bold) in about:config. Harmless, and re-applied on the next run, but
+  to clear them use the reset arrows in about:config.
 
-  Until then use: F12 > Network > Ctrl+R > right-click > Save All As HAR,
-  then har-rules.js on the saved file. That path is proven end to end.
+  If a run still produces nothing, the manual path is proven end to end:
+  F12 > Network > Ctrl+R > right-click > Save All As HAR, then har-rules.js.
 
 .WHY
   Some anti-adblock loaders only walk their fallback host list when a genuine
@@ -109,7 +108,12 @@ Write-Host "har dir : $OutDir"
 $userJs = Join-Path $profile "user.js"
 $backup = Join-Path $profile "user.js.nwss-backup"
 if (Test-Path $userJs) { Copy-Item $userJs $backup -Force }
-$escaped = $OutDir -replace '\\','\\\\'
+# prefs.js/user.js is C-escaped, so a backslash must be doubled -- exactly
+# doubled. Using -replace here emits FOUR (its replacement string takes
+# backslashes literally), which stored "C:\\nwss-har" as the log directory and
+# was the entire reason auto-export never produced a file. .Replace() is the
+# plain string method, no regex, no replacement-token rules.
+$escaped = $OutDir.Replace('\','\\')
 @"
 user_pref("devtools.netmonitor.har.enableAutoExportToFile", true);
 user_pref("devtools.netmonitor.har.defaultLogDir", "$escaped");
