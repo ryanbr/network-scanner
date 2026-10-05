@@ -3,6 +3,23 @@
   Capture HAR files from the REAL Firefox (with its real uBO) and leave them
   somewhere WSL can read, so nwss's har-rules.js can turn them into filters.
 
+.STATUS
+  AUTO-EXPORT DOES NOT WORK ON FIREFOX 157. Tested on a fresh profile and on an
+  established profile with uBO: the toolbox opens (window title confirms it),
+  devtools.netmonitor.har.enableAutoExportToFile is set, the log directory is
+  writable -- and no HAR is ever written, nor is any log directory created.
+  toolbox.js:4685 constructs HarAutomation from initHarAutomation() at toolbox
+  open gated only on that pref, so the code path exists; it simply produces
+  nothing. Do not spend more time on the prefs, the paths or the timeouts.
+
+  Everything else here works and is worth keeping: profile resolution from
+  profiles.ini, graceful close with session preservation, pref backup/restore,
+  and driving multiple URLs as tabs in one session. If Mozilla fixes
+  auto-export, this script will start producing HARs with no changes.
+
+  Until then use: F12 > Network > Ctrl+R > right-click > Save All As HAR,
+  then har-rules.js on the saved file. That path is proven end to end.
+
 .WHY
   Some anti-adblock loaders only walk their fallback host list when a genuine
   content blocker cancels the earlier hosts. Fifteen automated attempts from
