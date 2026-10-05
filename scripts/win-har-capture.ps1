@@ -21,23 +21,53 @@
       -OutDir "C:\nwss-har" -SecondsPerUrl 45
 
   Firefox must be CLOSED first: the profile is locked while it runs, and the
-  HAR prefs are only read at startup.
+  HAR prefs are only read at startup. Add -ForceClose to have the script close
+  it for you -- it asks Firefox to quit normally so sessionstore is written and
+  your tabs come back on the next launch, and only force-kills if that fails.
 #>
 param(
   [string[]]$Urls = @("https://jmty.jp/"),
   [string]$OutDir = "C:\nwss-har",
   [int]$SecondsPerUrl = 45,
   [string]$ProfileName = "",          # blank = the install's default profile
-  [switch]$KeepPrefs                   # leave the HAR prefs in place afterwards
+  [switch]$KeepPrefs,                  # leave the HAR prefs in place afterwards
+  [switch]$ForceClose                  # close a running Firefox instead of refusing
 )
 
 $ff = "C:\Program Files\Mozilla Firefox\firefox.exe"
 if (-not (Test-Path $ff)) { Write-Error "Firefox not found at $ff"; exit 1 }
 
+function Close-Firefox {
+  param([int]$TimeoutSeconds = 25)
+  # Ask politely FIRST: CloseMainWindow lets Firefox write sessionstore, so the
+  # user gets their tabs back on next launch. Force-killing skips that.
+  $procs = Get-Process firefox -ErrorAction SilentlyContinue
+  if (-not $procs) { return $true }
+  Write-Host "closing Firefox gracefully (so your session is saved) ..." -ForegroundColor Cyan
+  $procs | ForEach-Object { try { $_.CloseMainWindow() | Out-Null } catch {} }
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Process firefox -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+    Start-Sleep -Milliseconds 500
+  }
+  if (Get-Process firefox -ErrorAction SilentlyContinue) {
+    Write-Host "  still running after ${TimeoutSeconds}s -- forcing" -ForegroundColor Yellow
+    Get-Process firefox -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 3
+  }
+  # A crashed/killed instance can leave the profile lock behind.
+  Start-Sleep -Seconds 2
+  return (-not (Get-Process firefox -ErrorAction SilentlyContinue))
+}
+
 if (Get-Process firefox -ErrorAction SilentlyContinue) {
-  Write-Host "Firefox is running. Close it first -- the profile is locked and the" -ForegroundColor Yellow
-  Write-Host "HAR preferences are only read at startup." -ForegroundColor Yellow
-  exit 1
+  if (-not $ForceClose) {
+    Write-Host "Firefox is running. Close it first -- the profile is locked and the" -ForegroundColor Yellow
+    Write-Host "HAR preferences are only read at startup." -ForegroundColor Yellow
+    Write-Host "Or re-run with -ForceClose to have this script close it for you" -ForegroundColor Yellow
+    Write-Host "(gracefully, so Firefox saves your tabs for session restore)." -ForegroundColor Yellow
+    exit 1
+  }
+  if (-not (Close-Firefox)) { Write-Error "Could not close Firefox"; exit 1 }
 }
 
 # --- locate the profile -----------------------------------------------------
@@ -91,8 +121,7 @@ try {
     Start-Sleep -Seconds $SecondsPerUrl
   }
 } finally {
-  Get-Process firefox -ErrorAction SilentlyContinue | Stop-Process -Force
-  Start-Sleep -Seconds 3
+  Close-Firefox -TimeoutSeconds 15 | Out-Null
   if (-not $KeepPrefs) {
     if (Test-Path $backup) { Move-Item $backup $userJs -Force } else { Remove-Item $userJs -Force -ErrorAction SilentlyContinue }
     Write-Host "prefs   : restored"
