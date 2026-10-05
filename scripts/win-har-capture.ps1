@@ -4,20 +4,29 @@
   somewhere WSL can read, so nwss's har-rules.js can turn them into filters.
 
 .STATUS
-  Earlier revisions of this script never produced a HAR, and that was recorded
-  here as "auto-export is broken in Firefox 157". That was wrong. The cause was
-  this script: the log directory was written to user.js with four backslashes
-  instead of two, so the pref held "C:\\nwss-har" -- a path that cannot exist,
-  which is why no file and no directory ever appeared. Viewing the pref in
-  about:config is what exposed it. Fixed below; see the $escaped line.
+  AUTO-EXPORT DOES NOT PRODUCE A FILE ON FIREFOX 157, with every precondition
+  met. Established over two runs against the real profile:
 
-  NOTE ON PREFS: once Firefox has read user.js the values are written into
-  prefs.js, so restoring user.js at the end does NOT unset them -- they stay
-  visible (bold) in about:config. Harmless, and re-applied on the next run, but
-  to clear them use the reset arrows in about:config.
+    run 1  no file. Cause found in about:config: the log directory pref held
+           "C:\\nwss-har" because this script doubled backslashes twice (see
+           $escaped). A path that cannot exist -- a real defect, now fixed, and
+           it masked everything below.
+    run 2  prefs.js confirms defaultLogDir is now correct, enableAutoExportToFile
+           and forceExport are true, and the toolbox opened on the Network panel
+           (devtools.everOpened=true, toolbox.host=right,
+           toolbox.selectedTool=netmonitor). No file was written -- not in the
+           log directory, not in the profile, not in Downloads, nowhere on disk.
 
-  If a run still produces nothing, the manual path is proven end to end:
-  F12 > Network > Ctrl+R > right-click > Save All As HAR, then har-rules.js.
+  So the pref path and the toolbox are NOT the problem. Do not spend more time
+  on prefs, paths, timeouts or launch flags.
+
+  PREFER scripts/win-mozlog-capture.ps1, which needs no DevTools and no prefs at
+  all. Or save by hand: F12 > Network > Ctrl+R > right-click > Save All As HAR.
+  Both feed har-rules.js.
+
+  NOTE ON PREFS: once Firefox reads user.js the values are written into prefs.js,
+  so restoring user.js at the end does NOT unset them -- they stay visible (bold)
+  in about:config. Clear them with the reset arrows there if you want them gone.
 
 .WHY
   Some anti-adblock loaders only walk their fallback host list when a genuine
