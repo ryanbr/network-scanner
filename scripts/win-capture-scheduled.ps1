@@ -49,6 +49,7 @@ param(
   [string]$TaskName = "nwss-capture",
   [switch]$RefreshProfile,
   [switch]$Install,
+  [switch]$Status,
   [switch]$Uninstall
 )
 
@@ -160,6 +161,43 @@ function Clear-ProfileJunk {
 }
 
 # --- install / uninstall ----------------------------------------------------
+if ($Status) {
+  $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+  if ($t) {
+    $i = Get-ScheduledTaskInfo -TaskName $TaskName
+    Write-Host ("  task      : {0}, repeats every {1}" -f $t.State, $t.Triggers[0].Repetition.Interval)
+    Write-Host ("  last run  : {0}  (result {1})" -f $i.LastRunTime, $i.LastTaskResult)
+    Write-Host ("  next run  : {0}" -f $i.NextRunTime)
+  } else { Write-Host "  task      : NOT INSTALLED ('$TaskName')" }
+
+  $tf = if ($TargetsFile) { $TargetsFile } else { Join-Path $OutDir "targets.txt" }
+  if (Test-Path $tf) {
+    $t0 = (Get-Content $tf | Where-Object { $_ -and -not $_.Trim().StartsWith("#") } | Select-Object -First 1)
+    Write-Host ("  target    : {0}   ({1})" -f $t0, $tf)
+  } else { Write-Host "  target    : no targets file at $tf" }
+
+  $cap = Join-Path $OutDir "$Name.log.moz_log"
+  if (Test-Path $cap) {
+    $f = Get-Item $cap
+    $age = [int]((Get-Date) - $f.LastWriteTime).TotalMinutes
+    Write-Host ("  capture   : {0:N1}MB, {1} min old ({2})" -f ($f.Length/1MB), $age, $f.LastWriteTime)
+    # Which page the capture is really of -- the document request, not what was asked for.
+    $doc = Select-String -Path $cap -Pattern 'uri=https?://[^ ]+' -List -ErrorAction SilentlyContinue
+    $hosts = Select-String -Path $cap -Pattern 'uri=https?://([^/ ]+)' -AllMatches -ErrorAction SilentlyContinue |
+      ForEach-Object { $_.Matches } | ForEach-Object { $_.Groups[1].Value } |
+      Group-Object | Sort-Object Count -Descending | Select-Object -First 3
+    if ($hosts) { Write-Host ("  top hosts : {0}" -f (($hosts | ForEach-Object { "$($_.Name) ($($_.Count))" }) -join ", ")) }
+    if ($doc) { }
+  } else { Write-Host "  capture   : none at $cap" }
+
+  $runs = Join-Path $OutDir "$Name-runs.log"
+  if (Test-Path $runs) {
+    Write-Host "  last runs :"
+    Get-Content $runs -Tail 5 | ForEach-Object { Write-Host ("    " + $_) }
+  }
+  return
+}
+
 if ($Uninstall) {
   if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -266,6 +304,22 @@ Clear-ProfileJunk -Profile $CaptureProfile
 
 $all = Get-ChildItem "$logBase*" -ErrorAction SilentlyContinue
 $mb  = (($all | Measure-Object -Property Length -Sum).Sum) / 1MB
-$msg = "ok: {0:N1}MB across {1} file(s) -> {2}.moz_log" -f $mb, $all.Count, $logBase
+
+# A headless run is invisible, so the log has to answer "which site did it
+# actually visit?" on its own. Record the target AND whether that host appears
+# in the capture -- the second is the part that matters, because a target can be
+# requested and never reached (dns failure, redirect, stale task arguments).
+$targetHost = try { ([uri]$Urls[0]).Host } catch { "" }
+$contacted = "unknown"
+if ($targetHost) {
+  # -SimpleMatch takes the pattern LITERALLY, so it must NOT be regex-escaped:
+  # [regex]::Escape() turned "jmty.jp" into "jmty\.jp" and the search then
+  # looked for a literal backslash, reporting "contacted: NO" on a capture that
+  # plainly contained the host. Search the whole family too -- a request can be
+  # logged by a content process rather than the parent.
+  $hit = Select-String -Path "$logBase*.moz_log" -Pattern "uri=https://$targetHost" -SimpleMatch -List -ErrorAction SilentlyContinue
+  $contacted = if ($hit) { "yes" } else { "NO" }
+}
+$msg = "ok: {0:N1}MB across {1} file(s) | target {2} | {3} contacted: {4}" -f $mb, $all.Count, $Urls[0], $targetHost, $contacted
 Write-Host "  $msg"
 "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg | Add-Content -Path $transcript
