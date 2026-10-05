@@ -62,7 +62,11 @@ $ErrorActionPreference = 'Stop'
 # exactly how that leaks.
 function Resolve-Targets {
   param([string[]]$Explicit, [string]$File)
-  if ($Explicit -and $Explicit.Count -gt 0) { return $Explicit }
+  # Filter blanks: an empty -Urls "" (which a scheduled-task argument list can
+  # easily carry) must NOT count as an explicit target and silently beat the
+  # targets file -- it would launch the browser with no url at all.
+  $explicitClean = @($Explicit | Where-Object { $_ -and $_.Trim() })
+  if ($explicitClean.Count -gt 0) { return $explicitClean }
   if (Test-Path -LiteralPath $File) {
     $urls = Get-Content -LiteralPath $File |
       ForEach-Object { $_.Trim() } |
@@ -166,9 +170,15 @@ if ($Uninstall) {
 
 if ($Install) {
   $self = $MyInvocation.MyCommand.Path
+  # Do NOT bake the urls into the task unless they were given explicitly: the
+  # whole point of targets.txt is that the site can be changed in one place
+  # without touching the schedule. A baked-in -Urls "" would also override it.
   $argline = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$self`"" +
-             " -Urls `"$($Urls -join ',')`" -OutDir `"$OutDir`" -Name `"$Name`"" +
+             " -OutDir `"$OutDir`" -Name `"$Name`"" +
              " -SecondsPerUrl $SecondsPerUrl -LogLevel $LogLevel"
+  $explicitUrls = @($Urls | Where-Object { $_ -and $_.Trim() })
+  if ($explicitUrls.Count -gt 0) { $argline += " -Urls `"$($explicitUrls -join ',')`"" }
+  if ($TargetsFile) { $argline += " -TargetsFile `"$TargetsFile`"" }
   $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argline
   # Repeat for ~10 years rather than a fixed end date, so it does not silently
   # stop one day; -Once + RepetitionInterval is the only combination that gives
