@@ -143,6 +143,46 @@ const badCap = run([cfgPath, '--har', cfgPath]);
 check('a non-capture file is refused with a useful message',
   /not a recognised capture/.test(badCap), true);
 
+// ---- filterRegex as an ARRAY, as the live scan accepts --------------------
+// `new RegExp(array)` coerces the array to a comma-joined string, so
+// ["a$","b$"] compiled to /a$,b$/ and matched NOTHING -- silently, with every
+// url still counted as "considered". Found on a real site whose loader token
+// (36 chars) needed a second pattern: 2071 considered, 0 matched.
+const arrCfg = {
+  ignoreDomains: [],
+  sites: [{
+    url: 'https://example.test/',
+    filterRegex: ['\\/[a-z]{8,12}\\.js$', '\\/script\\/[A-Za-z0-9]{20,48}\\.js$'],
+    firstParty: false
+  }]
+};
+const arrHar = {
+  log: {
+    version: '1.2', creator: { name: 't', version: '1' },
+    pages: [{ title: 'https://example.test/' }],
+    entries: [
+      harEntry('https://example.test/', 'document', 'text/html'),
+      harEntry('https://first.invalid/abcdefghij.js', 'script', 'application/javascript'),
+      harEntry('https://second.invalid/script/ABCDEFGHIJKLMNOPQRSTUV.js', 'script', 'application/javascript'),
+      harEntry('https://neither.invalid/x.js', 'script', 'application/javascript')
+    ]
+  }
+};
+const arrHarPath = F('arr.har'); fs.writeFileSync(arrHarPath, JSON.stringify(arrHar));
+const arrCfgPath = F('arr-cfg.json'); fs.writeFileSync(arrCfgPath, JSON.stringify(arrCfg));
+const arrOut = F('arr-out.txt');
+run([arrCfgPath, '--har', arrHarPath, '--site', '0', '--output', arrOut, '--silent']);
+check('array filterRegex matches ANY pattern by default', outLines(arrOut).sort(),
+  ['||first.invalid^', '||second.invalid^']);
+
+// regex_and flips it to ALL, as it does for the live path.
+const andCfg = JSON.parse(JSON.stringify(arrCfg));
+andCfg.sites[0].regex_and = true;
+const andCfgPath = F('and-cfg.json'); fs.writeFileSync(andCfgPath, JSON.stringify(andCfg));
+const andOut = F('and-out.txt');
+run([andCfgPath, '--har', arrHarPath, '--site', '0', '--output', andOut, '--silent']);
+check('regex_and requires ALL patterns', outLines(andOut), []);
+
 // ---- naming a DIRECTORY uses the newest capture, not all of them --------
 // Capture filenames are timestamped so runs never overwrite each other, which
 // means a fixed command has to name the folder. Reading every capture in it is
