@@ -61,15 +61,7 @@ $targetHost = ([uri]$Urls[0]).Host
 
 # The loader path is base64 of the page hostname with '=' padding stripped --
 # derived, never configured, so it follows the site rather than a host list.
-if (-not $Detect) {
-  $token = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($targetHost)) -replace '=+$',''
-  $Detect = "uri=https?://([^/ ]+)/script/$([regex]::Escape($token))\.js"
-  Write-Host "  target  : $targetHost"
-  Write-Host "  token   : $token   (base64 of the hostname)"
-} else {
-  Write-Host "  target  : $targetHost"
-  Write-Host "  detect  : $Detect  (supplied)"
-}
+Write-Host "  target  : $targetHost"
 
 # --- dig matching -------------------------------------------------------------
 # The same bait_dig / bait_dig-or keys bait-confirm.js reads, so the fingerprint
@@ -92,15 +84,15 @@ if (-not $NoDigMatch -and $Config) {
     if ($cfg.PSObject.Properties.Name -contains $key) { return @($cfg.$key) }
     return @()
   }
-  $digAll = @(& $pick 'bait_dig')    | Where-Object { $_ }
-  $digAny = @(& $pick 'bait_dig-or') | Where-Object { $_ }
+  $digAll = @(@(& $pick 'bait_dig')    | Where-Object { $_ })
+  $digAny = @(@(& $pick 'bait_dig-or') | Where-Object { $_ })
 
   # bait_rounds lives beside the other bait_* keys so the walk is configured in
   # ONE place. An explicit -MaxRounds still wins, for a one-off deeper or
   # shallower run; without this the count sat in both the parameter default and
   # the caller's command line, which is how the two drift apart.
   if (-not $PSBoundParameters.ContainsKey('MaxRounds')) {
-    $cfgRounds = @(& $pick 'bait_rounds') | Where-Object { $_ }
+    $cfgRounds = @(@(& $pick 'bait_rounds') | Where-Object { $_ })
     if ($cfgRounds.Count -and [int]$cfgRounds[0] -gt 0) {
       $MaxRounds = [int]$cfgRounds[0]
       Write-Host "  rounds  : $MaxRounds (from bait_rounds)"
@@ -111,6 +103,28 @@ if (-not $NoDigMatch -and $Config) {
   } else {
     Write-Host "  dig gate: no bait_dig/bait_dig-or in config -- discovery ungated"
   }
+
+  # bait_detect makes the loader pattern visible in the config instead of
+  # hidden in this script. Still optional: with no key the pattern is DERIVED
+  # from the target hostname, which is what keeps a rotated host findable and a
+  # new site configuration-free.
+  if (-not $PSBoundParameters.ContainsKey('Detect')) {
+    # @() AROUND the pipeline: Where-Object collapses a single match to a
+    # scalar, and indexing a scalar string gives a CHAR -- the detect pattern
+    # came back as "u". The dig lists only escaped it by having >1 element.
+    $cfgDetect = @(@(& $pick 'bait_detect') | Where-Object { $_ })
+    if ($cfgDetect.Count) { $Detect = $cfgDetect[0] }
+  }
+}
+
+# Precedence: -Detect, then bait_detect, then derived from the hostname.
+if (-not $Detect) {
+  $token = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($targetHost)) -replace '=+$',''
+  $Detect = "uri=https?://([^/ ]+)/script/$([regex]::Escape($token))\.js"
+  Write-Host "  token   : $token   (base64 of the hostname)"
+  Write-Host "  detect  : $Detect  (derived)"
+} else {
+  Write-Host "  detect  : $Detect  ($(if ($PSBoundParameters.ContainsKey('Detect')) { 'supplied' } else { 'from bait_detect' }))"
 }
 
 # Returns 'match' | 'mismatch' | 'unknown'. A FAILED lookup is never a mismatch:
