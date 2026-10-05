@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Capture a site on a schedule (default every 4 hours), headless, without
+  Capture a site on a schedule (default every 2 hours), headless, without
   touching the Firefox you are browsing in.
 
 .DESCRIPTION
@@ -45,7 +45,7 @@ param(
   [ValidateRange(1,5)][int]$LogLevel = 1,
   [string]$SourceProfile = "",
   [string]$CaptureProfile = "",
-  [int]$IntervalHours = 4,
+  [int]$IntervalHours = 2,
   [string]$TaskName = "nwss-capture",
   [switch]$RefreshProfile,
   [switch]$Install,
