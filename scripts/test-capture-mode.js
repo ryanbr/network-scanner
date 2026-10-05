@@ -143,6 +143,38 @@ const badCap = run([cfgPath, '--har', cfgPath]);
 check('a non-capture file is refused with a useful message',
   /not a recognised capture/.test(badCap), true);
 
+// ---- naming a DIRECTORY uses the newest capture, not all of them --------
+// Capture filenames are timestamped so runs never overwrite each other, which
+// means a fixed command has to name the folder. Reading every capture in it is
+// NOT the same thing: it merged separate page loads into one result (two real
+// runs of 350 and 288 requests came back as 498).
+const capDir = F('captures');
+fs.mkdirSync(capDir);
+const older = path.join(capDir, 'ff-000000-000000.log.moz_log');
+const newer = path.join(capDir, 'ff-111111-111111.log.moz_log');
+const mozLines = urls => urls.map(u =>
+  `2026-01-01 00:00:00.000 UTC - [Parent 1: Main Thread]: E/nsHttp uri=${u}`).join('\r\n') + '\r\n';
+fs.writeFileSync(older, mozLines(['https://example.test/', 'https://old-only.invalid/script/aaaaaaaaaa.js']));
+fs.writeFileSync(newer, mozLines(['https://example.test/', 'https://new-only.invalid/script/bbbbbbbbbb.js']));
+// A per-process sibling of the newer run must be included with it...
+fs.writeFileSync(path.join(capDir, 'ff-111111-111111.log.child-3.moz_log'),
+  mozLines(['https://sibling.invalid/script/cccccccccc.js']));
+const old_t = new Date(Date.now() - 60000);
+fs.utimesSync(older, old_t, old_t);
+
+const dirCap = parseCapture(capDir);
+const dirHosts = dirCap.entries.map(e => e.host);
+check('a directory resolves to the NEWEST capture', dirHosts.includes('new-only.invalid'), true);
+check('and does not merge the older one', dirHosts.includes('old-only.invalid'), false);
+check("the newest run's own child logs are still included", dirHosts.includes('sibling.invalid'), true);
+check('the resolved file is reported', path.basename(dirCap.filePath), 'ff-111111-111111.log.moz_log');
+
+let dirThrew = '';
+try { parseCapture(F('emptydir')); } catch (e) { dirThrew = e.message; }
+fs.mkdirSync(F('emptydir'));
+try { parseCapture(F('emptydir')); } catch (e) { dirThrew = e.message; }
+check('an empty directory says so', /no capture found/.test(dirThrew), true);
+
 // ---- even_blocked, and the two tools agreeing --------------------------
 // har-rules.js and `nwss --har` read the same config and the same capture, so
 // they must produce the same rules. They did not: har-rules excluded blocked

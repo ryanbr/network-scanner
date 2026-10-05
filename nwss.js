@@ -949,7 +949,10 @@ Options:
   --append                       Append new rules to output file instead of overwriting (requires -o)
 
 Capture Mode (no browser is launched):
-  --har <file>                   Build rules from a saved browser capture instead of scanning.
+  --har <file|dir>               Build rules from a saved browser capture instead of scanning.
+                                 Give a DIRECTORY to always use the newest capture in it -- capture
+                                 filenames are timestamped so runs don't overwrite each other, so
+                                 naming the folder keeps one command that never changes.
                                  Takes any of three formats, detected by content, not extension:
                                    DevTools HAR   F12 > Network > right-click > Save All As HAR
                                    Chrome net-log chrome --log-net-log=out.json <url>
@@ -2242,6 +2245,12 @@ function setupFrameHandling(page, forceDebug) {
 
     if (!silentMode) {
       console.log(`\n${messageColors.processing('Capture:')} ${captureFile}`);
+      // Naming a DIRECTORY is the way to keep one fixed command: captures are
+      // timestamped so they never overwrite each other. Say which one was
+      // chosen, or "newest" is a silent guess.
+      if (capture.filePath && capture.filePath !== captureFile) {
+        console.log(`  newest in dir : ${require('path').basename(capture.filePath)}`);
+      }
       console.log(`  format        : ${capture.formatLabel}`);
       console.log(`  page          : ${String(capture.pageUrl).slice(0, 72)}`);
       console.log(`  requests      : ${capture.entries.length}`);

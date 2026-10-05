@@ -30,6 +30,8 @@ param(
   [string[]]$Urls = @("https://jmty.jp/"),
   [string]$OutDir = "C:\nwss-har",
   [int]$SecondsPerUrl = 45,
+  [string]$Name = "netlog",
+  [switch]$Timestamped,
   [switch]$ForceClose
 )
 
@@ -82,8 +84,15 @@ function Close-Chrome {
 
 $chrome = Find-Chrome
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$stamp = Get-Date -Format "yyMMdd-HHmmss"
-$log   = Join-Path $OutDir "netlog-$stamp.json"
+# Fixed filename by default so the reading command never changes;
+# -Timestamped keeps every run instead.
+if ($Timestamped) {
+  $stamp = Get-Date -Format "yyMMdd-HHmmss"
+  $log   = Join-Path $OutDir "netlog-$stamp.json"
+} else {
+  $log   = Join-Path $OutDir "$Name.json"
+}
+if (Test-Path -LiteralPath $log) { Remove-Item -LiteralPath $log -Force -ErrorAction SilentlyContinue }
 
 Write-Host "chrome  : $chrome"
 Write-Host "log     : $log"

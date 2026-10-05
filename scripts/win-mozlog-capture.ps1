@@ -40,6 +40,8 @@ param(
   [string[]]$Urls = @("https://jmty.jp/"),
   [string]$OutDir = "C:\nwss-har",
   [int]$SecondsPerUrl = 45,
+  [string]$Name = "capture",
+  [switch]$Timestamped,
   [switch]$ForceClose
 )
 
@@ -91,8 +93,27 @@ function Close-Firefox {
 
 $firefox = Find-Firefox
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$stamp = Get-Date -Format "yyMMdd-HHmmss"
-$logBase = Join-Path $OutDir "ff-$stamp.log"
+# A FIXED filename by default, so the command that reads the capture never
+# changes. -Timestamped keeps every run instead.
+if ($Timestamped) {
+  $stamp = Get-Date -Format "yyMMdd-HHmmss"
+  $logBase = Join-Path $OutDir "ff-$stamp.log"
+} else {
+  $logBase = Join-Path $OutDir "$Name.log"
+}
+
+# Clear THIS capture's previous family first. Firefox writes one log per
+# content process (<base>.child-N.moz_log), and a run that spawns fewer
+# processes than the last leaves the extra children behind -- they share the
+# stem, so the reader would fold a previous page load into this one. Matched by
+# exact pattern so nothing else in the directory can be caught by it.
+$leafPattern = '^' + [regex]::Escape((Split-Path $logBase -Leaf)) + '(\.child-\d+)?\.moz_log$'
+Get-ChildItem -LiteralPath $OutDir -File -ErrorAction SilentlyContinue |
+  Where-Object { $_.Name -match $leafPattern } |
+  ForEach-Object {
+    Write-Host "  clearing previous: $($_.Name)"
+    Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue
+  }
 
 Write-Host "firefox : $firefox"
 Write-Host "log     : $logBase.moz_log"
