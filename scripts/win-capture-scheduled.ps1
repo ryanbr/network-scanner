@@ -271,7 +271,13 @@ if ($RefreshProfile -or -not (Test-Path (Join-Path $CaptureProfile "extensions")
 # 19:33:41, manual at 19:33:42, Telemetry.FailedProfileLocks.txt written, capture
 # 0 bytes. MultipleInstances=IgnoreNew only stops the TASK double-running; it
 # cannot see a manual run.
-$lockFile = Join-Path $OutDir "$Name.lock"
+# Lock the RESOURCE, not the run name. This was "$Name.lock", but the Firefox
+# profile clone is shared by every capture regardless of -Name, so a per-name lock
+# only ever serialised runs that happened to share a name. The walk names each
+# round "$Name-r$round", and the scheduled task has its own name, so in practice
+# nothing was serialised against anything: two Firefoxes could start on one
+# profile, which yields "Firefox is already running" and a near-empty log.
+$lockFile = Join-Path $OutDir ((Split-Path $CaptureProfile -Leaf) + ".lock")
 $lockMine = $false
 if (Test-Path -LiteralPath $lockFile) {
   $holder = (Get-Content -LiteralPath $lockFile -ErrorAction SilentlyContinue | Select-Object -First 1)
