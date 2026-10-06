@@ -224,6 +224,13 @@ $completed  = $false      # true only when a round reveals nothing new
 $stopReason = "max rounds reached ($MaxRounds)"
 $blocked = New-Object System.Collections.Generic.List[string]
 $found   = New-Object System.Collections.Generic.List[string]
+# What the dig gate actually decided, per root, and on which name. The report at
+# the end used to re-derive a verdict with its own hardcoded houston/veda NS check
+# against the root -- so it printed "fingerprint differs" for hosts the gate had
+# just CONFIRMED and enumerated, because this operator's parked-apex family
+# matches only on the serving subdomain. A report that can disagree with the gate
+# is worse than no report: it reads as a failure on a successful walk.
+$verdicts = @{}
 $round   = 0
 try {
   while ($round -lt $MaxRounds) {
@@ -299,7 +306,22 @@ try {
     foreach ($h in $hosts) {
       $r = Get-Root $h
       if ($blocked.Contains($r)) { if (-not $found.Contains($h)) { $found.Add($h) }; continue }
-      $verdict = Test-DigMatch $r
+      # Dig the host that actually SERVED, not only its registrable domain. This
+      # operator runs two families: one with the apex on Cloudflare (howphooey,
+      # smoothhmph, html-load.cc -> 104.26./104.20./172.66./172.67.), and one with
+      # the apex PARKED and its own footprint only on the serving subdomain --
+      # ickaside.com and goshupward.com both resolve to 3.33.251.168 /
+      # 15.197.225.128 (AWS Global Accelerator, shared by countless parked
+      # domains), while deer.ickaside.com and hunt.goshupward.com both CNAME to
+      # sdi.html-load.com. Gating on the root alone made the walk find those
+      # hosts and then SKIP them, and widening the gate to the parked apex IPs
+      # would have matched half the internet. Accept a match from either name;
+      # keep "unknown" distinct from "mismatch" on both.
+      $vh = Test-DigMatch $h
+      $vr = if ($h -ne $r) { Test-DigMatch $r } else { $vh }
+      $verdict = if ($vh -eq 'match' -or $vr -eq 'match') { 'match' }
+                 elseif ($vh -eq 'mismatch' -or $vr -eq 'mismatch') { 'mismatch' }
+                 else { 'unknown' }
       if ($verdict -eq 'mismatch') {
         Write-Host "    SKIP $r -- dig does not match the fingerprint (not blocked, not listed)"
         continue
@@ -308,6 +330,7 @@ try {
         Write-Host "    WARN $r -- dig lookup failed; allowing (a failed lookup is not a mismatch)"
       }
       if (-not $found.Contains($h)) { $found.Add($h) }
+      $verdicts[$r] = @{ verdict = $verdict; via = if ($vh -eq 'match') { $h } elseif ($vr -eq 'match') { $r } else { '' } }
       $blocked.Add($r); $newRoots += $r
     }
     Write-Host "    hosts serving the loader: $($hosts -join ', ')"
@@ -338,9 +361,11 @@ foreach ($r in $roots) {
   # account, while unrelated ad domains on the same pages do not.
   # A failed lookup is NOT a mismatch -- saying "differs" when nothing was
   # resolved reads as evidence against the domain when there is none.
-  $fp = if (-not $ns) { "fingerprint UNKNOWN (ns lookup failed)" }
-        elseif ($ns -match 'houston\.ns\.cloudflare\.com' -and $ns -match 'veda\.ns\.cloudflare\.com') { "fingerprint MATCH" }
-        else { "fingerprint differs" }
+  $rec = $verdicts[$r]
+  $fp = if (-not $rec) { "gate not recorded" }
+        elseif ($rec.verdict -eq 'match')    { "dig gate CONFIRMED" + $(if ($rec.via) { " via $($rec.via)" } else { "" }) }
+        elseif ($rec.verdict -eq 'unknown')  { "dig gate UNKNOWN (lookup failed; a failure is not a mismatch)" }
+        else                                 { "dig gate MISMATCH" }
   Write-Host ("    {0,-24} {1}" -f $r, $fp)
   if ($ns) { Write-Host ("        ns: {0}" -f $ns) }
 }
@@ -358,6 +383,29 @@ if ($completed) {
   if (Test-Path -LiteralPath $outFile) {
     $previous = @(Get-Content -LiteralPath $outFile | ForEach-Object { $_.Trim() } | Where-Object { $_ })
   }
+  # Record WHICH name satisfied the gate, so bait-confirm.js can re-check the same
+  # name at publish time. Without this the confirmer digs only the root from the
+  # baits file, and this operator's parked apexes (ickaside.com, goshupward.com ->
+  # 3.33.251.168) match no term -- so hosts the walk CONFIRMED were then reported
+  # MISMATCH and silently dropped from the output. Sidecar rather than a second
+  # column: every existing reader treats a baits line as a bare domain.
+  $hostsFile = Join-Path $OutDir "$Name-baits-hosts.txt"
+  $hostMap = @{}
+  if (Test-Path -LiteralPath $hostsFile) {
+    foreach ($line in (Get-Content -LiteralPath $hostsFile)) {
+      $kv = $line -split "`t", 2
+      if ($kv.Count -eq 2 -and $kv[0] -and $kv[1]) { $hostMap[$kv[0].Trim()] = $kv[1].Trim() }
+    }
+  }
+  foreach ($k in $verdicts.Keys) {
+    $via = $verdicts[$k].via
+    if ($via) { $hostMap[$k] = $via }
+  }
+  if ($hostMap.Count) {
+    ($hostMap.Keys | Sort-Object | ForEach-Object { "$_`t$($hostMap[$_])" }) |
+      Set-Content -LiteralPath $hostsFile -Encoding ASCII
+  }
+
   $merged = @(($roots + $previous) | Sort-Object -Unique)
   $added = @($roots | Where-Object { $previous -notcontains $_ })
   $merged | Set-Content -LiteralPath $outFile -Encoding ASCII

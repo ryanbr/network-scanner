@@ -58,6 +58,22 @@ const asList = v => (v === undefined || v === null) ? [] : (Array.isArray(v) ? v
 
 const configPath = argOf('--config');
 const baitsPath = argOf('--baits', '/mnt/c/nwss-har/capture-baits.txt');
+// Optional sidecar written by win-bait-walk.ps1: "<root>\t<name that satisfied
+// the gate>". It exists because a bait list holds ROOTS, and this operator runs a
+// family whose apex is parked -- ickaside.com and goshupward.com both resolve to
+// 3.33.251.168 (AWS Global Accelerator, shared by countless parked domains) while
+// only the serving subdomain CNAMEs to sdi.html-load.com. Digging the root alone
+// reported both MISMATCH and dropped them from the output, after the walk had
+// already CONFIRMED them. Checking the root is still tried first; the sidecar name
+// is a second chance, never a replacement.
+const hostsPath = argOf('--hosts', null);
+const confirmHost = new Map();
+if (hostsPath && fs.existsSync(hostsPath)) {
+  for (const line of fs.readFileSync(hostsPath, 'utf8').split('\n')) {
+    const [root, host] = line.replace(/\r/g, '').split('\t');
+    if (root && host && root.trim() && host.trim()) confirmHost.set(root.trim(), host.trim());
+  }
+}
 const strict = args.includes('--strict');
 const useCache = !args.includes('--no-cache');
 const asJson = args.includes('--json');
@@ -131,11 +147,26 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
         tool('dig', ['+short', d, 'A'], `dig:A:${d}`, DIG_TTL_MS),
         tool('dig', ['+short', d, 'NS'], `dig:NS:${d}`, DIG_TTL_MS)
       ]);
-      const out = `${a.out}\n${ns.out}`;
+      let out = `${a.out}\n${ns.out}`;
+      let digOk = a.ok || ns.ok;
+      // Only reach for the sidecar when the root did not satisfy the terms --
+      // two extra lookups per domain, and only for the hosts that need them.
+      const alt = confirmHost.get(d);
+      const rootSatisfies = digOk &&
+        (digAll.length ? matchAll(out, digAll) : true) && (digAny.length ? matchAny(out, digAny) : true);
+      if (alt && alt !== d && !rootSatisfies) {
+        const [a2, ns2] = await Promise.all([
+          tool('dig', ['+short', alt, 'A'], `dig:A:${alt}`, DIG_TTL_MS),
+          tool('dig', ['+short', alt, 'NS'], `dig:NS:${alt}`, DIG_TTL_MS)
+        ]);
+        out += `\n${a2.out}\n${ns2.out}`;
+        digOk = digOk || a2.ok || ns2.ok;
+        if (!rootSatisfies) row.notes.push(`checked via ${alt}`);
+      }
       // ERROR is not the same as NO MATCH. Conflating them meant a missing dig
       // binary or a dns blip reported every genuine bait as unconfirmed, and
       // --strict then rejected the lot -- measured with dig off PATH: 0/6.
-      if (!a.ok && !ns.ok) { row.notes.push(`dig failed: ${a.why || ns.why}`); row.dig = 'error'; }
+      if (!digOk) { row.notes.push(`dig failed: ${a.why || ns.why}`); row.dig = 'error'; }
       else {
         row.dig = (digAll.length ? matchAll(out, digAll) : true) &&
                   (digAny.length ? matchAny(out, digAny) : true);
