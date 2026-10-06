@@ -46,7 +46,7 @@ const { createNetToolsHandler, createEnhancedDryRunCallback, validateWhoisAvaila
 const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeout } = require('./lib/cdp');
 // Post-processing cleanup
 const { processResults } = require('./lib/post-processing');
-const { parseCapture, selectSitesForCapture, matchEntries: matchCaptureEntries } = require('./lib/capture');
+const { parseCapture, selectSitesForCapture, matchEntries: matchCaptureEntries, pageUrlForSite } = require('./lib/capture');
 // Colorize various text when used
 const { messageColors, formatLogMessage } = require('./lib/colorize');
 const TIMEOUT_TAG = messageColors.processing('[TIMEOUT]');
@@ -2275,13 +2275,19 @@ function setupFrameHandling(page, forceDebug) {
     const results0 = [];
     for (const siteConfig of chosenSites) {
       const siteUrls = Array.isArray(siteConfig.url) ? siteConfig.url : [siteConfig.url];
-      const siteUrl = capture.pageUrl || siteUrls.filter(Boolean)[0] || '';
+      // The page THIS site was loaded as, which is not always capture.pageUrl:
+      // a Chrome HAR recorded with "Preserve log" holds one page per navigation
+      // and pageUrl is pages[0]. Using that for first/third-party made the
+      // scanned site read as third-party, and with firstParty:false it was
+      // emitted as a rule for itself. Fall back to the site's configured url
+      // before capture.pageUrl, so a mismatched page can never decide party.
+      const siteUrl = pageUrlForSite(capture, siteUrls) || siteUrls.filter(Boolean)[0] || capture.pageUrl || '';
       // even_blocked means "a request we blocked still counts as evidence". A
       // capture's blocked flag means the USER'S blocker cancelled it, which is
       // the same question asked of a different blocker, so the site's own
       // setting decides here too.
       const { matchedDomains, stats } = matchCaptureEntries(capture.entries, siteConfig, {
-        pageUrl: capture.pageUrl || siteUrl,
+        pageUrl: siteUrl,
         ignoreDomains,
         includeBlocked: siteConfig.even_blocked === true
       });

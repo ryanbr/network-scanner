@@ -20,7 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { sniffFormat, parseCapture, selectSitesForCapture } = require('../lib/capture');
+const { sniffFormat, parseCapture, selectSitesForCapture, pageUrlForSite } = require('../lib/capture');
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {
@@ -221,10 +221,10 @@ check('an empty directory says so', /no capture found/.test(dirThrew), true);
 // requests while nwss honoured the site's even_blocked, so the same inputs gave
 // different answers depending on which tool you reached for.
 const HAR_RULES = path.join(__dirname, 'har-rules.js');
-const runHarRules = (cfg, sel) => {
+const runHarRules = (cfg, sel, har = harPath) => {
   let out;
   try {
-    out = execFileSync(process.execPath, [HAR_RULES, harPath, '--config', cfg, '--site', String(sel)],
+    out = execFileSync(process.execPath, [HAR_RULES, har, '--config', cfg, '--site', String(sel)],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (e) { out = (e.stdout || '') + (e.stderr || ''); }
   const i = out.indexOf('rules:');
@@ -246,6 +246,64 @@ for (const evenBlocked of [false, true]) {
     viaNwss.includes('||blockedbyubo.invalid^'), evenBlocked);
   check(`even_blocked:${evenBlocked} -- har-rules.js and nwss --har agree`,
     viaHarRules, viaNwss);
+}
+
+// ---- Chrome "Preserve log": one page per navigation -----------------------
+// A HAR recorded with Preserve log carries several pages, and pageUrl is
+// pages[0]. Using that for first/third-party made the SCANNED site read as
+// third-party, so with firstParty:false it was published as a rule for itself.
+// The page used for party must be the one belonging to THIS site.
+{
+  const pagesHar = F('preservelog.har');
+  const mk = pages => ({
+    log: {
+      version: '1.2',
+      creator: { name: 'WebInspector', version: '537.36' },
+      pages,
+      entries: [
+        harEntry('https://target.invalid/article', 'document', 'text/html'),
+        harEntry('https://third.invalid/a.js', 'script', 'application/javascript')
+      ]
+    }
+  });
+  // pages[0] is an EARLIER, unrelated navigation -- the trap.
+  fs.writeFileSync(pagesHar, JSON.stringify(mk([
+    { id: 'page_1', title: 'https://unrelated.invalid/', pageTimings: {} },
+    { id: 'page_2', title: 'https://target.invalid/article', pageTimings: {} }
+  ])));
+  const singleHar = F('singlepage.har');
+  fs.writeFileSync(singleHar, JSON.stringify(mk([
+    { id: 'page_1', title: 'https://target.invalid/article', pageTimings: {} }
+  ])));
+
+  check('parseCapture exposes every page, not just the first',
+    parseCapture(pagesHar).pageUrls,
+    ['https://unrelated.invalid/', 'https://target.invalid/article']);
+  check('pageUrlForSite picks the page belonging to the site',
+    pageUrlForSite(parseCapture(pagesHar), ['https://target.invalid/article']),
+    'https://target.invalid/article');
+  check('pageUrlForSite reports nothing when no page matches',
+    pageUrlForSite(parseCapture(pagesHar), ['https://elsewhere.invalid/']), '');
+
+  const cfg3p = F('cfg3p.json');
+  fs.writeFileSync(cfg3p, JSON.stringify({ sites: [{
+    url: 'https://target.invalid/article', filterRegex: '.',
+    firstParty: false, thirdParty: true
+  }] }));
+  const rulesOf = har => run(['--custom-json', cfg3p, '--har', har, '--site', 'target.invalid'])
+    .split('\n').map(l => l.trim()).filter(l => l.startsWith('||')).sort();
+
+  // The regression: the scanned site must never be emitted as its own rule.
+  check('preserve-log HAR does not publish the scanned site as a rule',
+    rulesOf(pagesHar).includes('||target.invalid^'), false);
+  check('preserve-log HAR matches the single-page HAR exactly',
+    rulesOf(pagesHar), rulesOf(singleHar));
+
+  // har-rules.js must agree with nwss --har on a MULTI-PAGE har too. The
+  // existing agreement check uses a single-page fixture, so it could not see
+  // har-rules.js still deciding party from pages[0].
+  check('har-rules.js and nwss --har agree on a preserve-log HAR',
+    runHarRules(cfg3p, 'target.invalid', pagesHar), rulesOf(pagesHar));
 }
 
 fs.rmSync(dir, { recursive: true, force: true });

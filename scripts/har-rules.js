@@ -29,6 +29,7 @@
 const fs = require('fs');
 const path = require('path');
 const { matchEntries } = require('../lib/har');
+const { pageUrlForSite, urlsOf } = require('../lib/capture');
 const { parseCapture } = require('../lib/capture');
 const { formatRules } = require('../lib/output');
 
@@ -98,8 +99,13 @@ if (configPath) {
 // capture -- this script excluded blocked requests while nwss included them --
 // which is the sort of disagreement that quietly discredits both.
 const includeBlocked = args.includes('--include-blocked') || siteConfig.even_blocked === true;
+// Party must be decided against the page belonging to THIS site, not pages[0]:
+// a Chrome HAR saved with "Preserve log" holds one page per navigation. Same
+// resolution nwss.js --har uses, so the two tools cannot disagree on it.
+const siteUrlsForParty = siteConfig && siteConfig.url ? urlsOf(siteConfig) : [];
+const partyPageUrl = pageUrlForSite(har, siteUrlsForParty) || siteUrlsForParty[0] || har.pageUrl;
 const { matchedDomains, stats } = matchEntries(har.entries, siteConfig, {
-  pageUrl: har.pageUrl,
+  pageUrl: partyPageUrl,
   ignoreDomains,
   includeBlocked
 });
