@@ -245,9 +245,45 @@ try {
     $roundLog = Join-Path $OutDir "$roundName.log.moz_log"
     $before = if (Test-Path $roundLog) { (Get-Item $roundLog).LastWriteTimeUtc } else { [datetime]::MinValue }
 
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CaptureScript `
-        -Urls $Urls -OutDir $OutDir -Name $roundName -SecondsPerUrl $SecondsPerUrl | Out-Null
-    if ($LASTEXITCODE -ne 0) { Write-Host "    capture failed; stopping"; $stopReason = "a capture failed"; break }
+    # Keep the capture's output instead of discarding it. It used to go to
+    # Out-Null to keep the walk readable, and when captures started coming back
+    # truncated the only thing the walk could say was "capture failed; stopping"
+    # -- the capture script's own "ok: NMB across N file(s)" line, and whatever
+    # error replaced it, went straight to the bit bucket. Child-process output
+    # lands on stdout even though the capture script uses Write-Host, so this
+    # collects every line.
+    # 2>&1 on a native command turns its stderr into ErrorRecords, and this
+    # script runs with $ErrorActionPreference='Stop' -- so a capture that writes
+    # one line to stderr would TERMINATE the walk before the handling below ever
+    # ran, which is worse than the Out-Null it replaced. Measured: a failing
+    # capture printed a NativeCommandError and the walk stopped with no verdict.
+    $prevEAP = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      $capOut = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $CaptureScript `
+          -Urls $Urls -OutDir $OutDir -Name $roundName -SecondsPerUrl $SecondsPerUrl 2>&1
+      $capCode = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $prevEAP }
+    if ($capCode -ne 0) {
+      Write-Host "    capture failed (exit $capCode); stopping"
+      if ($capOut) {
+        Write-Host "    --- capture output ---"
+        @($capOut) | ForEach-Object { Write-Host ("      " + $_) }
+      } else {
+        Write-Host "    (the capture produced no output at all)"
+      }
+      $stopReason = "a capture failed (exit $capCode)"
+      break
+    }
+    # On success keep it to one line: the capture's own summary, which says how
+    # much was written and whether the target was actually contacted. A silent
+    # success is what let a 4KB capture pass for a 4MB one.
+    $capSummary = @($capOut) | Where-Object { $_ -match '^\s*(ok|SKIP|ERROR|WARN):' } | Select-Object -Last 1
+    if ($capSummary) { Write-Host ("    " + ([string]$capSummary).Trim()) }
+    else {
+      Write-Host "    capture reported no summary line -- its output follows"
+      @($capOut) | ForEach-Object { Write-Host ("      " + $_) }
+    }
 
     $after = if (Test-Path $roundLog) { (Get-Item $roundLog).LastWriteTimeUtc } else { [datetime]::MinValue }
     if ($after -le $before) {
