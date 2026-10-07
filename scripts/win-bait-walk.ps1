@@ -415,6 +415,29 @@ if ($completed) {
 } else {
   $partFile = Join-Path $OutDir "$Name-baits.partial.txt"
   $roots | Set-Content -LiteralPath $partFile -Encoding ASCII
+  # The sidecar matters MORE on this path than on the complete one. The publisher
+  # now confirms partial hosts too, and without "which name satisfied the gate"
+  # bait-confirm.js digs only the root -- so this operator's parked apexes
+  # (sansyettusk.com -> 3.33.251.168) match no bait_dig term and report MISMATCH,
+  # dropping the rotation this walk DID find one step further along. Measured on
+  # recorder.ca: round 1 found sansyettusk.com, round 2 returned no loader urls,
+  # and the host reached nothing but this file.
+  #
+  # Written fresh and DELETED when empty, never unioned: a partial describes one
+  # run, and a leftover sidecar paired with a newer partial would attribute the
+  # wrong name to a host. The publisher keys off the partial's own mtime, so a
+  # stale pair must not look current.
+  $partHostsFile = Join-Path $OutDir "$Name-baits.partial-hosts.txt"
+  $partMap = @{}
+  foreach ($k in $verdicts.Keys) {
+    if (($roots -contains $k) -and $verdicts[$k].via) { $partMap[$k] = $verdicts[$k].via }
+  }
+  if ($partMap.Count) {
+    ($partMap.Keys | Sort-Object | ForEach-Object { "$_`t$($partMap[$_])" }) |
+      Set-Content -LiteralPath $partHostsFile -Encoding ASCII
+  } elseif (Test-Path -LiteralPath $partHostsFile) {
+    Remove-Item -LiteralPath $partHostsFile -Force
+  }
   Write-Host "`n  walk INCOMPLETE -- stopped because $stopReason"
   Write-Host "  the authoritative list was NOT touched: $outFile"
   Write-Host "  this run's partial findings: $partFile"
