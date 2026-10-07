@@ -219,13 +219,20 @@ if ($Install) {
   # Do NOT bake the urls into the task unless they were given explicitly: the
   # whole point of targets.txt is that the site can be changed in one place
   # without touching the schedule. A baked-in -Urls "" would also override it.
-  $argline = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$self`"" +
+  # Launch through wscript, not powershell.exe. -WindowStyle Hidden still lets
+  # powershell CREATE its console before hiding it, and that flash takes
+  # foreground -- an exclusive-fullscreen game loses its mode and the player is
+  # dropped to the desktop, every IntervalHours. wscript has no console of its
+  # own and starts powershell hidden from the outset.
+  $launcher = Join-Path (Split-Path $self -Parent) "win-capture-hidden.vbs"
+  if (-not (Test-Path $launcher)) { throw "launcher not found: $launcher" }
+  $argline = "//B //Nologo `"$launcher`"" +
              " -OutDir `"$OutDir`" -Name `"$Name`"" +
              " -SecondsPerUrl $SecondsPerUrl -LogLevel $LogLevel"
   $explicitUrls = @($Urls | Where-Object { $_ -and $_.Trim() })
   if ($explicitUrls.Count -gt 0) { $argline += " -Urls `"$($explicitUrls -join ',')`"" }
   if ($TargetsFile) { $argline += " -TargetsFile `"$TargetsFile`"" }
-  $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $argline
+  $action  = New-ScheduledTaskAction -Execute "wscript.exe" -Argument $argline
   # Repeat for ~10 years rather than a fixed end date, so it does not silently
   # stop one day; -Once + RepetitionInterval is the only combination that gives
   # an arbitrary N-hour period (Daily only takes days).
