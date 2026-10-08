@@ -454,6 +454,37 @@ for (const evenBlocked of [false, true]) {
     /subDomains\s*===\s*1/.test(nwssSrc), false);
 }
 
+// ---- a /.../-wrapped pattern compiles the same in both paths ---------------
+// Found on re-review. nwss.js's getCompiledRegex() strips the wrapper; lib/har.js
+// called new RegExp() directly, so "/x/" became the regex x live and \/x\/ from
+// a capture -- which requires a literal leading slash and a slash after the
+// anchor, matching nothing. The site would just stop producing rules, silently.
+{
+  const wrapHar = F('wrap.har');
+  fs.writeFileSync(wrapHar, JSON.stringify({ log: {
+    version: '1.2',
+    creator: { name: 'WebInspector', version: '537.36' },
+    pages: [{ id: 'page_1', title: 'https://target.invalid/', pageTimings: {} }],
+    entries: [
+      harEntry('https://target.invalid/', 'document', 'text/html'),
+      harEntry('https://ads.invalid/abcdefgh1234.js', 'script', 'application/javascript')
+    ]
+  } }));
+  const wrapRules = fr => {
+    const f = F(`wrap-${Buffer.from(fr).toString('hex').slice(0, 10)}.json`);
+    fs.writeFileSync(f, JSON.stringify({ sites: [{
+      url: 'https://target.invalid/', filterRegex: fr, firstParty: false, thirdParty: true
+    }] }));
+    return run(['--custom-json', f, '--har', wrapHar, '--site', 'target.invalid'])
+      .split('\n').map(l => l.trim()).filter(l => l.startsWith('||')).sort();
+  };
+  const bare = '\\/[A-Za-z0-9]{8,12}\\.js$';
+  check('capture: a bare filterRegex matches', wrapRules(bare), ['||ads.invalid^']);
+  check('capture: the same pattern /.../-wrapped matches identically',
+    wrapRules(`/${bare}/`), ['||ads.invalid^']);
+  check('capture: wrapped and bare agree', wrapRules(`/${bare}/`), wrapRules(bare));
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
