@@ -170,6 +170,15 @@ $script:MultiPartSuffixes = @(
   'com.tw','co.kr','co.za','com.mx','com.ar','co.in','com.sg','com.hk','com.tr'
 )
 function Get-Root([string]$h) {
+  # Normalise FIRST. The host arrives straight out of the capture --
+  # Get-BaitHosts returns $_.Groups[1].Value with no folding, and only
+  # Test-DigMatch lowercases -- so "Deer.ICKASIDE.CO.IL" and a root-anchored
+  # "host.com." both reach here verbatim. Unnormalised, the root, the sidecar
+  # key and the PAC entry all carry the capture's casing, and the publish-time
+  # public-suffix guard in lib/baitguard.js saw "CO.IL" as a registrable domain
+  # and waved it through. That guard normalises too -- this is the producer
+  # half, so the walk's own report and PAC agree with what gets published.
+  $h = $h.Trim().ToLower().TrimEnd('.')
   $p = $h.Split('.')
   if ($p.Count -le 2) { return $h }
   $lastTwo = ($p[-2..-1] -join '.')

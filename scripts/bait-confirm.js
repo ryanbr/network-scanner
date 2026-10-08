@@ -150,8 +150,9 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
       results.push({ domain: d0, dig: null, whois: null, confirmed: false, verdict: 'rejected', notes: [g.reject] });
       continue;
     }
-    // Repaired: re-key the sidecar so the dig below still finds the name the
-    // gate matched, which is the only reason the repair is trustworthy.
+    // Re-key the sidecar whenever the name changed -- by repair OR by
+    // normalisation -- so the dig below still finds the name the gate matched,
+    // which is the only reason a repair is trustworthy at all.
     if (g.via) confirmHost.set(g.domain, g.via);
     const d = g.domain;
     const row = { domain: d, dig: null, whois: null, confirmed: null, notes: g.note ? [g.note] : [] };
@@ -251,8 +252,12 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
   }
   const mismatched = results.filter(r => r.verdict === 'mismatch').length;
   const unknown = results.filter(r => r.verdict === 'unknown').length;
+  // A refusal is a definite "this must not be published", so it belongs with
+  // mismatch rather than with "could not check". Left out of this sum at first,
+  // which made --strict exit 0 on a run that had refused a bait outright.
+  const refused = results.filter(r => r.verdict === 'rejected').length;
   if (!strict) process.exit(0);
-  process.exit(mismatched ? 1 : (unknown ? 2 : 0));
+  process.exit((mismatched || refused) ? 1 : (unknown ? 2 : 0));
 })().catch(err => {
   console.error(formatLogMessage('error', `${TAG} ${err.message}`));
   process.exit(1);
