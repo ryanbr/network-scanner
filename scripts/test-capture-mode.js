@@ -397,6 +397,63 @@ for (const evenBlocked of [false, true]) {
     ['a.invalid', 'a.invalid']);
 }
 
+// ---- subDomains accepted as 1 AND true ------------------------------------
+// nwss.js keyed this off `subDomains === 1` while matchEntries() accepted 1 or
+// true, so "subDomains": true preserved subdomains in a rule built from a
+// capture and was silently ignored in a live scan of the same config. The
+// README documents the field as `0 or 1`, which is what makes `true` plausible
+// to write. Both now call useSubDomainsFor().
+{
+  const { useSubDomainsFor } = require('../lib/har');
+  check('useSubDomainsFor accepts 1', useSubDomainsFor({ subDomains: 1 }), true);
+  check('useSubDomainsFor accepts true', useSubDomainsFor({ subDomains: true }), true);
+  check('useSubDomainsFor rejects 0', useSubDomainsFor({ subDomains: 0 }), false);
+  check('useSubDomainsFor rejects false', useSubDomainsFor({ subDomains: false }), false);
+  check('useSubDomainsFor defaults to off', useSubDomainsFor({}), false);
+
+  // End to end from a capture, so the two spellings must agree in the OUTPUT
+  // and not merely in the predicate.
+  const sdHar = F('sd.har');
+  fs.writeFileSync(sdHar, JSON.stringify({ log: {
+    version: '1.2',
+    creator: { name: 'WebInspector', version: '537.36' },
+    pages: [{ id: 'page_1', title: 'https://target.invalid/', pageTimings: {} }],
+    entries: [
+      harEntry('https://target.invalid/', 'document', 'text/html'),
+      harEntry('https://deep.sub.ads.invalid/abcdefgh1234.js', 'script', 'application/javascript')
+    ]
+  } }));
+  const sdRules = v => {
+    const f = F(`sd-${String(v)}.json`);
+    const site = {
+      url: 'https://target.invalid/', filterRegex: '\\/[A-Za-z0-9]{8,12}\\.js$',
+      firstParty: false, thirdParty: true
+    };
+    if (v !== undefined) site.subDomains = v;
+    fs.writeFileSync(f, JSON.stringify({ sites: [site] }));
+    return run(['--custom-json', f, '--har', sdHar, '--site', 'target.invalid'])
+      .split('\n').map(l => l.trim()).filter(l => l.startsWith('||')).sort();
+  };
+  check('capture: subDomains omitted keys on the registrable domain',
+    sdRules(undefined), ['||ads.invalid^']);
+  check('capture: subDomains 1 preserves the full host',
+    sdRules(1), ['||deep.sub.ads.invalid^']);
+  check('capture: subDomains true preserves the full host too',
+    sdRules(true), ['||deep.sub.ads.invalid^']);
+  check('capture: both spellings agree', sdRules(1), sdRules(true));
+
+  // The live-scan half cannot be exercised offline -- it needs a browser -- so
+  // this pins the SOURCE instead: nwss.js must route through the shared
+  // predicate and must not reintroduce a bare `subDomains === 1` comparison.
+  // A drift canary, not a behaviour test, and the only offline check that can
+  // see a re-divergence of the live path.
+  const nwssSrc = fs.readFileSync(path.join(__dirname, '..', 'nwss.js'), 'utf8');
+  check('nwss.js uses the shared subDomains predicate',
+    nwssSrc.includes('useSubDomainsFor({ subDomains })'), true);
+  check('nwss.js has no bare `subDomains === 1` comparison left',
+    /subDomains\s*===\s*1/.test(nwssSrc), false);
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

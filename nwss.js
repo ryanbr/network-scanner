@@ -47,6 +47,7 @@ const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeo
 // Post-processing cleanup
 const { processResults } = require('./lib/post-processing');
 const { parseCapture, selectSitesForCapture, matchEntries: matchCaptureEntries, pageUrlForSite } = require('./lib/capture');
+const { useSubDomainsFor } = require('./lib/har');
 // Colorize various text when used
 const { messageColors, formatLogMessage } = require('./lib/colorize');
 const TIMEOUT_TAG = messageColors.processing('[TIMEOUT]');
@@ -2759,7 +2760,10 @@ function setupFrameHandling(page, forceDebug) {
       bypass_cache
     } = siteConfig;
     
-    const perSiteSubDomains = subDomains === 1 ? true : subDomainsMode;
+    // Shared predicate: accepts true as well as 1. This tested `=== 1` only
+    // while lib/har.js accepted both, so "subDomains": true was honoured from a
+    // capture and ignored here, with nothing reporting the difference.
+    const perSiteSubDomains = useSubDomainsFor({ subDomains }) ? true : subDomainsMode;
     // Add redirect and same-page loop protection
     // Number check (not ||) so max_redirects: 0 isn't swallowed as falsy → 10.
     const MAX_REDIRECT_DEPTH = (typeof siteConfig.max_redirects === 'number' && siteConfig.max_redirects >= 0)
