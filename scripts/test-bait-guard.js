@@ -56,11 +56,11 @@ const r1 = guardBait('co.il', new Map([['co.il', '0.taro.sansyettusk.com']]));
 check('public suffix + sidecar NOT under it is refused', !!r1.reject, true);
 check('refusal keeps the original name for reporting', r1.domain, 'co.il');
 check('refusal names the sidecar it would not trust',
-  r1.reject.includes('0.taro.sansyettusk.com'), true);
+  (r1.reject || '').includes('0.taro.sansyettusk.com'), true);
 
 const r2 = guardBait('github.io', new Map());
 check('public suffix with no sidecar at all is refused', !!r2.reject, true);
-check('that refusal says there was no sidecar', r2.reject.includes('no sidecar'), true);
+check('that refusal says there was no sidecar', (r2.reject || '').includes('no sidecar'), true);
 
 // ---- repair --------------------------------------------------------------
 // Refusal loses a real bait, so a sidecar UNDER the suffix repairs instead:
@@ -69,7 +69,7 @@ const r3 = guardBait('com.pl', new Map([['com.pl', 'taro.bait.com.pl']]));
 check('public suffix + sidecar under it is repaired, not refused', r3.reject, undefined);
 check('repair uses psl\'s registrable domain', r3.domain, 'bait.com.pl');
 check('repair records the name it came from', r3.via, 'taro.bait.com.pl');
-check('repair explains itself in a note', r3.note.includes('public suffix'), true);
+check('repair explains itself in a note', (r3.note || '').includes('public suffix'), true);
 
 // A sidecar equal to the suffix cannot repair anything -- there is no extra
 // label to take -- so it must still be refused rather than echoed back.
@@ -192,6 +192,65 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
   check('no input produces no output rather than an error',
     execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js')],
       { input: '', encoding: 'utf8' }), '');
+}
+
+// ---- a bait must be a usable hostname, not only a non-suffix -------------
+// From a review of this module. Nothing downstream validates: the publish step
+// writes ||${domain}^ with no formatDomain(), so hostRejectionReason() never
+// ran on this path. All of these passed straight through before, and the first
+// reached verdict "confirmed" on a matching sidecar.
+{
+  const sc = new Map();
+  const cases = [
+    ['*.bait.com', 'invalid character'],
+    ['host.com:8443', 'invalid character'],
+    ['user@host.com', 'invalid character'],   // userinfo + host, not a domain
+    ['a$b.com', 'invalid character'],
+    ['bait .com', 'invalid character'],
+    ['.co.il', 'empty label'],
+    ['a..b.com', 'empty label'],
+    ['nodot', 'no dot']
+  ];
+  for (const [bad, why] of cases) {
+    const r = guardBait(bad, sc);
+    check(`"${bad}" is refused as unusable`, !!r.reject, true);
+    check(`"${bad}" refusal says why (${why})`, (r.reject || '').includes(why), true);
+  }
+
+  // The demonstrated bypass: a matching sidecar used to carry it to "confirmed".
+  check('a malformed bait is refused even WITH a matching sidecar',
+    !!guardBait('*.bait.com', new Map([['*.bait.com', '0.taro.sansyettusk.com']])).reject, true);
+
+  // Parity with output.js, which treats a bare IPv4 rule as legitimate.
+  check('a bare IPv4 bait is still allowed', guardBait('1.2.3.4', sc), { domain: '1.2.3.4' });
+  check('an ordinary bait is unaffected', guardBait('sansyettusk.com', sc), { domain: 'sansyettusk.com' });
+}
+
+// ---- a refusal must state its actual cause ------------------------------
+// This branch reported "its sidecar name is not under it" for every failure,
+// which is false when the sidecar IS under the suffix but is itself a suffix.
+// Reachable through psl's wildcard rules (*.kawasaki.jp, *.compute.amazonaws.com)
+// and whenever the sidecar equals the bait.
+{
+  check('no sidecar at all says so',
+    (guardBait('co.il', new Map()).reject || '').includes('no sidecar name'), true);
+  check('a sidecar elsewhere says it is not under the suffix',
+    (guardBait('co.il', new Map([['co.il', '0.taro.sansyettusk.com']])).reject || '')
+      .includes('is not under it'), true);
+  check('a sidecar under the suffix but itself a suffix says THAT instead',
+    (guardBait('kawasaki.jp', new Map([['kawasaki.jp', 'foo.kawasaki.jp']])).reject || '')
+      .includes('yields no registrable domain either'), true);
+  check('a sidecar equal to the bait says the same',
+    (guardBait('co.il', new Map([['co.il', 'co.il']])).reject || '')
+      .includes('yields no registrable domain either'), true);
+
+  // psl's wildcard AND exception rules, which the branch above depends on.
+  check('*.kawasaki.jp makes foo.kawasaki.jp a suffix', isPublicSuffix('foo.kawasaki.jp'), true);
+  check('!city.kawasaki.jp is the exception and IS registrable',
+    registrableOf('city.kawasaki.jp'), 'city.kawasaki.jp');
+  check('*.compute.amazonaws.com behaves the same way',
+    [isPublicSuffix('foo.compute.amazonaws.com'), registrableOf('bar.foo.compute.amazonaws.com')],
+    [true, 'bar.foo.compute.amazonaws.com']);
 }
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
