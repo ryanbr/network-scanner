@@ -39,24 +39,24 @@ for (const ps of ['co.il', 'com.pl', 'com.ua', 'github.io', 'co.uk', 'com.au']) 
 // Unknown TLDs are the trap: psl gives no registrable domain for a bare public
 // suffix AND for junk, so a naive "domain === null" test would refuse .invalid
 // and .test, which every fixture in this repo uses.
-for (const ok of ['bait.co.il', 'bait.com', 'sansyettusk.com', 'a.invalid', 'x.test', 'deep.sub.c.invalid']) {
+for (const ok of ['bait.co.il', 'bait.com', 'parked-apex.invalid', 'a.invalid', 'x.test', 'deep.sub.c.invalid']) {
   check(`"${ok}" is not a public suffix`, isPublicSuffix(ok), false);
 }
 
 // ---- passthrough ---------------------------------------------------------
 check('a normal root passes through untouched',
-  guardBait('sansyettusk.com', new Map()), { domain: 'sansyettusk.com' });
+  guardBait('parked-apex.invalid', new Map()), { domain: 'parked-apex.invalid' });
 check('an unknown-TLD name passes through untouched',
   guardBait('a.invalid', new Map()), { domain: 'a.invalid' });
 
 // ---- refusal -------------------------------------------------------------
 // The measured case: a public-suffix root whose sidecar sits somewhere else
 // entirely. Previously this returned "confirmed" on the sidecar's strength.
-const r1 = guardBait('co.il', new Map([['co.il', '0.taro.sansyettusk.com']]));
+const r1 = guardBait('co.il', new Map([['co.il', '0.sub.parked-apex.invalid']]));
 check('public suffix + sidecar NOT under it is refused', !!r1.reject, true);
 check('refusal keeps the original name for reporting', r1.domain, 'co.il');
 check('refusal names the sidecar it would not trust',
-  (r1.reject || '').includes('0.taro.sansyettusk.com'), true);
+  (r1.reject || '').includes('0.sub.parked-apex.invalid'), true);
 
 const r2 = guardBait('github.io', new Map());
 check('public suffix with no sidecar at all is refused', !!r2.reject, true);
@@ -65,10 +65,10 @@ check('that refusal says there was no sidecar', (r2.reject || '').includes('no s
 // ---- repair --------------------------------------------------------------
 // Refusal loses a real bait, so a sidecar UNDER the suffix repairs instead:
 // psl names the registrable domain and the find survives.
-const r3 = guardBait('com.pl', new Map([['com.pl', 'taro.bait.com.pl']]));
+const r3 = guardBait('com.pl', new Map([['com.pl', 'sub.bait.com.pl']]));
 check('public suffix + sidecar under it is repaired, not refused', r3.reject, undefined);
 check('repair uses psl\'s registrable domain', r3.domain, 'bait.com.pl');
-check('repair records the name it came from', r3.via, 'taro.bait.com.pl');
+check('repair records the name it came from', r3.via, 'sub.bait.com.pl');
 check('repair explains itself in a note', (r3.note || '').includes('public suffix'), true);
 
 // A sidecar equal to the suffix cannot repair anything -- there is no extra
@@ -78,13 +78,13 @@ check('sidecar equal to the suffix is still refused',
 
 // ---- the helper underneath ----------------------------------------------
 check('registrableOf walks a deep host down to the registrable domain',
-  registrableOf('0.taro.sansyettusk.com'), 'sansyettusk.com');
+  registrableOf('0.sub.parked-apex.invalid'), 'parked-apex.invalid');
 check('registrableOf returns null for a bare public suffix',
   registrableOf('co.il'), null);
 
 // ---- a plain object works as well as a Map ------------------------------
 check('sidecar may be a plain object',
-  guardBait('com.pl', { 'com.pl': 'taro.bait.com.pl' }).domain, 'bait.com.pl');
+  guardBait('com.pl', { 'com.pl': 'sub.bait.com.pl' }).domain, 'bait.com.pl');
 
 // ---- the case / trailing-dot bypass -------------------------------------
 // Found on re-review. psl normalises internally and reports tld "co.il" for
@@ -105,22 +105,22 @@ check('a trailing-dot public suffix is refused, not published',
 // Normalisation must reach the PUBLISHED name too, since the append writes
 // ||${domain}^ verbatim with no formatDomain() on that path.
 check('a mixed-case ordinary bait is published lowercased',
-  guardBait('SansYettusk.COM', new Map()).domain, 'sansyettusk.com');
+  guardBait('Parked-Apex.INVALID', new Map()).domain, 'parked-apex.invalid');
 check('a root-anchored ordinary bait loses its trailing dot',
-  guardBait('sansyettusk.com.', new Map()).domain, 'sansyettusk.com');
+  guardBait('parked-apex.invalid.', new Map()).domain, 'parked-apex.invalid');
 check('normaliseName folds case, trailing dots and whitespace',
-  normaliseName('  Deer.ICKASIDE.CO.IL..  '), 'deer.ickaside.co.il');
+  normaliseName('  Sub.PARKED-APEX.CO.IL..  '), 'sub.parked-apex.co.il');
 
 // A sidecar keyed by the raw name must survive normalisation of the bait, or
 // the confirmer digs the root alone -- the parked-apex failure, reintroduced.
-const vp = guardBait('SansYettusk.COM', new Map([['SansYettusk.COM', '0.TARO.SansYettusk.com']]));
-check('sidecar is carried through a normalising passthrough', vp.via, '0.taro.sansyettusk.com');
+const vp = guardBait('Parked-Apex.INVALID', new Map([['Parked-Apex.INVALID', '0.SUB.Parked-Apex.invalid']]));
+check('sidecar is carried through a normalising passthrough', vp.via, '0.sub.parked-apex.invalid');
 check('and the passthrough is not a refusal', vp.reject, undefined);
 
 // Repair across case: the suffix, the sidecar and the result all normalise.
-const rc = guardBait('CO.IL', new Map([['CO.IL', '0.TARO.Bait.co.il']]));
+const rc = guardBait('CO.IL', new Map([['CO.IL', '0.SUB.Bait.co.il']]));
 check('repair works on a mixed-case suffix', rc.domain, 'bait.co.il');
-check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
+check('repair normalises the name it reports', rc.via, '0.sub.bait.co.il');
 
 // ---- --strict must not report success after refusing a bait --------------
 // A refusal is a definite "do not publish", so it belongs with mismatch, not
@@ -159,19 +159,19 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
   };
 
   check('reduces the suffixes the hand list misses',
-    run('deer.bait.co.il\nx.bait.com.pl\nsub.x.vercel.app\na.b.c.github.io\n'),
-    [['deer.bait.co.il', 'bait.co.il'], ['x.bait.com.pl', 'bait.com.pl'],
+    run('sub.bait.co.il\nx.bait.com.pl\nsub.x.vercel.app\na.b.c.github.io\n'),
+    [['sub.bait.co.il', 'bait.co.il'], ['x.bait.com.pl', 'bait.com.pl'],
       ['sub.x.vercel.app', 'x.vercel.app'], ['a.b.c.github.io', 'c.github.io']]);
 
   check('agrees with the hand list where the hand list is right',
-    run('x.bait.co.uk\n0.taro.sansyettusk.com\n'),
-    [['x.bait.co.uk', 'bait.co.uk'], ['0.taro.sansyettusk.com', 'sansyettusk.com']]);
+    run('x.bait.co.uk\n0.sub.parked-apex.invalid\n'),
+    [['x.bait.co.uk', 'bait.co.uk'], ['0.sub.parked-apex.invalid', 'parked-apex.invalid']]);
 
   // The walk keys its cache on the normalised name, so the helper must return
   // the name it normalised rather than echo the input.
   check('normalises case and a trailing dot in the key it returns',
-    run('Deer.ICKASIDE.CO.IL\nhost.com.\n'),
-    [['deer.ickaside.co.il', 'ickaside.co.il'], ['host.com', 'host.com']]);
+    run('Sub.PARKED-APEX.CO.IL\nhost.com.\n'),
+    [['sub.parked-apex.co.il', 'parked-apex.co.il'], ['host.com', 'host.com']]);
 
   // An empty root is the signal "no registrable domain". The walk caches the
   // HOST for these rather than the suffix: blocking one host is narrow, while
@@ -186,8 +186,8 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
     run('\n#note\nbait.com\nBAIT.com\n  \n'), [['bait.com', 'bait.com']]);
 
   check('arguments work as well as stdin',
-    execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js'), 'deer.bait.co.il'],
-      { encoding: 'utf8' }).trim(), 'deer.bait.co.il\tbait.co.il');
+    execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js'), 'sub.bait.co.il'],
+      { encoding: 'utf8' }).trim(), 'sub.bait.co.il\tbait.co.il');
 
   check('no input produces no output rather than an error',
     execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js')],
@@ -219,11 +219,11 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
 
   // The demonstrated bypass: a matching sidecar used to carry it to "confirmed".
   check('a malformed bait is refused even WITH a matching sidecar',
-    !!guardBait('*.bait.com', new Map([['*.bait.com', '0.taro.sansyettusk.com']])).reject, true);
+    !!guardBait('*.bait.com', new Map([['*.bait.com', '0.sub.parked-apex.invalid']])).reject, true);
 
   // Parity with output.js, which treats a bare IPv4 rule as legitimate.
   check('a bare IPv4 bait is still allowed', guardBait('1.2.3.4', sc), { domain: '1.2.3.4' });
-  check('an ordinary bait is unaffected', guardBait('sansyettusk.com', sc), { domain: 'sansyettusk.com' });
+  check('an ordinary bait is unaffected', guardBait('parked-apex.invalid', sc), { domain: 'parked-apex.invalid' });
 }
 
 // ---- a refusal must state its actual cause ------------------------------
@@ -235,7 +235,7 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
   check('no sidecar at all says so',
     (guardBait('co.il', new Map()).reject || '').includes('no sidecar name'), true);
   check('a sidecar elsewhere says it is not under the suffix',
-    (guardBait('co.il', new Map([['co.il', '0.taro.sansyettusk.com']])).reject || '')
+    (guardBait('co.il', new Map([['co.il', '0.sub.parked-apex.invalid']])).reject || '')
       .includes('is not under it'), true);
   check('a sidecar under the suffix but itself a suffix says THAT instead',
     (guardBait('kawasaki.jp', new Map([['kawasaki.jp', 'foo.kawasaki.jp']])).reject || '')
@@ -256,15 +256,15 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
 // ---- 'unconfirmable' must stay distinct from 'mismatch' ------------------
 // A dig that fails with NO sidecar name to fall back on is not evidence the
 // bait moved -- it may be a parked apex whose serving name was never recorded.
-// recorder.ca's goshupward.com read as a plain MISMATCH for a day while live:
-// hunt.goshupward.com still CNAMEd to sdi.html-load.com, but no sidecar row
-// existed, so it was dug root-only against 3.33.251.168 and dropped silently.
+// One site's parked apex read as a plain MISMATCH for a day while live: its
+// serving subdomain still CNAMEd to the shared endpoint, but no sidecar row
+// existed, so it was dug root-only against the parked apex and dropped silently.
 //
 // This is a SOURCE canary, not a behaviour test, and is labelled as such: the
 // verdict needs a real dig to arise, and this suite takes no network. The
-// behaviour was verified by hand both ways -- with the row goshupward.com
+// behaviour was verified by hand both ways -- with the row parked-apex-two.example
 // confirms and publishes, without it the run prints
-// "NO SIDECAR, cannot be checked: goshupward.com" and publishes 3 of 4.
+// "NO SIDECAR, cannot be checked: parked-apex-two.example" and publishes 3 of 4.
 {
   const bc = fs.readFileSync(path.join(__dirname, 'bait-confirm.js'), 'utf8');
   check('bait-confirm tracks whether a sidecar name was available',

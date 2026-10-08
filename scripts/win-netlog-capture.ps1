@@ -15,8 +15,8 @@
   extensions and their custom rules are live, waits, and closes it again.
 
   WHAT A NET-LOG DOES NOT CONTAIN: requests an extension blocked. Measured --
-  a declarativeNetRequest extension blocked html-load.cc, puppeteer reported
-  ERR_BLOCKED_BY_CLIENT, and "html-load" appeared zero times in the
+  a declarativeNetRequest extension blocked cdn-apex.example, puppeteer reported
+  ERR_BLOCKED_BY_CLIENT, and "cdn-apex" appeared zero times in the
   530-request net-log from that same run. So this shows what Chrome REALLY
   FETCHED, which is what finds a late host in a fallback chain. To see what
   uBO stopped, save a HAR instead (there they arrive as status 0).

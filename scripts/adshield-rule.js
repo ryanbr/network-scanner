@@ -7,7 +7,7 @@
  *   node scripts/adshield-rule.js --har <file.har>     (confirm against a capture)
  *
  * Why this exists: the loader's HOST rotates through a fallback list
- * (html-load.cc -> exceptlone.com -> quitcertify.com -> ...), so a host-anchored
+ * (cdn-apex.example -> apex-two.example -> apex-three.example -> ...), so a host-anchored
  * rule dies at the next rotation and has to be rediscovered. The PATH does not
  * rotate: it is /script/<base64(site hostname) without padding>.js, identical
  * on every host in the chain -- verified against a real capture in which four

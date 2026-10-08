@@ -12,7 +12,7 @@
  * WHY: win-bait-walk.ps1 has to reduce a serving host to the apex it blocks in
  * its PAC, and PowerShell has no public suffix list. It carried 26 multi-part
  * suffixes by hand against psl's 9,778 rules (8,330 multi-part), so anything
- * outside that list reduced one label too far -- "co.il" for deer.bait.co.il,
+ * outside that list reduced one label too far -- "co.il" for sub.bait.co.il,
  * "github.io", "vercel.app", "com.pl", "co.th" -- which the walk then put in
  * its own PAC and wrote to the bait list. Of fifteen suffixes probed, thirteen
  * were missing from the hand list.
@@ -21,9 +21,9 @@
  * walk uses, so this is called once per round for every host in it rather than
  * once per host.
  *
- *   printf 'deer.bait.co.il\n0.taro.sansyettusk.com\n' | node scripts/psl-root.js
- *   deer.bait.co.il        bait.co.il
- *   0.taro.sansyettusk.com sansyettusk.com
+ *   printf 'sub.bait.co.il\n0.sub.parked-apex.invalid\n' | node scripts/psl-root.js
+ *   sub.bait.co.il        bait.co.il
+ *   0.sub.parked-apex.invalid parked-apex.invalid
  */
 
 const { normaliseName, registrableOf } = require('../lib/baitguard');

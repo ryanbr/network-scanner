@@ -377,7 +377,7 @@ $targetHost = try { ([uri]$Urls[0]).Host } catch { "" }
 $contacted = "unknown"
 if ($targetHost) {
   # -SimpleMatch takes the pattern LITERALLY, so it must NOT be regex-escaped:
-  # [regex]::Escape() turned "jmty.jp" into "jmty\.jp" and the search then
+  # [regex]::Escape() turned "site-one.example" into "site-one\.example" and the search then
   # looked for a literal backslash, reporting "contacted: NO" on a capture that
   # plainly contained the host. Search the whole family too -- a request can be
   # logged by a content process rather than the parent.

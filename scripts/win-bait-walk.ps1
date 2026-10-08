@@ -20,7 +20,7 @@
   extension producing a genuine ERR_BLOCKED_BY_CLIENT made the loader advance.
   In Firefox a plain PAC connection failure does -- a run blocking the two hosts
   uBO let through walked past all four known hosts and revealed a fifth,
-  poppyrimpace.com, which matched the operator fingerprint on every signal.
+  apex-four.example, which matched the operator fingerprint on every signal.
 
   ROUND 1 IS THE FAITHFUL CAPTURE: no PAC, so it shows what a normal visitor
   gets. Later rounds are deliberately distorted and exist only to enumerate. The
@@ -252,7 +252,7 @@ function Resolve-Roots([string[]]$names) {
 function Get-Root([string]$h) {
   # Normalise FIRST. The host arrives straight out of the capture --
   # Get-BaitHosts returns $_.Groups[1].Value with no folding, and only
-  # Test-DigMatch lowercases -- so "Deer.ICKASIDE.CO.IL" and a root-anchored
+  # Test-DigMatch lowercases -- so "Sub.PARKED-APEX.CO.IL" and a root-anchored
   # "host.com." both reach here verbatim. Unnormalised, the root, the sidecar
   # key and the PAC entry all carry the capture's casing, and the publish-time
   # public-suffix guard in lib/baitguard.js saw "CO.IL" as a registrable domain
@@ -399,13 +399,12 @@ try {
       $r = Get-Root $h
       if ($blocked.Contains($r)) { if (-not $found.Contains($h)) { $found.Add($h) }; continue }
       # Dig the host that actually SERVED, not only its registrable domain. This
-      # operator runs two families: one with the apex on Cloudflare (howphooey,
-      # smoothhmph, html-load.cc -> 104.26./104.20./172.66./172.67.), and one with
+      # operator runs two families: one with the apex on Cloudflare (apex-five,
+      # apex-one, cdn-apex.example -> the CDN's published ranges), and one with
       # the apex PARKED and its own footprint only on the serving subdomain --
-      # ickaside.com and goshupward.com both resolve to 3.33.251.168 /
-      # 15.197.225.128 (AWS Global Accelerator, shared by countless parked
-      # domains), while deer.ickaside.com and hunt.goshupward.com both CNAME to
-      # sdi.html-load.com. Gating on the root alone made the walk find those
+      # the parked apexes share one accelerator address that countless unrelated
+      # parked domains also use, while each serving subdomain CNAMEs to a single
+      # shared endpoint. Gating on the root alone made the walk find those
       # hosts and then SKIP them, and widening the gate to the parked apex IPs
       # would have matched half the internet. Accept a match from either name;
       # keep "unknown" distinct from "mismatch" on both.
@@ -477,8 +476,8 @@ if ($completed) {
   }
   # Record WHICH name satisfied the gate, so bait-confirm.js can re-check the same
   # name at publish time. Without this the confirmer digs only the root from the
-  # baits file, and this operator's parked apexes (ickaside.com, goshupward.com ->
-  # 3.33.251.168) match no term -- so hosts the walk CONFIRMED were then reported
+  # baits file, and this operator's parked apexes resolve to a shared accelerator
+  # address that matches no term -- so hosts the walk CONFIRMED were then reported
   # MISMATCH and silently dropped from the output. Sidecar rather than a second
   # column: every existing reader treats a baits line as a bare domain.
   $hostsFile = Join-Path $OutDir "$Name-baits-hosts.txt"
@@ -509,11 +508,11 @@ if ($completed) {
   $roots | Set-Content -LiteralPath $partFile -Encoding ASCII
   # The sidecar matters MORE on this path than on the complete one. The publisher
   # now confirms partial hosts too, and without "which name satisfied the gate"
-  # bait-confirm.js digs only the root -- so this operator's parked apexes
-  # (sansyettusk.com -> 3.33.251.168) match no bait_dig term and report MISMATCH,
-  # dropping the rotation this walk DID find one step further along. Measured on
-  # recorder.ca: round 1 found sansyettusk.com, round 2 returned no loader urls,
-  # and the host reached nothing but this file.
+  # bait-confirm.js digs only the root -- so this operator's parked apexes match
+  # no bait_dig term on the apex alone and report MISMATCH, dropping the rotation
+  # this walk DID find one step further along. Measured on one site: round 1
+  # found the apex, round 2 returned no loader urls, and the host reached
+  # nothing but this file.
   #
   # Written fresh and DELETED when empty, never unioned: a partial describes one
   # run, and a leftover sidecar paired with a newer partial would attribute the

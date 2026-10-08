@@ -18,7 +18,7 @@
 
   WHY FIREFOX RATHER THAN CHROME: Chrome is MV3-only now, so what runs there is
   uBO Lite on declarativeNetRequest. That is a weaker blocker, and measured: a
-  declarativeNetRequest block of html-load.cc produced a real
+  declarativeNetRequest block of cdn-apex.example produced a real
   ERR_BLOCKED_BY_CLIENT and the anti-adblock loader still never moved to the
   next host in its list. Firefox still runs full uBO with your own rules, which
   is the only place the fallback chain has actually been seen.

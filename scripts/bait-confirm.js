@@ -23,8 +23,8 @@
  *
  * Terms are matched case-insensitively against the raw tool output, exactly as
  * the live-scan `dig`/`whois` options do, so an existing `dig: "104.26."` style
- * prefix works unchanged. Measured on the jmty chain: every bait domain carries
- * houston.ns.cloudflare.com + veda.ns.cloudflare.com, which none of the
+ * prefix works unchanged. Measured on the first site's chain: every bait domain carries
+ * a single shared nameserver pair, which none of the
  * unrelated ad domains on the same pages do.
  */
 
@@ -61,9 +61,9 @@ const configPath = argOf('--config');
 const baitsPath = argOf('--baits', '/mnt/c/nwss-har/capture-baits.txt');
 // Optional sidecar written by win-bait-walk.ps1: "<root>\t<name that satisfied
 // the gate>". It exists because a bait list holds ROOTS, and this operator runs a
-// family whose apex is parked -- ickaside.com and goshupward.com both resolve to
-// 3.33.251.168 (AWS Global Accelerator, shared by countless parked domains) while
-// only the serving subdomain CNAMEs to sdi.html-load.com. Digging the root alone
+// family whose apexes are PARKED: they share one accelerator address that
+// countless unrelated parked domains also use, while only the serving subdomain
+// CNAMEs to the operator's own shared endpoint. Digging the root alone
 // reported both MISMATCH and dropped them from the output, after the walk had
 // already CONFIRMED them. Checking the root is still tried first; the sidecar name
 // is a second chance, never a replacement.
@@ -173,11 +173,11 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
       // Whether a sidecar name was available at all. This is the difference
       // between "we checked the right names and they do not match" and "we
       // never recorded how to check this one", and the two were reported
-      // identically as MISMATCH. recorder.ca's goshupward.com sat like that:
-      // live, hunt.goshupward.com still CNAMEd to sdi.html-load.com, but with
-      // no sidecar row -- so it was dug root-only against a parked apex
-      // (3.33.251.168, matching no bait_dig term) and called a mismatch for a
-      // day. Adding the row alone made it confirm.
+      // identically as MISMATCH. One site's parked apex sat like that: live, its
+      // serving subdomain still CNAMEd to the shared endpoint, but with no sidecar
+      // row -- so it was dug root-only against a parked apex whose address matches
+      // no bait_dig term, and called a mismatch for a day. Adding the row alone
+      // made it confirm.
       hadAlt = !!(alt && alt !== d);
       const rootSatisfies = digOk &&
         (digAll.length ? matchAll(out, digAll) : true) && (digAny.length ? matchAny(out, digAny) : true);
