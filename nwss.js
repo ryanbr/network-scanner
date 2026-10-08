@@ -19,7 +19,7 @@ const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
 const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION } = require('./lib/fingerprint');
-const { formatRules, handleOutput, getFormatDescription } = require('./lib/output');
+const { formatRules, handleOutput, getFormatDescription, outputKeyFromUrl } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
 const { runProcess } = require('./lib/spawn-async');
@@ -3539,20 +3539,11 @@ function setupFrameHandling(page, forceDebug) {
        // logic below still runs on the bare host (domain); only the final stored
        // key changes. The capture must contain both '/' and '.' (i.e. host+path),
        // otherwise we keep the host so a mis-written regex can't emit garbage.
-       let outputKey = domain;
-       if (outputRegex && matchedUrl) {
-         const m = matchedUrl.match(outputRegex);
-         if (m) {
-           const cap = (m[1] != null ? m[1] : m[0]);
-           // Accept only a host+path shape: a '/' with a real host before it
-           // (segment before the first '/' must contain a '.'). Rejects a
-           // capture that accidentally includes the scheme (host part would be
-           // "https:") or a path-only capture with no host — both fall back to
-           // the bare-host ||host^ rule rather than emit garbage.
-           const sl = cap ? cap.indexOf('/') : -1;
-           if (sl > 0 && cap.slice(0, sl).includes('.')) outputKey = cap;
-         }
-       }
+       // Shared with the capture path (lib/har.js matchEntries) so the two cannot
+       // drift: same regex, same host+path acceptance test, same fallback. See
+       // outputKeyFromUrl for why a host-only capture falls back instead of
+       // narrowing the host.
+       const outputKey = outputKeyFromUrl(matchedUrl, outputRegex, domain);
        // Check if we should ignore similar domains
        const ignoreSimilarEnabled = siteConfig.ignore_similar !== undefined ? siteConfig.ignore_similar : ignore_similar;
        const similarityThreshold = siteConfig.ignore_similar_threshold || ignore_similar_threshold;

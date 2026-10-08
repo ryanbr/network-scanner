@@ -306,6 +306,97 @@ for (const evenBlocked of [false, true]) {
     runHarRules(cfg3p, 'target.invalid', pagesHar), rulesOf(pagesHar));
 }
 
+// ---- output_regex in the capture path --------------------------------------
+// The flag was honoured by the live scan and silently ignored from a capture:
+// `output_regex` had zero references in lib/har.js, so the same config produced
+// a narrowed ||host/path/ rule live and a whole-host ||host^ rule from a MOZ_LOG
+// or HAR. Both now go through outputKeyFromUrl(), so these checks pin the shared
+// contract from the capture side; the four unit checks below pin the helper
+// itself, including the two mis-written patterns it must refuse.
+{
+  const orHar = F('or.har');
+  fs.writeFileSync(orHar, JSON.stringify({ log: {
+    version: '1.2',
+    creator: { name: 'WebInspector', version: '537.36' },
+    pages: [{ id: 'page_1', title: 'https://target.invalid/', pageTimings: {} }],
+    entries: [
+      harEntry('https://target.invalid/', 'document', 'text/html'),
+      harEntry('https://a.invalid/script/abcdefgh1234.js', 'script', 'application/javascript'),
+      harEntry('https://b.invalid/other/abcdefgh1234.js', 'script', 'application/javascript'),
+      harEntry('https://deep.sub.c.invalid/other/abcdefgh1234.js', 'script', 'application/javascript')
+    ]
+  } }));
+
+  const mkCfg = (name, outputRegex) => {
+    const f = F(name);
+    const site = {
+      url: 'https://target.invalid/', filterRegex: '\\/[A-Za-z0-9]{8,12}\\.js$',
+      firstParty: false, thirdParty: true
+    };
+    if (outputRegex !== undefined) site.output_regex = outputRegex;
+    fs.writeFileSync(f, JSON.stringify({ sites: [site] }));
+    return f;
+  };
+  const rulesOf = cfg => run(['--custom-json', cfg, '--har', orHar, '--site', 'target.invalid'])
+    .split('\n').map(l => l.trim()).filter(l => l.startsWith('||')).sort();
+
+  // Baseline: no output_regex, so both hosts emit as whole hosts.
+  check('capture: no output_regex emits whole hosts',
+    rulesOf(mkCfg('or-none.json', undefined)),
+    ['||a.invalid^', '||b.invalid^', '||c.invalid^']);
+
+  // The fix: a host+path capture narrows the matching URL's rule, and the URL
+  // the pattern does NOT match still emits its whole host rather than vanishing.
+  check('capture: output_regex narrows the matching url and falls back on the rest',
+    rulesOf(mkCfg('or-path.json', '^https?:\\/\\/([^\\/]+\\/script\\/)')),
+    ['||a.invalid/script/', '||b.invalid^', '||c.invalid^']);
+
+  // A HOST-ONLY capture must NOT narrow the host -- it falls back. This is the
+  // documented gate, and the reason output_regex cannot be used to collapse
+  // 1.host.site.com and ab.n.host.site.com onto ||host.site.com^.
+  //
+  // deep.sub.c.invalid is in the fixture so this check DISCRIMINATES: the
+  // capture is the full host, the fallback is the registrable domain, so they
+  // are different strings. Written first with a capture equal to its own
+  // fallback, it passed with the gate deleted -- a check that cannot fail.
+  check('capture: a host-only output_regex capture falls back to the normal key',
+    rulesOf(mkCfg('or-host.json', '^https?:\\/\\/([^\\/]+)')),
+    ['||a.invalid^', '||b.invalid^', '||c.invalid^']);
+
+  // A pattern that swallows the scheme makes the host part read "https:", which
+  // has no dot, so it is refused rather than emitted as a garbage rule.
+  check('capture: an output_regex capture including the scheme falls back',
+    rulesOf(mkCfg('or-scheme.json', '^(https?:\\/\\/[^\\/]+\\/script\\/)')),
+    ['||a.invalid^', '||b.invalid^', '||c.invalid^']);
+
+  // An uncompilable pattern must disable the feature for the site, not throw and
+  // lose every other rule in the run.
+  check('capture: an invalid output_regex is ignored, other rules survive',
+    rulesOf(mkCfg('or-bad.json', '([unclosed')),
+    ['||a.invalid^', '||b.invalid^', '||c.invalid^']);
+
+  // The parity this change exists for: har-rules.js and nwss --har must agree
+  // under output_regex, as they already do without it.
+  check('har-rules.js and nwss --har agree under output_regex',
+    runHarRules(mkCfg('or-path2.json', '^https?:\\/\\/([^\\/]+\\/script\\/)'), 'target.invalid', orHar),
+    rulesOf(mkCfg('or-path.json', '^https?:\\/\\/([^\\/]+\\/script\\/)')));
+
+  // The shared helper itself, including the group-1-vs-whole-match rule.
+  const { outputKeyFromUrl } = require('../lib/output');
+  const U = 'https://a.invalid/script/x.js';
+  check('helper: host+path capture is used',
+    outputKeyFromUrl(U, /^https?:\/\/([^/]+\/script\/)/, 'a.invalid'), 'a.invalid/script/');
+  check('helper: whole match is used when there is no capture group',
+    outputKeyFromUrl(U, /a\.invalid\/script\//, 'a.invalid'), 'a.invalid/script/');
+  // fallback deliberately UNLIKE the capture, for the same discrimination reason
+  check('helper: host-only capture falls back',
+    outputKeyFromUrl('https://x.a.invalid/script/x.js', /^https?:\/\/([^/]+)/, 'a.invalid'),
+    'a.invalid');
+  check('helper: no regex and no url both fall back',
+    [outputKeyFromUrl(U, null, 'a.invalid'), outputKeyFromUrl('', /x/, 'a.invalid')],
+    ['a.invalid', 'a.invalid']);
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
