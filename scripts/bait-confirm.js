@@ -33,6 +33,7 @@ const path = require('path');
 const { runProcess } = require('../lib/spawn-async');
 const { loadDiskCache, saveDiskCache } = require('../lib/nettools');
 const { messageColors, formatLogMessage } = require('../lib/colorize');
+const { guardBait } = require('../lib/baitguard');
 
 const TAG = messageColors.processing('[bait-confirm]');
 const TOOL_TIMEOUT_MS = 15000;
@@ -137,8 +138,23 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
 (async () => {
   if (useCache) { try { loadDiskCache(CACHE_FILE, cache, Math.max(DIG_TTL_MS, WHOIS_TTL_MS), CACHE_MAX); } catch { /* cold start */ } }
   const results = [];
-  for (const d of domains) {
-    const row = { domain: d, dig: null, whois: null, confirmed: null, notes: [] };
+  for (const d0 of domains) {
+    // Guard the walk's root reduction BEFORE spending lookups on it. Get-Root
+    // uses a 26-entry suffix list, not the public suffix list, so a bait under
+    // an unlisted multi-part suffix arrives reduced one label too far --
+    // "co.il" rather than bait.co.il. The dig gate is satisfied by the sidecar
+    // alone, so such a root could reach "confirmed" and publish ||co.il^.
+    // See lib/baitguard.js for the measurement.
+    const g = guardBait(d0, confirmHost);
+    if (g.reject) {
+      results.push({ domain: d0, dig: null, whois: null, confirmed: false, verdict: 'rejected', notes: [g.reject] });
+      continue;
+    }
+    // Repaired: re-key the sidecar so the dig below still finds the name the
+    // gate matched, which is the only reason the repair is trustworthy.
+    if (g.via) confirmHost.set(g.domain, g.via);
+    const d = g.domain;
+    const row = { domain: d, dig: null, whois: null, confirmed: null, notes: g.note ? [g.note] : [] };
 
     if (digAll.length || digAny.length) {
       // ANY record type the terms might name: A for ip prefixes, NS for the
@@ -203,16 +219,19 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
       const f = v => v === null ? '  -  ' : (v === 'error' ? ' err ' : (v ? ' yes ' : ' NO  '));
       const verdict = r.verdict === 'confirmed' ? messageColors.success('confirmed')
         : r.verdict === 'mismatch' ? messageColors.warn('MISMATCH')
-          : messageColors.warn('UNKNOWN (lookup failed)');
+          : r.verdict === 'rejected' ? messageColors.warn('REFUSED (public suffix)')
+            : messageColors.warn('UNKNOWN (lookup failed)');
       console.log(`  ${r.domain.padEnd(26)} dig:${f(r.dig)} whois:${f(r.whois)}  ${verdict}`);
       r.notes.forEach(n => console.log(formatLogMessage('debug', `${TAG}   ${n}`)));
     }
     const mismatched = results.filter(r => r.verdict === 'mismatch');
     const unknown = results.filter(r => r.verdict === 'unknown');
+    const refused = results.filter(r => r.verdict === 'rejected');
     console.log('');
     console.log(`  ${results.filter(r => r.confirmed).length}/${results.length} confirmed` +
       (mismatched.length ? ` — MISMATCH: ${mismatched.map(r => r.domain).join(', ')}` : '') +
-      (unknown.length ? ` — could not check: ${unknown.map(r => r.domain).join(', ')}` : ''));
+      (unknown.length ? ` — could not check: ${unknown.map(r => r.domain).join(', ')}` : '') +
+      (refused.length ? ` — REFUSED as a public suffix: ${refused.map(r => r.domain).join(', ')}` : ''));
     if (unknown.length) {
       console.log(formatLogMessage('warn',
         `${TAG} ${unknown.length} domain(s) could not be checked (tool missing or lookup failed) — that is NOT a mismatch`));
