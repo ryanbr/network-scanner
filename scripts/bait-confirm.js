@@ -156,6 +156,7 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
     if (g.via) confirmHost.set(g.domain, g.via);
     const d = g.domain;
     const row = { domain: d, dig: null, whois: null, confirmed: null, notes: g.note ? [g.note] : [] };
+    let hadAlt = false;
 
     if (digAll.length || digAny.length) {
       // ANY record type the terms might name: A for ip prefixes, NS for the
@@ -169,6 +170,15 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
       // Only reach for the sidecar when the root did not satisfy the terms --
       // two extra lookups per domain, and only for the hosts that need them.
       const alt = confirmHost.get(d);
+      // Whether a sidecar name was available at all. This is the difference
+      // between "we checked the right names and they do not match" and "we
+      // never recorded how to check this one", and the two were reported
+      // identically as MISMATCH. recorder.ca's goshupward.com sat like that:
+      // live, hunt.goshupward.com still CNAMEd to sdi.html-load.com, but with
+      // no sidecar row -- so it was dug root-only against a parked apex
+      // (3.33.251.168, matching no bait_dig term) and called a mismatch for a
+      // day. Adding the row alone made it confirm.
+      hadAlt = !!(alt && alt !== d);
       const rootSatisfies = digOk &&
         (digAll.length ? matchAll(out, digAll) : true) && (digAny.length ? matchAny(out, digAny) : true);
       if (alt && alt !== d && !rootSatisfies) {
@@ -202,7 +212,15 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
     const checks = [row.dig, row.whois].filter(v => v !== null);
     const failed = checks.filter(v => v === false).length;
     const errored = checks.filter(v => v === 'error').length;
-    row.verdict = failed > 0 ? 'mismatch' : (errored > 0 ? 'unknown' : (checks.length ? 'confirmed' : 'unknown'));
+    // A dig that failed with NO sidecar name to fall back on is not evidence
+    // that the bait moved -- it may simply be a parked apex whose serving name
+    // was never recorded. Kept apart from 'mismatch' so a rotation is
+    // actionable instead of indistinguishable from a data gap. Neither
+    // publishes: only 'confirmed' does.
+    const digFailedBlind = row.dig === false && !hadAlt;
+    row.verdict = failed > 0
+      ? (digFailedBlind ? 'unconfirmable' : 'mismatch')
+      : (errored > 0 ? 'unknown' : (checks.length ? 'confirmed' : 'unknown'));
     row.confirmed = row.verdict === 'confirmed';
     results.push(row);
   }
@@ -221,18 +239,26 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
       const verdict = r.verdict === 'confirmed' ? messageColors.success('confirmed')
         : r.verdict === 'mismatch' ? messageColors.warn('MISMATCH')
           : r.verdict === 'rejected' ? messageColors.warn('REFUSED (public suffix)')
-            : messageColors.warn('UNKNOWN (lookup failed)');
+            : r.verdict === 'unconfirmable' ? messageColors.warn('UNCONFIRMABLE (no sidecar name)')
+              : messageColors.warn('UNKNOWN (lookup failed)');
       console.log(`  ${r.domain.padEnd(26)} dig:${f(r.dig)} whois:${f(r.whois)}  ${verdict}`);
       r.notes.forEach(n => console.log(formatLogMessage('debug', `${TAG}   ${n}`)));
     }
     const mismatched = results.filter(r => r.verdict === 'mismatch');
     const unknown = results.filter(r => r.verdict === 'unknown');
     const refused = results.filter(r => r.verdict === 'rejected');
+    const blind = results.filter(r => r.verdict === 'unconfirmable');
     console.log('');
     console.log(`  ${results.filter(r => r.confirmed).length}/${results.length} confirmed` +
       (mismatched.length ? ` — MISMATCH: ${mismatched.map(r => r.domain).join(', ')}` : '') +
       (unknown.length ? ` — could not check: ${unknown.map(r => r.domain).join(', ')}` : '') +
-      (refused.length ? ` — REFUSED as a public suffix: ${refused.map(r => r.domain).join(', ')}` : ''));
+      (refused.length ? ` — REFUSED as a public suffix: ${refused.map(r => r.domain).join(', ')}` : '') +
+      (blind.length ? ` — NO SIDECAR, cannot be checked: ${blind.map(r => r.domain).join(', ')}` : ''));
+    if (blind.length) {
+      console.log(formatLogMessage('warn',
+        `${TAG} ${blind.length} domain(s) have no recorded sidecar name and their apex does not match on its own — ` +
+        `that is a missing sidecar row, not proof the bait moved. Re-run the walk while the host is serving, or add the row.`));
+    }
     if (unknown.length) {
       console.log(formatLogMessage('warn',
         `${TAG} ${unknown.length} domain(s) could not be checked (tool missing or lookup failed) — that is NOT a mismatch`));
@@ -256,8 +282,12 @@ const matchAny = (out, terms) => terms.some(t => out.toLowerCase().includes(t.to
   // mismatch rather than with "could not check". Left out of this sum at first,
   // which made --strict exit 0 on a run that had refused a bait outright.
   const refused = results.filter(r => r.verdict === 'rejected').length;
+  // 'unconfirmable' sits with 'unknown', not with 'mismatch': both mean the
+  // check could not be made, and exit 1 is reserved for a name that really did
+  // not match what it was checked against.
+  const unconfirmable = results.filter(r => r.verdict === 'unconfirmable').length;
   if (!strict) process.exit(0);
-  process.exit((mismatched || refused) ? 1 : (unknown ? 2 : 0));
+  process.exit((mismatched || refused) ? 1 : ((unknown || unconfirmable) ? 2 : 0));
 })().catch(err => {
   console.error(formatLogMessage('error', `${TAG} ${err.message}`));
   process.exit(1);

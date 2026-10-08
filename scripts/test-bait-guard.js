@@ -253,5 +253,31 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
     [true, 'bar.foo.compute.amazonaws.com']);
 }
 
+// ---- 'unconfirmable' must stay distinct from 'mismatch' ------------------
+// A dig that fails with NO sidecar name to fall back on is not evidence the
+// bait moved -- it may be a parked apex whose serving name was never recorded.
+// recorder.ca's goshupward.com read as a plain MISMATCH for a day while live:
+// hunt.goshupward.com still CNAMEd to sdi.html-load.com, but no sidecar row
+// existed, so it was dug root-only against 3.33.251.168 and dropped silently.
+//
+// This is a SOURCE canary, not a behaviour test, and is labelled as such: the
+// verdict needs a real dig to arise, and this suite takes no network. The
+// behaviour was verified by hand both ways -- with the row goshupward.com
+// confirms and publishes, without it the run prints
+// "NO SIDECAR, cannot be checked: goshupward.com" and publishes 3 of 4.
+{
+  const bc = fs.readFileSync(path.join(__dirname, 'bait-confirm.js'), 'utf8');
+  check('bait-confirm tracks whether a sidecar name was available',
+    /hadAlt\s*=\s*!!\(alt && alt !== d\)/.test(bc), true);
+  check('bait-confirm keeps a blind dig failure out of mismatch',
+    /digFailedBlind\s*\?\s*'unconfirmable'\s*:\s*'mismatch'/.test(bc), true);
+  check('unconfirmable is not treated as publishable anywhere',
+    /verdict'\]\s*!==\s*'confirmed'|verdict\) !== 'confirmed'/.test(
+      fs.readFileSync('/home/fanboy/automate-media2.sh', 'utf8')) ||
+    fs.readFileSync('/home/fanboy/automate-media2.sh', 'utf8').includes("!= 'confirmed'"), true);
+  check('--strict groups unconfirmable with unknown, not with mismatch',
+    /\(mismatched \|\| refused\) \? 1 : \(\(unknown \|\| unconfirmable\) \? 2 : 0\)/.test(bc), true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
