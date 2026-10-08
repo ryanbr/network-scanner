@@ -146,5 +146,53 @@ check('repair normalises the name it reports', rc.via, '0.taro.bait.co.il');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// ---- scripts/psl-root.js, the walk's reduction oracle --------------------
+// win-bait-walk.ps1 cannot carry a public suffix list, so it asks this helper
+// and falls back to 26 hardcoded suffixes only if the call fails. These pin the
+// contract the PowerShell side parses: "<normalised host>\t<registrable
+// domain>" per line, and an EMPTY root for a name that has none.
+{
+  const run = input => {
+    const out = execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js')],
+      { input, encoding: 'utf8' });
+    return out.split('\n').filter(Boolean).map(l => l.split('\t'));
+  };
+
+  check('reduces the suffixes the hand list misses',
+    run('deer.bait.co.il\nx.bait.com.pl\nsub.x.vercel.app\na.b.c.github.io\n'),
+    [['deer.bait.co.il', 'bait.co.il'], ['x.bait.com.pl', 'bait.com.pl'],
+      ['sub.x.vercel.app', 'x.vercel.app'], ['a.b.c.github.io', 'c.github.io']]);
+
+  check('agrees with the hand list where the hand list is right',
+    run('x.bait.co.uk\n0.taro.sansyettusk.com\n'),
+    [['x.bait.co.uk', 'bait.co.uk'], ['0.taro.sansyettusk.com', 'sansyettusk.com']]);
+
+  // The walk keys its cache on the normalised name, so the helper must return
+  // the name it normalised rather than echo the input.
+  check('normalises case and a trailing dot in the key it returns',
+    run('Deer.ICKASIDE.CO.IL\nhost.com.\n'),
+    [['deer.ickaside.co.il', 'ickaside.co.il'], ['host.com', 'host.com']]);
+
+  // An empty root is the signal "no registrable domain". The walk caches the
+  // HOST for these rather than the suffix: blocking one host is narrow, while
+  // blocking the suffix is the catastrophe the whole change exists to avoid.
+  // The empty field is load-bearing: PowerShell's -split "`t", 2 yields a
+  // 2-element array whose second entry is '', which is how Resolve-Roots tells
+  // "psl says there is no registrable domain" from a malformed line.
+  check('a bare public suffix yields an empty root, not a dropped line',
+    run('co.il\ngithub.io\n'), [['co.il', ''], ['github.io', '']]);
+
+  check('blanks, comments and duplicates are skipped',
+    run('\n#note\nbait.com\nBAIT.com\n  \n'), [['bait.com', 'bait.com']]);
+
+  check('arguments work as well as stdin',
+    execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js'), 'deer.bait.co.il'],
+      { encoding: 'utf8' }).trim(), 'deer.bait.co.il\tbait.co.il');
+
+  check('no input produces no output rather than an error',
+    execFileSync(process.execPath, [path.join(__dirname, 'psl-root.js')],
+      { input: '', encoding: 'utf8' }), '');
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

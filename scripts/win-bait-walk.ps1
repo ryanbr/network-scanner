@@ -42,12 +42,24 @@ param(
   [switch]$NoDigMatch,
   [string]$Detect = "",
   [string]$CaptureScript = "",
+  [string]$PslRoot = "",
   [switch]$KeepPac
 )
 
 $ErrorActionPreference = 'Stop'
 if (-not $CaptureScript) { $CaptureScript = Join-Path $PSScriptRoot "win-capture-scheduled.ps1" }
 if (-not (Test-Path $CaptureScript)) { throw "capture script not found: $CaptureScript" }
+# The psl helper must run from the REPO -- it requires ../lib/baitguard and
+# node_modules/psl -- so it is never copied next to this script in $OutDir. The
+# -Config path already points into the repo, so derive it from there; running
+# this script from the repo itself is the other case. Absent helper is not an
+# error: Get-Root falls back to its built-in suffix list.
+if (-not $PslRoot) {
+  $pslCandidates = @()
+  if ($Config) { $pslCandidates += (Join-Path (Split-Path -Parent $Config) 'scripts\psl-root.js') }
+  $pslCandidates += (Join-Path $PSScriptRoot 'psl-root.js')
+  foreach ($c in $pslCandidates) { if (Test-Path -LiteralPath $c) { $PslRoot = $c; break } }
+}
 if (-not $TargetsFile) { $TargetsFile = Join-Path $OutDir "targets.txt" }
 
 # --- target ------------------------------------------------------------------
@@ -157,18 +169,86 @@ $pacFile    = Join-Path $OutDir "$Name-bait.pac"
 # Registrable domain. The PAC blocks the root and every subdomain, since the
 # shards live on 0.stg.<root> .. 9.stg.<root>.
 #
-# Taking the last two labels is WRONG for multi-part suffixes: bait.example.co.uk
-# would yield "co.uk", and the PAC would then block every .co.uk host for the
-# rest of the walk -- wrecking the capture and masking real traffic. Every bait
-# seen so far is .com/.cc so this is latent, but a rotation onto a country
-# domain would hit it. There is no PSL here (node lives in WSL, this runs on
-# Windows), so a short list of the common multi-part suffixes is used and the
-# root takes one more label when the last two match.
+# FALLBACK ONLY. The authority is the real Public Suffix List, reached through
+# scripts/psl-root.js (see Resolve-Roots below): psl carries 9,778 suffix rules,
+# 8,330 of them multi-part, against the 26 listed here. Of fifteen suffixes
+# probed, thirteen were missing from this list -- co.il, com.pl, com.ua, co.th,
+# com.ng, co.id, com.vn, com.ph, co.ke, and the private ones github.io,
+# vercel.app, pages.dev, web.app.
+#
+# Getting it wrong is not cosmetic. Write-Pac below matches a bait as a SUFFIX
+# (host === bait, or host ends with "." + bait), so a root of "co.il" blocks
+# every .co.il host for the rest of the walk -- wrecking the capture it is
+# trying to measure -- and the same wrong root is what gets written to the bait
+# list. lib/baitguard.js refuses a public-suffix root at publish time, but that
+# is after the PAC has already done the damage, which is why this is fixed here
+# as well as guarded there.
+#
+# Kept as a degraded mode for a machine with no node on PATH or no reachable
+# repo: worse than psl, far better than nothing, and the publish-time guard
+# still backstops whatever it gets wrong.
 $script:MultiPartSuffixes = @(
   'co.uk','org.uk','me.uk','ac.uk','gov.uk','co.jp','ne.jp','or.jp','ac.jp',
   'com.au','net.au','org.au','co.nz','net.nz','org.nz','com.br','com.cn',
   'com.tw','co.kr','co.za','com.mx','com.ar','co.in','com.sg','com.hk','com.tr'
 )
+# Resolved host -> registrable domain, from psl. Batched: node costs ~100ms to
+# start over the \\wsl.localhost path this walk uses, so every host in a round
+# is resolved in ONE call rather than one call per host.
+$script:RootCache = @{}
+$script:PslOff    = $false
+$script:PslNoted  = $false
+
+function Resolve-Roots([string[]]$names) {
+  if ($script:PslOff -or -not $names -or $names.Count -eq 0) { return }
+  if (-not $PslRoot) {
+    if (-not $script:PslNoted) {
+      Write-Host "    NOTE psl helper not found; using the built-in suffix list (26 rules)"
+      $script:PslNoted = $true
+    }
+    $script:PslOff = $true
+    return
+  }
+  # $payload, not $input: $input is an automatic variable in PowerShell.
+  $payload = ($names | ForEach-Object { $_.Trim().ToLower().TrimEnd('.') } |
+              Where-Object { $_ } | Sort-Object -Unique) -join "`n"
+  $got = 0
+  # 'Continue' around the call for the same reason the capture invocation needs
+  # it: with $ErrorActionPreference = 'Stop' at the top of this script, a child
+  # writing ANYTHING to stderr under 2>&1 becomes a terminating error and would
+  # abort the whole walk over a warning.
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    $out = $payload | & node $PslRoot 2>&1
+    $code = $LASTEXITCODE
+    if ($code -eq 0) {
+      foreach ($line in @($out)) {
+        $kv = ($line -replace "`r", '') -split "`t", 2
+        if ($kv.Count -eq 2 -and $kv[0]) {
+          # An EMPTY root means psl says the name has no registrable domain --
+          # it IS a public suffix. Cache the host itself rather than the suffix:
+          # blocking one host is narrow and wrong-but-harmless, blocking the
+          # suffix is the catastrophe this whole change exists to prevent.
+          $script:RootCache[$kv[0]] = if ($kv[1]) { $kv[1] } else { $kv[0] }
+          $got++
+        }
+      }
+    }
+  } catch {
+    $code = -1
+  } finally {
+    $ErrorActionPreference = $prevEAP
+  }
+  if ($got -eq 0) {
+    if (-not $script:PslNoted) {
+      Write-Host "    NOTE psl lookup unavailable (node exit $code); using the built-in suffix list (26 rules)"
+      $script:PslNoted = $true
+    }
+    $script:PslOff = $true
+  }
+}
+
 function Get-Root([string]$h) {
   # Normalise FIRST. The host arrives straight out of the capture --
   # Get-BaitHosts returns $_.Groups[1].Value with no folding, and only
@@ -179,6 +259,7 @@ function Get-Root([string]$h) {
   # and waved it through. That guard normalises too -- this is the producer
   # half, so the walk's own report and PAC agree with what gets published.
   $h = $h.Trim().ToLower().TrimEnd('.')
+  if ($script:RootCache.ContainsKey($h)) { return $script:RootCache[$h] }
   $p = $h.Split('.')
   if ($p.Count -le 2) { return $h }
   $lastTwo = ($p[-2..-1] -join '.')
@@ -310,6 +391,8 @@ try {
 
     $hosts = Get-BaitHosts (Join-Path $OutDir "$roundName.log")
     if (-not $hosts -or $hosts.Count -eq 0) { Write-Host "    no loader urls in this capture; stopping"; $stopReason = "a capture contained no loader urls"; break }
+    # One psl call for the whole round, before anything is reduced.
+    Resolve-Roots $hosts
 
     $newRoots = @()
     foreach ($h in $hosts) {
