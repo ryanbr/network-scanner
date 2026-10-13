@@ -509,6 +509,90 @@ check('unit', 'cookies: a repeated identity is deduped and reported', async () =
   return 'deduped with a warning; distinct domains untouched';
 });
 
+check('unit', 'cookies: a non-boolean secure/httpOnly is reported, not coerced in silence', async () => {
+  // `secure` and `httpOnly` are strict === true, so anything else means false.
+  // Every other bad field in this module is reported; these two coerced in
+  // silence, and `"secure": "true"` -- a string, which is what a hand-edited
+  // JSON config tends to carry -- produced a cookie that was quietly NOT
+  // secure. The coercion itself is right (a cookie that cannot exist is worse);
+  // saying nothing about it was not.
+  for (const [field, value] of [['secure', 'true'], ['secure', 1], ['httpOnly', 'yes'], ['httpOnly', 0]]) {
+    const r = normalizeCookies([{ name: 'x', value: '1', [field]: value }], 'https://www.domain.com/');
+    assertEqual(r.cookies[0][field], false, `${field}=${JSON.stringify(value)} coerces to false`);
+    assert(r.errors.some(e => e.includes(field) && e.includes('not a boolean')),
+      `${field}=${JSON.stringify(value)} is reported`);
+  }
+  // Real booleans stay silent, including the false that needs no warning.
+  const ok = normalizeCookies([
+    { name: 'a', value: '1', secure: true, httpOnly: true },
+    { name: 'b', value: '1', secure: false, httpOnly: false }
+  ], 'https://www.domain.com/');
+  assertEqual(ok.errors.length, 0, 'real booleans are not reported');
+  assertEqual([ok.cookies[0].secure, ok.cookies[0].httpOnly], [true, true], 'true is honoured');
+  assertEqual([ok.cookies[1].secure, ok.cookies[1].httpOnly], [false, false], 'false is honoured');
+  return '4 reported coercions, real booleans silent';
+});
+
+check('unit', 'cookies: applySiteCookies returns the NORMALIZED list, not what landed', async () => {
+  // The returned `cookies` feeds retainSeeded() and removeCookies(), so what it
+  // contains is a contract, and the JSDoc used to call it "what was actually
+  // set". It is not: on the per-cookie retry path a browser-rejected entry is
+  // still listed, so `applied` can be lower than `cookies.length`. Deliberate --
+  // retain and release then see the same list and stay symmetric, and a cookie
+  // that never landed simply matches nothing at teardown. Pinned because the
+  // alternative reading (filter to what landed) would silently unbalance the
+  // refcount.
+  const page = { browserContext: () => ({
+    async setCookie(...cs) { if (cs.some(c => c.name === 'bad')) throw new Error('Invalid cookie fields'); }
+  }) };
+  const { value: res } = await captureLogs(() => applySiteCookies(
+    page, { cookies: [{ name: 'good', value: '1' }, { name: 'bad', value: '2' }] },
+    'https://www.domain.com/', false, false));
+  assertEqual(res.applied, 1, 'only the good cookie landed');
+  assertEqual(res.cookies.map(c => c.name), ['good', 'bad'], 'both are returned for refcounting');
+  return 'applied 1 of 2, both returned';
+});
+
+check('unit', 'cookies: the claim is registered before the seed reaches the browser', async () => {
+  // Two earlier attempts at this failed, both because of CDP message ORDER.
+  // Over one WebSocket the browser processes messages in order, so a teardown
+  // and a starting URL really interleave as:
+  //     A getCookies -> C setCookie -> A deleteCookies
+  // A's read therefore resolves BEFORE C's write does, which means a check
+  // inside removeCookies -- wherever it sits, after the read or as the last
+  // statement before the delete -- has already run by the time C's setCookie
+  // response would let C claim. Measured at both placements: `SET -> SET ->
+  // C claimed -> DELETE`, C claiming in good time by wall clock and still
+  // losing its cookie.
+  //
+  // The fix is ordering, not placement: the seed claims FIRST, synchronously,
+  // ahead of every round trip. A stub context is used rather than a browser
+  // because the point is message order, which a real connection will not
+  // reproduce on demand.
+  const jar = new Map();
+  const tick = () => new Promise(r => setImmediate(r));
+  const idOf = c => `${c.name}|${String(c.domain).replace(/^\./, '').toLowerCase()}|${c.path || '/'}`;
+  const seen = [];
+  const context = {
+    async setCookie(...cs) { await tick(); for (const c of cs) { jar.set(idOf(c), c); seen.push('set'); } },
+    async cookies() { await tick(); return [...jar.values()]; },
+    async deleteCookie(...cs) { await tick(); for (const c of cs) { jar.delete(idOf(c)); seen.push('delete'); } }
+  };
+  const page = { browserContext: () => context };
+  const cfg = { cookies: { consent: 'granted' } };
+  const url = 'https://www.domain.com/';
+
+  const a = (await applySiteCookies(page, cfg, url, false, false, true)).cookies;
+  const teardown = removeCookies(page, a, false);                 // A drops its claim
+  const newcomer = applySiteCookies(page, cfg, url, false, false, true); // C claims, then seeds
+  const [kept] = await Promise.all([teardown, newcomer]);
+
+  assertEqual(kept.removed, 0, 'the leaver deletes nothing the newcomer has claimed');
+  assertExcludes(seen.join(','), 'delete', 'no delete is issued at all');
+  assertEqual(jar.size, 1, 'the newcomer still has its cookie to navigate with');
+  return 'claim precedes the round trip; no delete issued';
+});
+
 check('unit', 'css blocking: the selector gate', async () => {
   // One gate for both call sites (pre-navigation and runtime), so they cannot
   // disagree about what counts as configured.
@@ -645,6 +729,46 @@ check('browser', 'cookie teardown is reference-counted across concurrent URLs', 
   }
 });
 
+check('browser', 'cookie teardown keeps cookies re-claimed during the handoff', async (ctx) => {
+  const browser = await launchBrowser([resolverRuleArg()]);
+  try {
+    // The refcount covers the OVERLAP -- two URLs both retained before either
+    // releases, the check above -- but used to miss the HANDOFF. removeCookies()
+    // drops the count SYNCHRONOUSLY and only deletes two CDP round trips later,
+    // so a URL that started and claimed the same keys inside that window had its
+    // cookies deleted by the URL that was leaving, then navigated ungated with
+    // nothing logged. Reachable from --max-concurrent >= 2 whenever two
+    // same-host URLs finish within a round trip of each other.
+    //
+    // retainSeeded() is synchronous, so claiming immediately after the call
+    // lands inside that window every time -- the window is reproduced exactly
+    // rather than raced against the browser's own CDP timing.
+    const cfg = { cookies: { a: '1', b: '2', c: '3', d: '4' } };
+    const p1 = await browser.newPage();
+    const s1 = (await applySiteCookies(p1, cfg, `${ctx.server.apexBase}/`, false, false, true)).cookies;
+
+    // The real seed path, overlapped with the teardown: removeCookies() drops
+    // the count when CALLED, applySiteCookies({retain:true}) claims when CALLED,
+    // both before either awaits anything -- so the interleaving is fixed rather
+    // than raced against the browser.
+    const teardown = removeCookies(p1, s1, false);
+    const newcomer = applySiteCookies(p1, cfg, `${ctx.server.apexBase}/`, false, false, true);
+    const [kept] = await Promise.all([teardown, newcomer]);
+
+    assertEqual(kept.removed, 0, 'a re-claimed cookie is not deleted by the leaver');
+    assertEqual((await p1.browserContext().cookies()).length, 4, 'jar after the handoff');
+
+    // ...and the newcomer can still release them, so keeping them here cannot
+    // strand a cookie for the rest of the run.
+    const last = await removeCookies(p1, s1, false);
+    assertEqual(last.removed, 4, 'the newcomer still releases them when it finishes');
+    assertEqual((await p1.browserContext().cookies()).length, 0, 'jar after the newcomer finishes');
+    return 'kept 4 during the handoff, released 4 after';
+  } finally {
+    await browser.close();
+  }
+});
+
 check('browser', 'one rejected cookie costs only itself', async (ctx) => {
   const browser = await launchBrowser([resolverRuleArg()]);
   try {
@@ -726,6 +850,36 @@ check('browser', 'storage teardown survives the seeding page closing', async (ct
       await ctxt.close();
     }
     return 'recovered via a same-origin sibling; blank sibling correctly cannot';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'storage teardown keeps keys re-claimed during the handoff', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // The same handoff as removeCookies(), for the same reason: the refcount
+    // falls synchronously while the DOMStorage removal is a CDP round trip
+    // away, so a URL that re-seeded in that window had its keys cleared by the
+    // URL that was leaving. The two seeding features share a scope derivation
+    // precisely so they cannot disagree, and this is one of the behaviours they
+    // have to agree on.
+    const ctxt = await browser.createBrowserContext();
+    const seeder = await ctxt.newPage();
+    const seeded = await applySiteStorage(seeder, { local_storage: { k1: 'v', k2: 'v' } }, `${ctx.server.ipBase}/`, false, false, true);
+    await seeder.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+
+    const teardown = removeStorage(seeder, seeded.localItems, seeded.scope, false);
+    const newcomer = applySiteStorage(seeder, { local_storage: { k1: 'v', k2: 'v' } }, `${ctx.server.ipBase}/`, false, false, true);
+    const [kept] = await Promise.all([teardown, newcomer]);
+    assertEqual(kept.removed, 0, 'a re-claimed key is not cleared by the leaver');
+    assertEqual(await storageKeys(seeder), ['k1', 'k2'], 'keys after the handoff');
+
+    const last = await removeStorage(seeder, seeded.localItems, seeded.scope, false);
+    assertEqual(last.removed, 2, 'the newcomer still releases them when it finishes');
+    assertEqual(await storageKeys(seeder), [], 'keys after the newcomer finishes');
+    await ctxt.close();
+    return 'kept 2 during the handoff, released 2 after';
   } finally {
     await browser.close();
   }

@@ -85,14 +85,8 @@ const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, write
 // Enhanced site data clearing functionality
 const { clearSiteData } = require('./lib/clear_sitedata');
 // Pre-load cookie seeding (per-site `cookies` config)
-const { applySiteCookies, retainSeeded, removeCookies } = require('./lib/cookies');
-// Aliased: lib/storage.js exports its own retainSeeded for the localStorage
-// refcount, which would otherwise shadow the cookie one.
-const {
-  applySiteStorage,
-  retainSeeded: retainSeededStorage,
-  removeStorage
-} = require('./lib/storage');
+const { applySiteCookies, removeCookies } = require('./lib/cookies');
+const { applySiteStorage, removeStorage } = require('./lib/storage');
 // Referrer header generation
 const { getReferrerForUrl, validateReferrerConfig, validateReferrerDisable } = require('./lib/referrer');
 // Adblock rules parser
@@ -3203,11 +3197,13 @@ function setupFrameHandling(page, forceDebug) {
       // initial document load, so this has to land before page.goto().
       // Remember what was set: cookies live on the shared browser context, so
       // the finally below removes them to keep them inside THIS url entry.
-      seededCookies = (await applySiteCookies(page, siteConfig, currentUrl, forceDebug)).cookies || [];
-      // Claim them for this URL only. processUrl runs concurrently on a SHARED
-      // browser context, so the finally must not delete a cookie another
-      // in-flight URL is still using; the refcount decides who actually clears.
-      retainSeeded(seededCookies);
+      // retain:true claims them for this URL only. processUrl runs concurrently
+      // on a SHARED browser context, so the finally must not delete a cookie
+      // another in-flight URL is still using; the refcount decides who actually
+      // clears. The claim is registered INSIDE the seed, before the browser
+      // round trip -- claiming out here afterwards lost a race with a
+      // concurrent teardown; see lib/cookies.js's retainSeeded().
+      seededCookies = (await applySiteCookies(page, siteConfig, currentUrl, forceDebug, true, true)).cookies || [];
 
       // --- Seed Web Storage BEFORE navigation (local_storage/session_storage) ---
       // Installs an evaluateOnNewDocument hook rather than writing storage
@@ -3216,14 +3212,13 @@ function setupFrameHandling(page, forceDebug) {
       // before the page's own scripts on every document, so reload/forcereload
       // need no re-seed -- unlike cookies, which clear_sitedata wipes.
       {
-        const seeded = await applySiteStorage(page, siteConfig, currentUrl, forceDebug);
+        // retain:true claims the localStorage keys for this URL only; the
+        // refcount decides who actually clears them, since concurrent same-host
+        // URLs share them. Claimed inside the seed, ahead of the round trip,
+        // for the same reason the cookie seed is.
+        const seeded = await applySiteStorage(page, siteConfig, currentUrl, forceDebug, true, true);
         seededLocalStorage = seeded.localItems || [];
         seededStorageScope = seeded.scope || null;
-        // Claim localStorage keys for this URL only; the refcount decides who
-        // actually clears them, since concurrent same-host URLs share them.
-        if (seededLocalStorage.length && seededStorageScope) {
-          retainSeededStorage(seededStorageScope.site, seededLocalStorage, seededStorageScope.origin);
-        }
       }
 
       // --- Apply proxy authentication if configured ---
