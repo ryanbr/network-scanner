@@ -2268,6 +2268,32 @@ function setupFrameHandling(page, forceDebug) {
         console.log('                  so blocked requests appear -- nothing is marked blocked');
       }
       console.log(`  sites matched : ${chosenSites.length}`);
+
+      // ACTUATOR KEYS DO NOTHING HERE, AND SAYING SO IS THE POINT.
+      //
+      // A capture is a recording: there is no request to cancel and no
+      // interceptor to install, so `blocked`, `blockDomainsByUrl` and
+      // `ignoreDomainsByUrl` are never read on this path -- they are consumed
+      // only by the live request handlers, which this branch returns long
+      // before reaching. Nothing else said so, and a config can carry hundreds
+      // of entries that read as active while having no effect since whenever
+      // the pipeline switched to --har. Measured in the field: a 245-entry
+      // `blocked` list including the exact bait domain under investigation,
+      // inert for eight days, while the bait answered 200 in every capture.
+      //
+      // This is the failure mode lib/output.js already names -- "a config key
+      // that reads as supported and silently is not is the failure mode worth
+      // designing out, not re-discovering". Same class, one branch over.
+      const inertKeys = [];
+      if (globalBlocked.length) inertKeys.push(`blocked (global, ${globalBlocked.length})`);
+      const siteBlocked = chosenSites.reduce((n, s) => n + (Array.isArray(s.blocked) ? s.blocked.length : 0), 0);
+      if (siteBlocked) inertKeys.push(`blocked (per-site, ${siteBlocked})`);
+      if (blockDomainsByUrl.length) inertKeys.push(`blockDomainsByUrl (${blockDomainsByUrl.length})`);
+      if (ignoreDomainsByUrl.length) inertKeys.push(`ignoreDomainsByUrl (${ignoreDomainsByUrl.length})`);
+      if (inertKeys.length) {
+        console.log(messageColors.warn(`  not applied   : ${inertKeys.join(', ')}`));
+        console.log('                  these need a live scan -- a capture has nothing to cancel');
+      }
     }
 
     // ONE result per site, not per configured URL. A capture is a single page
