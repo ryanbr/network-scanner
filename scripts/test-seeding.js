@@ -593,6 +593,52 @@ check('unit', 'cookies: the claim is registered before the seed reaches the brow
   return 'claim precedes the round trip; no delete issued';
 });
 
+check('unit', 'storage: a key re-claimed mid-teardown is not counted as a leak', async () => {
+  // The leak warning exists to flag real inheritance -- a key left behind
+  // silently changes what a later page on the host serves. A key a STARTING URL
+  // re-claimed is deliberately left alone and is not leaking, so counting it
+  // overstates the leak, and a leak warning that fires when nothing leaked is
+  // one that gets read as noise.
+  //
+  // An earlier version filtered `releasable` once after livePagesByOrigin() AND
+  // skipped per item before each removal. A claim landing between the two was
+  // skipped by the second check but stayed in `releasable`, which is what the
+  // warning counted. Reproduced by claiming from inside createCDPSession(),
+  // which runs between them: the warning said 2 when only one key was at risk.
+  //
+  // The page stub needs target() -- without it livePagesByOrigin() marks the
+  // origin unreachable, createCDPSession() is never called, the claim is never
+  // injected, and the "2" it then prints is a CORRECT count of two uncleared
+  // keys. That false reading cost a wrong finding before it was spotted.
+  const ORIGIN = 'https://www.domain.com';
+  const items = [{ name: 'k1', value: 'v' }, { name: 'k2', value: 'v' }];
+  const scope = { site: 'domain.com', host: 'www.domain.com', origin: ORIGIN };
+
+  let injected = false;
+  const target = { createCDPSession: async () => {
+    if (!injected) { injected = true; retainSeededStorage('domain.com', [items[0]], ORIGIN); }
+    return { send: async () => { throw new Error('Frame not found for the given security origin'); }, detach: async () => {} };
+  } };
+  const page = {
+    isClosed: () => false,
+    url: () => `${ORIGIN}/gate`,
+    target: () => target,
+    browser: () => ({ pages: async () => [] }),
+    evaluate: async () => 0
+  };
+
+  retainSeededStorage('domain.com', items, ORIGIN);
+  const { output } = await captureLogs(() => removeStorage(page, items, scope, false));
+  assertEqual(injected, true, 'the claim really was injected mid-teardown');
+  assertIncludes(output, 'Could not clear 1 seeded localStorage key(s)', 'only the key at risk is counted');
+  assertExcludes(output, 'Could not clear 2', 'the re-claimed key is not reported as leaking');
+
+  // Release the key the injected claim is still holding, so this check leaves no
+  // refcount behind for the ones that follow.
+  await captureLogs(() => removeStorage(page, [items[0]], scope, false));
+  return 'warned about 1 of 2; the re-claimed key excluded';
+});
+
 check('unit', 'css blocking: the selector gate', async () => {
   // One gate for both call sites (pre-navigation and runtime), so they cannot
   // disagree about what counts as configured.
