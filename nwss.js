@@ -6792,12 +6792,15 @@ function setupFrameHandling(page, forceDebug) {
    // change task internals.
    const batchPromise = Promise.all(batchTasks);
    batchPromise.catch(() => {});
+   // The 10-min timer must be cleared when the batch wins, or every completed
+   // batch leaves one pending -- holding its closure and the event loop. Today
+   // process.exit(0) at the end of the scan masks it; the comment there says
+   // completion should not DEPEND on that exit, so don't rely on it here.
+   let batchTimer;
    batchResults = await Promise.race([
      batchPromise,
-     new Promise((_, reject) =>
-       setTimeout(() => reject(new Error('Batch timeout')), 600000) // 10 min timeout
-     )
-   ]);
+     new Promise((_, reject) => { batchTimer = setTimeout(() => reject(new Error('Batch timeout')), 600000); })
+   ]).finally(() => clearTimeout(batchTimer));
  } catch (timeoutError) {
    if (timeoutError.message.includes('timeout')) {
      console.log(formatLogMessage('error', `${TIMEOUT_TAG} Batch hung. Restarting browser.`));
