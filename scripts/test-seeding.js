@@ -938,15 +938,30 @@ check('browser', 'Chrome keeps dot and dotless apart, and treats a negative expi
     assert(sess && sess.session === true, 'a negative expires is stored as a SESSION cookie');
 
     // ...and it is really sent, which is the claim the old warning denied.
+    //
+    // Select the hit by HOST and path, not lastHit(): /gate's inline script
+    // fires `new Image().src = '/report?...'`, and that request can reach the
+    // server after the NEXT navigation has already resolved. lastHit() then
+    // returned the apex page's trailing /report hit, which carries the
+    // host-only cookie, and the subdomain assertion below failed -- measured 1
+    // run in 8 over ten runs. The pre-existing redirect check is not exposed:
+    // it lands on /landed, which fetches nothing.
+    const cookieOn = (base, routePrefix) => {
+      const host = new URL(base).host;
+      const hit = ctx.server.hits.filter(h => h.host === host && h.url.startsWith(routePrefix)).pop();
+      assert(hit, `no request recorded for ${host}${routePrefix}`);
+      return hit.cookie || '';
+    };
+
     await page.goto(`${ctx.server.apexBase}/gate`, { waitUntil: 'domcontentloaded' });
-    const apex = ctx.server.lastHit().cookie || '';
+    const apex = cookieOn(ctx.server.apexBase, '/gate');
     assert(/dup=DOMAINSCOPED/.test(apex) && /dup=HOSTONLY/.test(apex),
       `the apex request carries both scopes (got ${JSON.stringify(apex)})`);
     assert(/sess=S/.test(apex), `the session cookie is sent (got ${JSON.stringify(apex)})`);
 
     // The host-only one stops at the apex; only the dotted one reaches www.
     await page.goto(`${ctx.server.wwwBase}/gate`, { waitUntil: 'domcontentloaded' });
-    const sub = ctx.server.lastHit().cookie || '';
+    const sub = cookieOn(ctx.server.wwwBase, '/gate');
     assert(/dup=DOMAINSCOPED/.test(sub) && !/dup=HOSTONLY/.test(sub),
       `the subdomain gets the dotted cookie only (got ${JSON.stringify(sub)})`);
 
