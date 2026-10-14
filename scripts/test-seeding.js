@@ -509,6 +509,104 @@ check('unit', 'cookies: a repeated identity is deduped and reported', async () =
   return 'deduped with a warning; distinct domains untouched';
 });
 
+check('unit', 'cookies: dot and dotless are two cookies, not one collision', async () => {
+  // The dedupe used to run on cookieKey(), which IGNORES the leading dot --
+  // right for refcounting, wrong for "are these one cookie?". Measured in
+  // Chrome: setting 'dup' on both '.SITE' and 'SITE' leaves TWO entries in the
+  // jar and the apex request carries both. So collapsing them dropped a cookie
+  // the config had asked for, kept the host-only one (last wins, and the
+  // NARROWER of the two scopes this module argues about at length), and told the
+  // operator the browser had done it. The browser half is pinned below.
+  const pair = normalizeCookies([
+    { name: 'dup', value: 'DOMAINSCOPED', domain: '.domain.com' },
+    { name: 'dup', value: 'HOSTONLY', domain: 'domain.com' }
+  ], 'https://domain.com/');
+  assertEqual(pair.cookies.length, 2, 'both scopes survive, as the browser keeps both');
+  assertEqual(pair.cookies.map(c => c.domain), ['.domain.com', 'domain.com'], 'in declaration order');
+  assertEqual(pair.errors.length, 0, 'and neither is reported as a duplicate');
+
+  // Still collapsed: an identity the browser really does fold into one. The
+  // domain is case-insensitive there (measured: '.DOMAIN.com' and '.domain.com'
+  // leave ONE cookie), so the key lowercases while keeping the dot.
+  const exact = normalizeCookies([
+    { name: 'c', value: 'first', domain: '.DOMAIN.com' },
+    { name: 'c', value: 'second', domain: '.domain.com' }
+  ], 'https://domain.com/');
+  assertEqual(exact.cookies.length, 1, 'a case-only difference is one cookie');
+  assertEqual(exact.cookies[0].value, 'second', 'the last declaration still wins');
+  assert(exact.errors.some(e => e.includes('declared more than once')), 'and is still reported');
+  return '2 kept for dot/dotless, 1 for a case-only repeat';
+});
+
+check('unit', 'cookies: a negative expires is a session cookie, not a dead one', async () => {
+  // A negative `expires` is CDP's own way to say "session cookie". Measured -1,
+  // -2, -0.5 and -86400: all four are stored and read back as
+  // `expires: -1, session: true`, i.e. they survive the whole run, which is
+  // what a load-time gate wants. The past check fired on them anyway and told
+  // the operator a working config would "never be sent". The boundary is 0, not
+  // now: `expires: 0` is not stored, nor is `expires: 1`.
+  for (const exp of [-1, -2, -0.5, -86400]) {
+    const r = normalizeCookies([{ name: 'gate', value: '1', expires: exp }], 'https://www.domain.com/');
+    assertEqual(r.cookies[0].expires, exp, `expires=${exp} is passed through`);
+    assertEqual(r.errors.length, 0, `expires=${exp} is not reported as past`);
+  }
+  // Everything from 0 upwards is a real timestamp and still judged.
+  for (const exp of [0, 1, 1000000000]) {
+    const r = normalizeCookies([{ name: 'gate', value: '1', expires: exp }], 'https://www.domain.com/');
+    assert(r.errors.some(e => e.includes('in the PAST')), `expires=${exp} is still reported as past`);
+  }
+  const future = normalizeCookies([{ name: 'gate', value: '1', expires: Math.floor(Date.now() / 1000) + 3600 }], 'https://www.domain.com/');
+  assertEqual(future.errors.length, 0, 'an hour from now is silent');
+  const millis = normalizeCookies([{ name: 'gate', value: '1', expires: Date.now() }], 'https://www.domain.com/');
+  assert(millis.errors.some(e => e.includes('MILLISECONDS')), 'a millisecond timestamp is still caught');
+  return '4 negatives silent, 0/1/past reported, ms reported';
+});
+
+check('unit', 'cookies: the leak warning counts only what is really left in the jar', async () => {
+  // The teardown warning says how many cookies a later URL on this host may
+  // inherit, so it has to exclude everything that cannot be inherited. Two
+  // kinds sit in the list and cannot: one a starting URL re-claimed (left alone
+  // on purpose), and one the browser rejected at seed time, which
+  // applySiteCookies reports in the normalized list by design -- the check
+  // above pins that contract. Counting those overstated the leak; the earlier
+  // fix removed the first and missed the second.
+  const seeded = () => [
+    { name: 'live', value: '1', domain: '.domain.com', path: '/' },
+    { name: 'never', value: '2', domain: '.domain.com', path: '/' }
+  ];
+  const jar = [{ name: 'live', value: '1', domain: '.domain.com', path: '/' }];
+  const pageWith = (cookies, deleteCookie) => ({ browserContext: () => ({ cookies, deleteCookie }) });
+  // null when nothing was warned about, so a missing warning cannot read as 0.
+  const warned = (output) => {
+    const m = output.match(/Could not remove (\d+) seeded cookie/);
+    return m ? Number(m[1]) : null;
+  };
+
+  // The delete fails and we know the jar: only 'live' can be inherited.
+  let s = seeded();
+  retainSeeded(s);
+  let { output } = await captureLogs(() => removeCookies(pageWith(
+    async () => jar, async () => { throw new Error('Target closed'); }), s, false));
+  assertEqual(warned(output), 1, 'the cookie that never landed is not counted');
+
+  // The jar READ fails, so nothing is known -- report everything releasable.
+  s = seeded();
+  retainSeeded(s);
+  ({ output } = await captureLogs(() => removeCookies(pageWith(
+    async () => { throw new Error('Session closed'); }, async () => {}), s, false)));
+  assertEqual(warned(output), 2, 'an unread jar reports every releasable cookie');
+
+  // The one live cookie is re-claimed mid-teardown and the delete then fails:
+  // nothing is at risk, so there is nothing to warn about.
+  s = seeded();
+  retainSeeded(s);
+  ({ output } = await captureLogs(() => removeCookies(pageWith(
+    async () => { retainSeeded([jar[0]]); return jar; },
+    async () => { throw new Error('Target closed'); }), s, false)));
+  assertEqual(warned(output), null, 'a re-claimed cookie is not a leak, so the warning is silent');
+  return 'warned 1, 2 and nothing for the three failure shapes';
+});
+
 check('unit', 'cookies: a non-boolean secure/httpOnly is reported, not coerced in silence', async () => {
   // `secure` and `httpOnly` are strict === true, so anything else means false.
   // Every other bad field in this module is reported; these two coerced in
@@ -810,6 +908,56 @@ check('browser', 'cookie teardown keeps cookies re-claimed during the handoff', 
     assertEqual(last.removed, 4, 'the newcomer still releases them when it finishes');
     assertEqual((await p1.browserContext().cookies()).length, 0, 'jar after the newcomer finishes');
     return 'kept 4 during the handoff, released 4 after';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'Chrome keeps dot and dotless apart, and treats a negative expires as a session', async (ctx) => {
+  const browser = await launchBrowser([resolverRuleArg()]);
+  try {
+    // Both halves here are set by Chrome, not by our code, so reading the module
+    // cannot verify them -- and both were read wrong. normalizeCookies collapsed
+    // the dot/dotless pair believing the browser already had, and warned that a
+    // negative `expires` would "never be sent".
+    const page = await browser.newPage();
+    const ctxt = page.browserContext();
+
+    const cfg = { cookies: [
+      { name: 'dup', value: 'DOMAINSCOPED', domain: `.${SITE}` },
+      { name: 'dup', value: 'HOSTONLY', domain: SITE },
+      { name: 'sess', value: 'S', expires: -1 }
+    ] };
+    const seeded = (await applySiteCookies(page, cfg, `${ctx.server.apexBase}/`, false, false, true)).cookies;
+    assertEqual(seeded.length, 3, 'all three are normalized, the pair not collapsed');
+
+    const jar = await ctxt.cookies();
+    assertEqual(jar.filter(c => c.name === 'dup').map(c => c.domain).sort(), [`.${SITE}`, SITE].sort(),
+      'Chrome stores the dotted and the host-only cookie separately');
+    const sess = jar.find(c => c.name === 'sess');
+    assert(sess && sess.session === true, 'a negative expires is stored as a SESSION cookie');
+
+    // ...and it is really sent, which is the claim the old warning denied.
+    await page.goto(`${ctx.server.apexBase}/gate`, { waitUntil: 'domcontentloaded' });
+    const apex = ctx.server.lastHit().cookie || '';
+    assert(/dup=DOMAINSCOPED/.test(apex) && /dup=HOSTONLY/.test(apex),
+      `the apex request carries both scopes (got ${JSON.stringify(apex)})`);
+    assert(/sess=S/.test(apex), `the session cookie is sent (got ${JSON.stringify(apex)})`);
+
+    // The host-only one stops at the apex; only the dotted one reaches www.
+    await page.goto(`${ctx.server.wwwBase}/gate`, { waitUntil: 'domcontentloaded' });
+    const sub = ctx.server.lastHit().cookie || '';
+    assert(/dup=DOMAINSCOPED/.test(sub) && !/dup=HOSTONLY/.test(sub),
+      `the subdomain gets the dotted cookie only (got ${JSON.stringify(sub)})`);
+
+    // Teardown stays symmetric even though the pair shares ONE refcount
+    // identity: cookieKey() ignores the dot, so both claims land on one key and
+    // both releases come off it. Keeping the pair apart in normalizeCookies
+    // would strand a cookie for the rest of the run if that had drifted.
+    const removed = await removeCookies(page, seeded, false);
+    assertEqual(removed.removed, 3, 'the last holder releases all three');
+    assertEqual((await ctxt.cookies()).length, 0, 'jar after teardown');
+    return 'two dup cookies + a session cookie, sent, then all released';
   } finally {
     await browser.close();
   }
