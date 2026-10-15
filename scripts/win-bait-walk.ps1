@@ -315,7 +315,7 @@ $stopReason = "max rounds reached ($MaxRounds)"
 $blocked = New-Object System.Collections.Generic.List[string]
 $found   = New-Object System.Collections.Generic.List[string]
 # What the dig gate actually decided, per root, and on which name. The report at
-# the end used to re-derive a verdict with its own hardcoded houston/veda NS check
+# the end used to re-derive a verdict with its own hardcoded nameserver check
 # against the root -- so it printed "fingerprint differs" for hosts the gate had
 # just CONFIRMED and enumerated, because this operator's parked-apex family
 # matches only on the serving subdomain. A report that can disagree with the gate
