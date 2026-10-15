@@ -390,7 +390,32 @@ try {
     }
 
     $hosts = Get-BaitHosts (Join-Path $OutDir "$roundName.log")
-    if (-not $hosts -or $hosts.Count -eq 0) { Write-Host "    no loader urls in this capture; stopping"; $stopReason = "a capture contained no loader urls"; break }
+    if (-not $hosts -or $hosts.Count -eq 0) {
+      # A chain that ends in ONE hop cannot reach the "nothing new" exit below:
+      # block its only host and the loader stops serving ENTIRELY, so this round
+      # sees no loader urls at all rather than seeing already-blocked ones. That
+      # is a FULLY ENUMERATED chain, not a failed walk. Round 1 seeing nothing is
+      # a different thing -- the capture failed, or the page does not carry the
+      # loader -- so the round number is what separates the two.
+      #
+      # Measured: three of the configured sites enumerate exactly ONE host each
+      # and so were STRUCTURALLY incapable of completing. None of their
+      # authoritative lists was ever written, walk_stale fired on every run, and
+      # one list had been frozen for six days at a host its own partial file had
+      # already superseded -- the rotation was found and then thrown away.
+      # Contrast a site sitting behind a CDN interstitial, which reaches this
+      # line in ROUND 1 having found no hosts at all, and must keep reporting
+      # INCOMPLETE so a failed capture is never mistaken for a finished walk.
+      if ($round -ge 2 -and $found.Count -gt 0) {
+        Write-Host "    no loader urls left -- blocking the last host silenced the chain"
+        $completed = $true
+        $stopReason = "exhausted (blocking the last host left no loader)"
+      } else {
+        Write-Host "    no loader urls in this capture; stopping"
+        $stopReason = "a capture contained no loader urls"
+      }
+      break
+    }
     # One psl call for the whole round, before anything is reduced.
     Resolve-Roots $hosts
 
