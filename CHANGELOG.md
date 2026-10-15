@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [4.1.0] - 2026-10-15
 
 ### Highlights
 Seventy-six commits since 4.0.0, most of them circling one problem: an anti-adblock
