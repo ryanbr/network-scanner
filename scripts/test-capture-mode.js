@@ -20,7 +20,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { sniffFormat, parseCapture, selectSitesForCapture, pageUrlForSite } = require('../lib/capture');
+const { sniffFormat, parseCapture, selectSitesForCapture, pageUrlForSite, matchEntries } = require('../lib/capture');
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {
@@ -483,6 +483,52 @@ for (const evenBlocked of [false, true]) {
   check('capture: the same pattern /.../-wrapped matches identically',
     wrapRules(`/${bare}/`), ['||ads.invalid^']);
   check('capture: wrapped and bare agree', wrapRules(`/${bare}/`), wrapRules(bare));
+}
+
+// ---- a WILDCARD ignoreDomains entry filters from a capture too -------------
+// README documents ignoreDomains as supporting wildcards (`*.ads.com`), and the
+// live path implements them (an exact Set plus a compiled-wildcard list). The
+// capture path re-implemented the rule inline as exact-or-subdomain only, so a
+// wildcard entry was honoured in a live scan and silently INERT from a capture:
+// the host was published from `--har` and from har-rules.js while the same
+// config dropped it live. Latent rather than live -- no config in the tree uses
+// a wildcard, and a plain parent entry already covers subdomains -- but it is
+// the same class as `subDomains: true` and `output_regex` before them, so it is
+// closed the same way: one shared predicate, both paths calling it.
+{
+  const entries = [
+    { host: 'tracker.ads.invalid', url: 'https://tracker.ads.invalid/a.js', resourceType: 'script', rootDomain: 'ads.invalid', blocked: false },
+    { host: 'ads.invalid',         url: 'https://ads.invalid/b.js',         resourceType: 'script', rootDomain: 'ads.invalid', blocked: false },
+    { host: 'other.invalid',       url: 'https://other.invalid/c.js',       resourceType: 'script', rootDomain: 'other.invalid', blocked: false }
+  ];
+  const site = { filterRegex: '\\.js$', firstParty: false, thirdParty: true, subDomains: 1 };
+  const matched = ig => [...matchEntries(entries, site, {
+    pageUrl: 'https://page.invalid/', ignoreDomains: ig
+  }).matchedDomains].sort();
+
+  check('capture: no ignoreDomains keeps every host',
+    matched([]), ['ads.invalid', 'other.invalid', 'tracker.ads.invalid']);
+  // Plain patterns must behave exactly as the inline version did, or this is a
+  // regression dressed as a fix: matchesIgnoreDomain's non-wildcard branch is
+  // `domain === pattern || domain.endsWith('.' + pattern)`, the same expression.
+  check('capture: a plain entry still drops the host and its subdomains',
+    matched(['ads.invalid']), ['other.invalid']);
+  check('capture: a plain entry is not a suffix match on an unrelated host',
+    matched(['ds.invalid']), ['ads.invalid', 'other.invalid', 'tracker.ads.invalid']);
+  check('capture: *.ads.invalid drops the subdomain and the apex',
+    matched(['*.ads.invalid']), ['other.invalid']);
+  check('capture: ads.* drops the apex only',
+    matched(['ads.*']), ['other.invalid', 'tracker.ads.invalid']);
+  check('capture: an interior wildcard drops just what it matches',
+    matched(['tr*.ads.invalid']), ['ads.invalid', 'other.invalid']);
+
+  // Source canary, same reasoning as the subDomains one above: lib/har.js must
+  // route through the shared matcher rather than growing its own copy again.
+  const harSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'har.js'), 'utf8');
+  check('lib/har.js uses the shared ignoreDomains matcher',
+    harSrc.includes('matchesIgnoreDomain(e.host, ignoreDomains)'), true);
+  check('lib/har.js has no inline ignoreDomains re-implementation left',
+    /ignoreDomains\.some\s*\(/.test(harSrc), false);
 }
 
 fs.rmSync(dir, { recursive: true, force: true });
