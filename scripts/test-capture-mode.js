@@ -531,6 +531,81 @@ for (const evenBlocked of [false, true]) {
     /ignoreDomains\.some\s*\(/.test(harSrc), false);
 }
 
+// ---- blocked / blockDomainsByUrl / ignoreDomainsByUrl on the capture path ---
+// All three were read ONLY by the live request handler, which the capture branch
+// returns long before reaching, so one config produced different results
+// depending on which path ran it. Measured in the field: a 245-entry `blocked`
+// list including the exact bait under investigation, inert for eight days while
+// that bait answered 200 in every capture taken.
+//
+// What a recording CAN reproduce is the verdict, not the side effect: it cannot
+// be made to fetch a different host, so blocking one here never reveals the next
+// host in a fallback chain the way request.abort() does live. These checks pin
+// the verdict half; the other half is why a live scan exists.
+{
+  const e = (host, path, root) => ({
+    host, url: `https://${host}${path}`, rootDomain: root || host,
+    resourceType: 'script', blocked: false
+  });
+  const entries = [
+    e('ads.invalid', '/a.js'),
+    e('cdn.invalid', '/b.js'),
+    e('player.invalid', '/jwplayer.js')
+  ];
+  const site = { filterRegex: '\\.js$', firstParty: false, thirdParty: true };
+  const run = opts => [...matchEntries(entries, site, Object.assign(
+    { pageUrl: 'https://page.invalid/' }, opts)).matchedDomains].sort();
+
+  check('capture: baseline matches every host',
+    run({}), ['ads.invalid', 'cdn.invalid', 'player.invalid']);
+
+  // `blocked`: live aborts these, so a capture must treat them as blocked and
+  // let even_blocked decide -- not silently keep them as ordinary traffic.
+  check('capture: a host in `blocked` is treated as blocked',
+    run({ blocked: ['ads.invalid'] }), ['cdn.invalid', 'player.invalid']);
+  check('capture: even_blocked keeps a `blocked` host, as it does live',
+    run({ blocked: ['ads.invalid'], includeBlocked: true }),
+    ['ads.invalid', 'cdn.invalid', 'player.invalid']);
+  // Wildcards come free by reusing output.js's matcher rather than a fourth copy.
+  check('capture: `blocked` honours a wildcard entry',
+    run({ blocked: ['*.invalid'] }), []);
+
+  // blockDomainsByUrl: same verdict, selected by url instead of host.
+  check('capture: blockDomainsByUrl blocks by url pattern',
+    run({ blockDomainsByUrl: ['\\/b\\.js$'] }), ['ads.invalid', 'player.invalid']);
+
+  // ignoreDomainsByUrl is pure analysis and so is reproduced exactly.
+  check('capture: ignoreDomainsByUrl drops the matching root',
+    run({ ignoreDomainsByUrl: ['\\/jwplayer\\.js'] }), ['ads.invalid', 'cdn.invalid']);
+  check('capture: ignoreDomainsByUrl with no match changes nothing',
+    run({ ignoreDomainsByUrl: ['\\/nothing-here\\.js'] }),
+    ['ads.invalid', 'cdn.invalid', 'player.invalid']);
+
+  // ORDER: live, the root enters the dynamic ignore set the moment a matching
+  // url is seen and then applies for the REST of the scan -- including to
+  // requests already past. A recording holds every url up front, so the set is
+  // built in a PRE-PASS; doing it inside the loop would make entry order decide
+  // the result, which this check is here to catch.
+  const ordered = [
+    { host: 'late.invalid', url: 'https://late.invalid/rule.js', rootDomain: 'late.invalid', resourceType: 'script', blocked: false },
+    { host: 'late.invalid', url: 'https://late.invalid/jwplayer.js', rootDomain: 'late.invalid', resourceType: 'script', blocked: false }
+  ];
+  const orderedOut = [...matchEntries(ordered, site, {
+    pageUrl: 'https://page.invalid/', ignoreDomainsByUrl: ['\\/jwplayer\\.js']
+  }).matchedDomains].sort();
+  check('capture: ignoreDomainsByUrl applies even when the trigger comes LAST',
+    orderedOut, []);
+
+  // Drift canaries: both capture consumers must pass the keys, or the fix is
+  // live in lib/har.js and dead everywhere that matters.
+  const nwssSrc = fs.readFileSync(path.join(__dirname, '..', 'nwss.js'), 'utf8');
+  const hrSrc = fs.readFileSync(path.join(__dirname, 'har-rules.js'), 'utf8');
+  check('nwss.js --har passes blockDomainsByUrl to the matcher',
+    /blockDomainsByUrl,\s*\n\s*ignoreDomainsByUrl/.test(nwssSrc), true);
+  check('har-rules.js passes them too',
+    /blockDomainsByUrl: blockByUrl/.test(hrSrc), true);
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

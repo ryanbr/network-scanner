@@ -2278,6 +2278,10 @@ function setupFrameHandling(page, forceDebug) {
       // This is the failure mode lib/output.js already names -- "a config key
       // that reads as supported and silently is not is the failure mode worth
       // designing out, not re-discovering". Same class, one branch over.
+      // These keys are now APPLIED to matching here, so what is worth saying is
+      // the half that still cannot be reproduced: a recording cannot be made to
+      // fetch a different host, so blocking one here never reveals the NEXT host
+      // in a fallback chain the way a live scan or the PAC walk does.
       const inertKeys = [];
       if (globalBlocked.length) inertKeys.push(`blocked (global, ${globalBlocked.length})`);
       const siteBlocked = chosenSites.reduce((n, s) => n + (Array.isArray(s.blocked) ? s.blocked.length : 0), 0);
@@ -2285,8 +2289,9 @@ function setupFrameHandling(page, forceDebug) {
       if (blockDomainsByUrl.length) inertKeys.push(`blockDomainsByUrl (${blockDomainsByUrl.length})`);
       if (ignoreDomainsByUrl.length) inertKeys.push(`ignoreDomainsByUrl (${ignoreDomainsByUrl.length})`);
       if (inertKeys.length) {
-        console.log(messageColors.warn(`  not applied   : ${inertKeys.join(', ')}`));
-        console.log('                  these need a live scan -- a capture has nothing to cancel');
+        console.log(`  verdict-only  : ${inertKeys.join(', ')}`);
+        console.log('                  applied to matching, but a capture cannot fetch the NEXT');
+        console.log('                  host -- use a live scan to walk a fallback chain');
       }
     }
 
@@ -2310,7 +2315,15 @@ function setupFrameHandling(page, forceDebug) {
       const { matchedDomains, stats } = matchCaptureEntries(capture.entries, siteConfig, {
         pageUrl: siteUrl,
         ignoreDomains,
-        includeBlocked: siteConfig.even_blocked === true
+        includeBlocked: siteConfig.even_blocked === true,
+        // The config's own blocked / ignore-by-url keys, so one config reaches
+        // the same VERDICT whichever path runs it. The live path's side effect
+        // -- aborting the request, which can advance a fallback chain -- cannot
+        // be replayed into a recording; that is what a live scan and the PAC
+        // walk are for. The verdict is what diverged, and this closes it.
+        blocked: [...globalBlocked, ...(Array.isArray(siteConfig.blocked) ? siteConfig.blocked : [])],
+        blockDomainsByUrl,
+        ignoreDomainsByUrl
       });
       if (!silentMode) {
         console.log(`  matching      : ${stats.total} requests -> ${stats.considered} considered -> ${stats.matched} matched` +

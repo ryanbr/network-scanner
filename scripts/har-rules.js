@@ -46,10 +46,13 @@ if (!harPath) {
 
 
 const configPath = argOf('--config');
-let siteConfig = {}, ignoreDomains = [];
+let siteConfig = {}, ignoreDomains = [], cfgBlockedList = [], blockByUrl = [], ignoreByUrl = [];
 if (configPath) {
   const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   ignoreDomains = cfg.ignoreDomains || [];
+  cfgBlockedList = cfg.blocked || [];
+  blockByUrl    = cfg.blockDomainsByUrl || [];
+  ignoreByUrl   = cfg.ignoreDomainsByUrl || [];
   const sites = cfg.sites || [];
   const sel = argOf('--site', '0');
   const byIndex = /^\d+$/.test(sel) ? sites[Number(sel)] : null;
@@ -107,7 +110,13 @@ const partyPageUrl = pageUrlForSite(har, siteUrlsForParty) || siteUrlsForParty[0
 const { matchedDomains, stats } = matchEntries(har.entries, siteConfig, {
   pageUrl: partyPageUrl,
   ignoreDomains,
-  includeBlocked
+  includeBlocked,
+  // Same three keys nwss.js --har now passes. These two tools read the same
+  // config and the same capture and must not disagree -- they already did once
+  // over even_blocked, which gave 2 rules through one and 5 through the other.
+  blocked: cfgBlockedList,
+  blockDomainsByUrl: blockByUrl,
+  ignoreDomainsByUrl: ignoreByUrl
 });
 
 console.log(`\nmatching: ${stats.total} requests -> ${stats.considered} considered -> ${stats.matched} matched` +
