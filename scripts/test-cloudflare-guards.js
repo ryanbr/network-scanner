@@ -44,7 +44,8 @@ function loadInternals() {
     '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
-    'clickInShadowDOM, attemptChallengeSolveWithTimeout, FAST_TIMEOUTS, TIMEOUTS };\n';
+    'clickInShadowDOM, attemptChallengeSolveWithTimeout, FAST_TIMEOUTS, TIMEOUTS, ' +
+    'buildOutcomeString, CHALLENGE_HTTP_STATUSES };\n';
   const m = new Module(CF_PATH, null);
   m.filename = CF_PATH;
   m.paths = Module._nodeModulePaths(path.dirname(CF_PATH));
@@ -485,6 +486,68 @@ const DETACHED = 'Attempted to use detached Frame';
       await browser.close();
       srv.close();
     }
+  }
+
+  // --- the outcome tag must not say 'ok' for a page that is still challenged ---
+  // Measured 2026-11-09 on a real site: the per-URL line read
+  //   Outcome: ok | clearance=no | cf_bm=no | http=403
+  // with 20 cdn-cgi/challenge-platform requests in the same run, and that 'ok'
+  // was read as "we got through". Both the status and the clearance state were
+  // already printed on that line; neither reached the verdict. Same class as the
+  // 11ms 'solved' this suite was built for, one tag over.
+  {
+    const { _internals: I } = loadInternals();
+    const { buildOutcomeString, CHALLENGE_HTTP_STATUSES } = I;
+    const base = {
+      overallSuccess: true,
+      phishingWarning: { attempted: false, success: true },
+      verificationChallenge: { attempted: false, success: true }
+    };
+
+    eq('403 with nothing attempted is still_challenged, not ok',
+      buildOutcomeString(base, null, { httpStatus: 403, bypassEnabled: true }),
+      'still_challenged(403)');
+    eq('503 interstitial is still_challenged too',
+      buildOutcomeString(base, null, { httpStatus: 503, bypassEnabled: true }),
+      'still_challenged(503)');
+
+    // Narrow on purpose: an ORIGIN 404/500 is not a challenge. If this ever
+    // starts tagging those, every ordinary error page becomes a false alarm.
+    eq('an origin 404 stays ok',
+      buildOutcomeString(base, null, { httpStatus: 404, bypassEnabled: true }), 'ok');
+    eq('an origin 500 stays ok',
+      buildOutcomeString(base, null, { httpStatus: 500, bypassEnabled: true }), 'ok');
+    check('the challenge-status set is exactly 403 and 503',
+      CHALLENGE_HTTP_STATUSES.size === 2 && CHALLENGE_HTTP_STATUSES.has(403) &&
+      CHALLENGE_HTTP_STATUSES.has(503));
+
+    // A solve must still win over the status: Cloudflare can answer 403 on the
+    // challenge document and then clear, so a successful solve is the stronger
+    // evidence and must not be downgraded.
+    eq('a solved challenge outranks a challenge status',
+      buildOutcomeString({ ...base, verificationChallenge: { attempted: true, success: true, method: 'turnstile' } },
+        null, { httpStatus: 403, bypassEnabled: true }), 'solved(turnstile)');
+
+    // --- disabled is not the same as "nothing there" -------------------------
+    // `no_indicators` means detection ran and found nothing. There was no tag at
+    // all for "found plenty, but cloudflare_bypass is false", so that reported
+    // 'ok' and pointed the investigation at this module instead of at a config
+    // flag that defaults to false.
+    eq('bypass disabled reports skipped(bypass_disabled)',
+      buildOutcomeString(base, null, { httpStatus: 200, bypassEnabled: false }),
+      'skipped(bypass_disabled)');
+    eq('disabled takes precedence over the status, since nothing was even tried',
+      buildOutcomeString(base, null, { httpStatus: 403, bypassEnabled: false }),
+      'skipped(bypass_disabled)');
+    eq('no_indicators still wins -- detection ran and found nothing',
+      buildOutcomeString({ ...base, skippedNoIndicators: true }, null,
+        { httpStatus: 403, bypassEnabled: false }), 'no_indicators');
+    eq('a timeout still wins over both new tags',
+      buildOutcomeString({ ...base, timedOut: true }, null,
+        { httpStatus: 403, bypassEnabled: false }), 'timeout');
+    // No evidence passed at all (older callers): must behave exactly as before.
+    eq('with no evidence argument the tag is unchanged',
+      buildOutcomeString(base, null), 'ok');
   }
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
