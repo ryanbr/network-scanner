@@ -149,6 +149,37 @@ const seenAny = (set, list) => list.some(t => set.has(t));
   eq('referrer_disable: a non-string item is an error',
     validateReferrerDisable(['ok.example', 7]).isValid, false);
 
+  console.log('\n=== isValidUrl: a scheme is not a url (fix 4) ===');
+  // A prefix test cannot see whether there is a HOST, so 'https://' passed
+  // validation and then became a Referer header with no origin in it.
+  eq('"https://" with no host is rejected', validateReferrerConfig('https://').isValid, false);
+  eq('"http://" with no host is rejected', validateReferrerConfig('http://').isValid, false);
+  eq('a space in the authority is rejected',
+    validateReferrerConfig('https://ex ample.com/').isValid, false);
+  eq('a real url still passes', validateReferrerConfig('https://ok.example/').isValid, true);
+  eq('a single-label host still passes', validateReferrerConfig('http://a/').isValid, true);
+
+  // STRICTLY a tightening: the scheme prefix test is kept, so nothing that was
+  // rejected before is accepted now. Parsing alone would have widened these two
+  // -- schemes are case-insensitive to the parser, and the WHATWG parser is
+  // lenient about the slashes for special schemes. Pinned so a later "simplify
+  // this to new URL().protocol" cannot quietly widen what a config may hold.
+  eq('an uppercase scheme stays rejected, as before',
+    validateReferrerConfig('HTTPS://ok.example/').isValid, false);
+  eq('a slash-less scheme stays rejected, as before',
+    validateReferrerConfig('https:ok.example').isValid, false);
+  eq('a non-http scheme stays rejected', validateReferrerConfig('ftp://x.example/').isValid, false);
+
+  // ...and it must reach every consumer of isValidUrl, not just the string case.
+  eq('a hostless url inside an ARRAY config is rejected',
+    validateReferrerConfig(['https://ok.example/', 'https://']).isValid, false);
+  eq('a hostless url in custom mode is rejected',
+    validateReferrerConfig({ mode: 'custom', url: 'https://' }).isValid, false);
+  eq('generation returns empty for a hostless string config',
+    getReferrerForUrl('https://t.example/', 'https://', []), '');
+  eq('generation returns empty for a hostless custom url',
+    getReferrerForUrl('https://t.example/', { mode: 'custom', url: 'https://' }, []), '');
+
   console.log('\n=== generation: the modes themselves ===');
   eq('direct_navigation yields no referrer',
     getReferrerForUrl('https://t.example/', { mode: 'direct_navigation' }, []), '');
