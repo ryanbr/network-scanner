@@ -2,6 +2,15 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Changed
+- **Firefox spoof pinned to 160.0** (was 159.0). Mozilla's product-details API reports `LATEST_FIREFOX_VERSION: 160.0`, with `161.0b1` as Devel, so 160 is current Stable. `scripts/test-ua-consistency.js` fetches that API live and had gone red on the stale pin (48 passed, 1 failed) — the check doing exactly its job. Three surfaces carry the number (`firefox`, `firefox_mac`, `firefox_linux`), each in both `rv:` and `Firefox/`, and the suite pins those two majors equal so they cannot drift apart. `navigator.buildID` stays at the frozen `20181001000000` — Mozilla froze it in Firefox 64 for anti-fingerprinting, so it does not move with releases — and `Gecko/20100101` stays a frozen trail, not a date. Chrome's pin is untouched: `157.0.8103.39` is still served Stable.
+- **Fingerprint injection stopped asking the same question up to four times per page.** `validatePageForInjection` costs a CDP round-trip, and all three spoofing techniques called it immediately after their own `isBrowserDead` check — which is a strict superset of the validator's synchronous half (page closed, browser disconnected, plus `browser.process().killed`). Running back-to-back from `applyAllFingerprintSpoofing`, they could only ever get the same answer. The probe now runs once for the whole chain: measured 3 round-trips to 2 for a `userAgent` + `fingerprint_protection` site, 4 to 2 with `isBrave` as well, and 0 to 0 for an explicit `userAgent: false` opt-out, where a gate mirroring the three techniques' own first-line guards skips the probe rather than adding one. A page that dies mid-chain is still caught, by `isBrowserDead` and the existing per-technique try/catch. One behavioural change, in the right direction: a failed probe now skips the entire chain instead of letting a later technique apply spoofed hardware under the real headless UA, which is the kind of one-property contradiction a fingerprinter reads as a tell.
+
+### Fixed
+- **The README claimed user agents "are automatically updated to latest versions".** They are hand-pinned constants, and the line still named Chrome 131 / Firefox 133 / Safari 18.2 — 26 Chrome majors behind the actual pin. The claim is the worse half of the error: it tells a reader the pins maintain themselves, which is how the line rotted that far unnoticed. It now names the pinning site, the selection rule (population share, not recency) and the suite that catches staleness.
+
 ## [4.1.1] - 2026-11-10
 
 ### Fixed

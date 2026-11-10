@@ -860,7 +860,7 @@ your_username ALL=(root) NOPASSWD: /usr/bin/wg-quick, /usr/bin/wg
 - Validation tools help ensure rule files are properly formatted before use
 - `--remove-tempfiles` removes Chrome/Puppeteer temporary files before exiting, avoids disk space issues
 - For maximum stealth, combine `fingerprint_protection: "random"` with appropriate `referrer_headers` modes
-- User agents are automatically updated to latest versions (Chrome 131, Firefox 133, Safari 18.2)
+- User agents are hand-pinned in `lib/fingerprint.js` (`USER_AGENT_COLLECTIONS`), chosen by population share rather than recency — currently Chrome 157, Firefox 160, Safari 26.6. `scripts/test-ua-consistency.js` checks each pin against the vendor's own version API (Google's version-history, Mozilla's product-details), so a stale pin fails the suite instead of going unnoticed
 - Referrer headers work independently from fingerprint protection - use both for best results
 - VPN connections (`vpn`/`openvpn`) are established before scanning and torn down after the site completes
 - If an `.ovpn` file contains embedded credentials, no additional auth config is needed in the JSON
