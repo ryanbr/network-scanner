@@ -33,7 +33,8 @@ const { execFile } = require('child_process');
 
 const REPO = path.join(__dirname, '..');
 const {
-  CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION, USER_AGENT_COLLECTIONS
+  CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION, USER_AGENT_COLLECTIONS,
+  acceptLanguageFor
 } = require(path.join(REPO, 'lib', 'fingerprint.js'));
 
 let passed = 0, failed = 0;
@@ -87,6 +88,27 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
     !!ffShape, USER_AGENT_COLLECTIONS.get('firefox'));
   if (ffShape) {
     eqJSON('firefox UA: rv: and Firefox/ are the same major', ffShape[1], ffShape[2]);
+  }
+
+  console.log('\n=== Accept-Language matches the UA family on every transport ===');
+  // Firefox sends ";q=0.5", Chromium ";q=0.9". The rule has three consumers --
+  // nwss.js at the HTTP layer, lib/curl.js and lib/grep.js on their curl
+  // invocations -- and one definition, acceptLanguageFor. Pin the mapping for
+  // every collection entry so a new UA family cannot quietly inherit the wrong
+  // q-value.
+  for (const [key, ua] of USER_AGENT_COLLECTIONS) {
+    const want = key.startsWith('firefox') ? 'en-US,en;q=0.5' : 'en-US,en;q=0.9';
+    eqJSON(`acceptLanguageFor(${key})`, acceptLanguageFor(ua), want);
+  }
+  // Wiring, not behaviour: the two curl transports must ASK for the value
+  // rather than carry their own copy. Both held a hardcoded ";q=0.5" that went
+  // out under Chrome UAs too, so this guards the specific regression.
+  for (const f of ['lib/curl.js', 'lib/grep.js']) {
+    const src = fs.readFileSync(path.join(REPO, f), 'utf8');
+    check(`${f} derives Accept-Language from the UA`,
+      src.includes('Accept-Language: ${acceptLanguageFor(userAgent)}'), f);
+    check(`${f} carries no hardcoded Accept-Language`,
+      !/'Accept-Language: en-US/.test(src), f);
   }
 
   console.log(`\n=== pinned identity: Chrome ${major}, build ${CHROME_BUILD} ===`);
@@ -144,7 +166,7 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
 
   // --- local server: records the document request's headers, and receives the
   // --- page's own view of navigator.userAgentData back as a query string.
-  const captured = { headers: null, js: null };
+  const captured = { headers: null, js: null, fetchHeaders: null };
   const PORT = 8353;
   const srv = http.createServer((req, res) => {
     if (req.url === '/') {
@@ -164,12 +186,20 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
               manifestVersion = window.chrome.runtime.getManifest().version;
             }
           } catch (e) { manifestVersion = 'threw: ' + e.message; }
+          // A page-initiated fetch() carrying NO explicit headers, so the
+          // request shows whatever the engine -- or our spoof -- decided.
+          try { await fetch('/fetchprobe'); } catch (e) { /* recorded as absent */ }
           img.src = '/report?d=' + encodeURIComponent(JSON.stringify({
             userAgent: navigator.userAgent, brands: d ? d.brands : null,
             platform: d ? d.platform : null, mobile: d ? d.mobile : null, high: hi,
             manifestVersion }));
         })();
       </script></body></html>`);
+    }
+    if (req.url.startsWith('/fetchprobe')) {
+      captured.fetchHeaders = req.headers;
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end('ok');
     }
     if (req.url.startsWith('/report')) {
       try { captured.js = JSON.parse(decodeURIComponent(req.url.split('?d=')[1])); } catch { /* reported below */ }
@@ -270,6 +300,30 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
   // ones present and correctly shaped. A Firefox UA that still answers
   // navigator.userAgentData, or reports Chrome's productSub, contradicts
   // itself in one line.
+  console.log('\n=== page-initiated fetch() must not contradict the spoofed family ===');
+  // The engine underneath is always Chromium, which sends "en-US,en;q=0.9";
+  // Firefox sends ";q=0.5". So a chrome* spoof has to keep the engine's own
+  // value, and a real fetch() with no Accept sends "*/*" -- not a navigation
+  // Accept. lib/fingerprint.js used to set the Gecko q-value and a document
+  // Accept unconditionally, which made every chrome-spoofed page fetch
+  // contradict its own UA; these pin that it is Gecko-only now.
+  if (!captured.fetchHeaders) {
+    check('fetch() headers were captured', false, 'no /fetchprobe request arrived');
+  } else {
+    const fh = Object.fromEntries(
+      Object.entries(captured.fetchHeaders).map(([k, v]) => [k.toLowerCase(), v]));
+    check("chrome fetch(): Accept-Language is NOT Firefox's q=0.5",
+      fh['accept-language'] !== 'en-US,en;q=0.5', String(fh['accept-language']));
+    check("chrome document: Accept-Language is NOT Firefox's q=0.5",
+      h['accept-language'] !== 'en-US,en;q=0.5', String(h['accept-language']));
+    eqJSON('chrome: document and fetch() agree on Accept-Language',
+      fh['accept-language'], h['accept-language']);
+    eqJSON('chrome fetch(): Accept is the fetch default, not a navigation Accept',
+      fh['accept'], '*/*');
+    eqJSON('chrome fetch(): User-Agent still carries the spoof',
+      fh['user-agent'], js.userAgent);
+  }
+
   console.log('\n=== Firefox family coherence ===');
   const ffUa = USER_AGENT_COLLECTIONS.get('firefox');
   const ffMajor = (ffUa.match(/Firefox\/(\d+)/) || [])[1];
@@ -278,14 +332,18 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
   check('Gecko trail is the frozen 20100101, not a release date',
     /Gecko\/20100101/.test(ffUa), ffUa);
 
-  const ffCaptured = { js: null };
+  const ffCaptured = { js: null, headers: null, fetchHeaders: null };
   const FF_PORT = 8355;
   const ffSrv = http.createServer((req, res) => {
     if (req.url === '/') {
+      ffCaptured.headers = req.headers;
       res.writeHead(200, { 'Content-Type': 'text/html' });
       return res.end(`<html><body><script>
         (async () => {
           const img = new Image();
+          // A page-initiated fetch() carrying NO explicit headers, so the
+          // request shows whatever the engine -- or our spoof -- decided.
+          try { await fetch('/fetchprobe'); } catch (e) { /* recorded as absent */ }
           img.src = '/report?d=' + encodeURIComponent(JSON.stringify({
             userAgent: navigator.userAgent,
             hasUserAgentData: ('userAgentData' in navigator) || ('userAgentData' in Navigator.prototype),
@@ -305,6 +363,11 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
           }));
         })();
       </script></body></html>`);
+    }
+    if (req.url.startsWith('/fetchprobe')) {
+      ffCaptured.fetchHeaders = req.headers;
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      return res.end('ok');
     }
     if (req.url.startsWith('/report')) {
       try { ffCaptured.js = JSON.parse(decodeURIComponent(req.url.split('?d=')[1])); } catch { /* reported below */ }
@@ -378,6 +441,28 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
     check('plugins and mimeTypes agree (0 plugins must mean 0 mimeTypes)',
       (f.plugins === 0) === (f.mimeTypes === 0),
       `plugins=${f.plugins} mimeTypes=${f.mimeTypes}`);
+    // The Gecko half of the same question: here the override IS required,
+    // because the Chromium underneath would otherwise send q=0.9 against a
+    // Firefox UA.
+    if (!ffCaptured.fetchHeaders) {
+      check('firefox fetch() headers were captured', false, 'no /fetchprobe request arrived');
+    } else {
+      const ffh = Object.fromEntries(
+        Object.entries(ffCaptured.fetchHeaders).map(([k, v]) => [k.toLowerCase(), v]));
+      eqJSON("firefox fetch(): Accept-Language is Gecko's q=0.5",
+        ffh['accept-language'], 'en-US,en;q=0.5');
+      // The point of setting it at the HTTP layer: the DOCUMENT request has to
+      // carry it too. A fetch()-only override left this on Chromium's q=0.9,
+      // so the one request matching the UA disagreed with its own page.
+      eqJSON("firefox document: Accept-Language is Gecko's q=0.5",
+        ffCaptured.headers && ffCaptured.headers['accept-language'], 'en-US,en;q=0.5');
+      eqJSON('firefox: document and fetch() agree on Accept-Language',
+        ffh['accept-language'], ffCaptured.headers && ffCaptured.headers['accept-language']);
+      eqJSON('firefox fetch(): Accept is the fetch default',
+        ffh['accept'], '*/*');
+      eqJSON('firefox fetch(): User-Agent still carries the spoof',
+        ffh['user-agent'], f.userAgent);
+    }
   }
 
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);

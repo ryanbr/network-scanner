@@ -18,7 +18,7 @@ const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = requi
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
-const { applyAllFingerprintSpoofing, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION } = require('./lib/fingerprint');
+const { applyAllFingerprintSpoofing, acceptLanguageFor, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription, outputKeyFromUrl } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
@@ -3345,6 +3345,23 @@ function setupFrameHandling(page, forceDebug) {
             chHeaders['Sec-CH-Device-Memory'] = '8';
           }
           await page.setExtraHTTPHeaders(chHeaders);
+        } else if (!useObscura && siteConfig.userAgent &&
+            siteConfig.userAgent.toLowerCase().startsWith('firefox')) {
+          // Accept-Language for the Gecko families, set at the HTTP layer so
+          // EVERY request carries it -- document, subresources and fetch()
+          // alike. Firefox sends ";q=0.5" where Chromium sends ";q=0.9", and
+          // the engine underneath is always Chromium, so without this a
+          // firefox* spoof contradicted its own UA on every request. A
+          // fetch()-only JS wrapper in lib/fingerprint.js used to cover the
+          // one case: measured, that left the document, the image and the
+          // script on q=0.9 while the single fetch() sent q=0.5, so the only
+          // request matching the UA disagreed with its own page. One header in
+          // one place replaces it, and Firefox runs carry one less patched
+          // global. Chrome and Safari are left alone: q=0.9 is already right
+          // for both, so the engine's own value needs no help.
+          await page.setExtraHTTPHeaders({
+            'Accept-Language': acceptLanguageFor(USER_AGENT_COLLECTIONS.get(siteConfig.userAgent.toLowerCase()))
+          });
         }
       } catch (fingerprintErr) {
         if (fingerprintErr.message.includes('Session closed') || 
