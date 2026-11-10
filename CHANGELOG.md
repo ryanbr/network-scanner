@@ -2,6 +2,27 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
+## [Unreleased]
+
+### Fixed
+- **`--compare` reduced every Pi-hole rule to `(` and then discarded them all.** `formatDomain` emits `(^|\.)host\.com$` — a regex whose `^` sits at index 1 — and the normalizer's caret-suffix strip (`/\^.*$/`) cut from the first caret to end of line, so the comparison set held a single key that every rule matched. Measured: `--pihole --compare` wrote an EMPTY output file while printing "Filtered 2 existing rules, 0 unique rules remaining" and "Rules saved to", which reads as success. The strip chain is now adblock-only; pihole, unbound, dnsmasq and privoxy compare as whole lines.
+- **`--compare` split header blocks and left rules under the wrong url.** A header is a BLOCK — `! <url>` plus `! Redirected from:` and `! Regex:` — but `filterUniqueRules` started a new group on every `!` line, so a live scan's 2-3 line header was torn apart and its trailing lines emitted as a group of their own. Blocks are now kept or dropped whole, and only a block that lost every rule counts as orphaned.
+- **A page still sitting on a Cloudflare challenge reported `ok`.** `buildOutcomeString` had nothing between its known states and `return 'ok'`, so indicators present + no bypass attempted + a 403 challenge body printed `Outcome: <url>: ok | clearance=no | http=403` — in a run carrying 20 `cdn-cgi/challenge-platform` and 12 turnstile requests with the main frame redirected to challenges.cloudflare.com. The evidence (`httpStatus`, the clearance cookie, cf-ray) was already collected two fields away and now reaches the verdict.
+- **`blocked`, `blockDomainsByUrl` and `ignoreDomainsByUrl` were read only by the live request handler**, so one config produced different results depending on whether `--har` or a live scan ran it. They now apply on the capture path too, as verdicts: a recording cannot be made to fetch a different host, so `blocked` still cannot advance a fallback chain there the way `request.abort()` does live.
+- **A wildcard `ignoreDomains` entry (`*.ads.com`) was honoured live and silently inert from a capture.** `lib/har.js` carried a third copy of the exact-or-subdomain rule; it now calls the shared `matchesIgnoreDomain()`. Verified against five real captures — same rules out, empty diff.
+- **Two scanners sharing one clone could corrupt the dig cache.** `saveDiskCache` wrote through a fixed `<cache>.tmp` while `loadDiskCache` unlinked that path unconditionally at startup, so a run STARTING deleted the file a run FINISHING was writing — `renameSync` then failed ENOENT into a silent catch, voiding that run's save — or two exit handlers published a mixture of two payloads. Neither crashes: the next run reports the cache unreadable and proceeds with an empty one. The tmp now carries the pid, and the startup sweep removes only a stray whose owning process is really gone.
+- **Three settings in `lib/referrer.js` read as if they worked, did nothing, and said nothing.** The worst: a `referrer_disable` entry with a path but no scheme (`example.com/private`) went through `new URL()`, threw, and matched nothing — a privacy control silently off, with the referrer still sent for a url the operator had listed, and no warning because the string contains a dot.
+- **A referrer url with a scheme but no host (`https://`) passed validation** and became a `Referer` header with no origin in it. Strictly a tightening — every string rejected before is still rejected, and the two forms a bare `new URL()` would newly accept (`HTTPS://x`, `https:x`) are pinned as rejected.
+- **The first-party final validation could not fail.** It ran after a cleanup step sharing its exact predicate, so every violation it looked for had already been deleted before it looked — and it printed "No first-party violations found - filtering working correctly", which reads as evidence that scan-time filtering worked. It now runs first, where it sees what the scan actually produced, and reports only.
+- **An `unbound` rule could escape `ignoreDomains`** in post-processing.
+
+### Changed
+- **Spoof pinned to Chrome 157.0.8103.39 and Firefox 159.0**, chosen by population share rather than recency and verified against the vendors' own APIs: per Google's version-history API, `157.0.8103.39` is the single most-served build (50.0% of major 157's 62.4%), while major 158 exists at 0.2% — claiming it would make the spoof rarer than the traffic it hides in.
+- **Dependencies** (lockfile only; `package.json` ranges untouched): puppeteer / puppeteer-core 25.16.0, adblock-rs 0.13.5, eslint 10.14.0, globals 17.14.0, lru-cache 11.5.3, p-limit 7.3.3, socks 2.8.10. `npm outdated` empty, 0 vulnerabilities.
+
+### Added
+- **Three test suites for modules that had none**: `scripts/test-compare.js` (33 checks), `scripts/test-referrer.js` (64), `scripts/test-cache-tmp.js` (8). All three are browser-free and run in about a second.
+
 ## [4.1.0] - 2026-10-15
 
 ### Highlights
