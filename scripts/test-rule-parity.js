@@ -39,8 +39,12 @@
  * No browser, no network. Runs in well under a second.
  */
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const output = require('../lib/output.js');
 const pp = require('../lib/post-processing.js');
+const validate = require('../lib/validate_rules.js');
 
 let failures = 0;
 let checks = 0;
@@ -76,6 +80,7 @@ const KEYS = [
 ];
 const hostOf = key => (key.includes('/') ? key.slice(0, key.indexOf('/')) : key);
 
+const base1 = failures;
 console.log('\n--- 1. the two copies agree on every rule nwss writes');
 let pairs = 0;
 for (const key of KEYS) {
@@ -90,9 +95,10 @@ for (const key of KEYS) {
     }
   }
 }
-check(`all ${pairs} generated rules agree across both copies`, failures === 0,
+check(`all ${pairs} generated rules agree across both copies`, failures === base1,
   `${pairs} rules, ${FORMATS ? Object.keys(FORMATS).length : 0} formats x ${KEYS.length} keys`);
 
+const base2 = failures;
 console.log('\n--- 2. the recovered domain round-trips to the host that was formatted');
 for (const key of KEYS) {
   const want = hostOf(key);
@@ -105,7 +111,7 @@ for (const key of KEYS) {
     }
   }
 }
-check('every format round-trips through output.js', failures === 0);
+check('every format round-trips through output.js', failures === base2);
 
 console.log('\n--- 3. the consequence: ignoreDomains drops the rule in every format');
 // This is what the dnsmasq and path-rule bugs actually broke. buildOutputLines
@@ -127,6 +133,63 @@ for (const [label, opts] of Object.entries(FORMATS)) {
     !text.includes(rule) && res.filteredOutCount === 1,
     `${JSON.stringify(rule)} filteredOutCount=${res.filteredOutCount}`);
   check(`${label}: a non-ignored domain survives`, text.includes(keep), JSON.stringify(keep));
+}
+
+const base4 = failures;
+console.log('\n--- 4. nwss own rule validator accepts every rule nwss writes');
+// Same shape as groups 1-3, different consumer. validateAdblockRule re-derives
+// the domain from the rule text, so it carries its own copy of every format's
+// parsing -- a THIRD copy alongside output.js and post-processing.js. Its
+// dnsmasq branches had the identical off-by-one ('local=/' is seven characters,
+// substring(6) started on the slash), so isValidDomain was handed
+// '/domain.com' and rejected it. That is not cosmetic: cleanRulesetFile keeps
+// only lines it considers valid, so --clean-rules DELETED every rule in a
+// dnsmasq or dnsmasq-old list, reporting them as invalid.
+for (const key of KEYS) {
+  for (const [label, opts] of Object.entries(FORMATS)) {
+    const rule = output.formatDomain(key, opts);
+    if (!rule) continue;
+    const res = validate.validateAdblockRule(rule);
+    if (!res || !res.isValid) {
+      check(`${label} / ${key}`, false,
+        `${JSON.stringify(rule)} -> ${res && res.error ? res.error : JSON.stringify(res)}`);
+    }
+  }
+}
+check('every generated rule passes validateAdblockRule', failures === base4);
+
+const base5 = failures;
+console.log('\n--- 5. the consequence: --clean-rules keeps every format');
+// The data-loss path. One rule per format in a single file, through the same
+// function --clean-rules uses: nothing may be removed.
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nwss-parity-'));
+  const src = path.join(dir, 'rules.txt');
+  const out = path.join(dir, 'cleaned.txt');
+  const rules = [];
+  // Both a domain key and a PATH key: the path form is the one --clean-rules
+  // used to delete, so a corpus of domain rules alone would not have caught it.
+  for (const key of ['ads.example.com', 'ads.example.com/track/']) {
+    for (const [, opts] of Object.entries(FORMATS)) {
+      const r = output.formatDomain(key, opts);
+      if (r) rules.push(r);
+    }
+  }
+  // Deduped: two formats can agree on a line (adblock vs adblockScript with no
+  // modifier), and a duplicate would be removed for a legitimate reason.
+  const unique = [...new Set(rules)];
+  fs.writeFileSync(src, '! Title: parity\n' + unique.join('\n') + '\n');
+  const res = validate.cleanRulesetFile(src, out, {});
+  const st = (res && res.stats) || {};
+  check(`clean-rules removes nothing from ${unique.length} formats`,
+    st.removed === 0 && st.invalid === 0,
+    `removed=${st.removed} invalid=${st.invalid} valid=${st.valid}`);
+  const kept = fs.readFileSync(out, 'utf8');
+  for (const r of unique) {
+    if (!kept.includes(r)) check(`clean-rules kept ${JSON.stringify(r)}`, false, 'line was dropped');
+  }
+  check('every format survives clean-rules byte-for-byte', failures === base5);
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${checks - failures} passed, ${failures} failed\n`);
