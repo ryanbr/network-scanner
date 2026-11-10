@@ -2,7 +2,7 @@
 
 All notable changes to the Network Scanner (nwss.js) project.
 
-## [Unreleased]
+## [4.1.1] - 2026-11-10
 
 ### Fixed
 - **`--compare` reduced every Pi-hole rule to `(` and then discarded them all.** `formatDomain` emits `(^|\.)host\.com$` — a regex whose `^` sits at index 1 — and the normalizer's caret-suffix strip (`/\^.*$/`) cut from the first caret to end of line, so the comparison set held a single key that every rule matched. Measured: `--pihole --compare` wrote an EMPTY output file while printing "Filtered 2 existing rules, 0 unique rules remaining" and "Rules saved to", which reads as success. The strip chain is now adblock-only; pihole, unbound, dnsmasq and privoxy compare as whole lines.
