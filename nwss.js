@@ -3396,7 +3396,10 @@ function setupFrameHandling(page, forceDebug) {
    // Parse searchstring patterns using module
    const { searchStrings, searchStringsAnd, hasSearchString, hasSearchStringAnd } = parseSearchStrings(siteConfig.searchstring, siteConfig.searchstring_and);
    let useCurl = siteConfig.curl === true; // Use curl if enabled, regardless of searchstring (reassigned to false below if curl is unavailable)
-   let useGrep = siteConfig.grep === true; // Grep can work independently
+   // Needs curl: true -- the only createGrepHandler call site is inside the
+   // `if (useCurl)` block below, so grep without curl is inert (normalizeSiteConfig
+   // warns). Reassigned to false below if the grep binary is unavailable.
+   let useGrep = siteConfig.grep === true;
 
    // Get user agent for curl if needed
    let curlUserAgent = '';

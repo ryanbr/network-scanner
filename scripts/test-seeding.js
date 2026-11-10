@@ -806,7 +806,26 @@ check('unit', 'validator: cookie scope warning and boolean coercion', async () =
 
   const typo = normalizeSiteConfig({ url: 'https://x.test', capture_popups_signl: true }, 1);
   assert(typo.warnings.some(w => w.includes('capture_popups_signal')), 'typo suggestion names the real key');
-  return 'array-url probe, 3 coercions, typo suggestion';
+
+  // grep only runs on the curl content-fetch path: the one createGrepHandler
+  // call site is inside `if (useCurl)` in nwss.js, so grep without curl is
+  // inert. --validate-config used to call that config valid with no warning.
+  const grepNoCurl = normalizeSiteConfig({ url: 'https://x.test', grep: true }, 2);
+  assert(grepNoCurl.warnings.some(w => /'grep: true' requires 'curl: true'/.test(w)),
+    'grep without curl is reported as inert');
+  const grepWithCurl = normalizeSiteConfig({ url: 'https://x.test', grep: true, curl: true }, 3);
+  assert(!grepWithCurl.warnings.some(w => /requires 'curl: true'/.test(w)),
+    'grep WITH curl stays silent');
+  // Coercion runs before the dependency check, so the truthy form warns too.
+  const grepCoerced = normalizeSiteConfig({ url: 'https://x.test', grep: 1 }, 4);
+  assert(grepCoerced.warnings.some(w => /'grep: true' requires 'curl: true'/.test(w)),
+    "grep: 1 is coerced and still reported");
+  // Warn-only on purpose: unlike clear_sitedata_full_on_reload, curl is NOT
+  // auto-enabled -- it would start downloading every matched URL's content.
+  assertEqual(grepNoCurl.warnings.length >= 1 && grepCoerced.warnings.length >= 1, true,
+    'the dependency is reported, not silently repaired');
+
+  return 'array-url probe, 3 coercions, typo suggestion, grep/curl dependency';
 });
 
 // ----- browser harnesses -----
