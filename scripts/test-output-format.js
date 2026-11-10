@@ -96,7 +96,7 @@ const FORMATS = [
   ['unbound', { unbound: true }, 'local-zone: "bit.ly." always_null'],
   ['privoxy', { privoxy: true }, '{ +block } .bit.ly'],
   ['pihole', { pihole: true }, '(^|\\.)bit\\.ly$'],
-  ['adblock+type', { adblockRules: true, resourceType: 'script' }, '||bit.ly^script']
+  ['adblock+type', { adblockRules: true, resourceType: 'script' }, '||bit.ly^$script']
 ];
 const wrongFormat = FORMATS.filter(([, opts, want]) => formatDomain('bit.ly', opts) !== want);
 check('all output formats emit a short domain correctly', wrongFormat.length === 0,

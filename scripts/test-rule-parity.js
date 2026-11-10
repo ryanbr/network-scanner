@@ -153,6 +153,20 @@ for (const key of KEYS) {
     if (!res || !res.isValid) {
       check(`${label} / ${key}`, false,
         `${JSON.stringify(rule)} -> ${res && res.error ? res.error : JSON.stringify(res)}`);
+      continue;
+    }
+    // A resource type must parse as a MODIFIER, not as path text. Without the
+    // '$' the rule validated "fine" and reported modifiers: [] -- valid syntax
+    // for a completely different rule. Scoped to the domain form: the
+    // validator only parses modifiers after '^', so a path rule carrying one
+    // (||host/path/$script) reports none, which is a known limitation rather
+    // than a malformed emission.
+    if (opts.adblockRules && opts.resourceType && !key.includes('/')) {
+      const types = (res.modifiers || []).map(m => m.type || m);
+      if (!res.hasModifiers || !types.includes(opts.resourceType)) {
+        check(`${label} / ${key}: type parses as a modifier`, false,
+          `${JSON.stringify(rule)} -> hasModifiers=${res.hasModifiers} modifiers=${JSON.stringify(types)}`);
+      }
     }
   }
 }
