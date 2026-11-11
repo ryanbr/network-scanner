@@ -60,6 +60,33 @@ eq('a non-string is rejected, not thrown on', wg.resolveConfigPath(null), null);
 eq('an absolute path is not probed under /etc/wireguard',
   wg.resolveConfigPath('/definitely/not/here'), null);
 
+// Precedence, not just existence: a bare name is wg-quick's spelling for
+// /etc/wireguard/<name>.conf, and that must be probed BEFORE a same-named file
+// in the working directory. Asserted by recording the probe order, since
+// /etc/wireguard is not writable from a test.
+{
+  const realExists = fs.existsSync;
+  const probed = [];
+  fs.existsSync = (p) => { probed.push(String(p)); return false; };
+  try { wg.resolveConfigPath('wg0'); } finally { fs.existsSync = realExists; }
+  eq('a bare name probes /etc/wireguard first', probed[0], '/etc/wireguard/wg0.conf');
+  check('a bare name still falls back to the raw value', probed.includes('wg0'),
+    JSON.stringify(probed));
+
+  const probed2 = [];
+  fs.existsSync = (p) => { probed2.push(String(p)); return false; };
+  try { wg.resolveConfigPath('/abs/wg0'); } finally { fs.existsSync = realExists; }
+  eq('an absolute path probes itself first', probed2[0], '/abs/wg0');
+  check('an absolute path never probes /etc/wireguard',
+    !probed2.some(x => x.startsWith('/etc/wireguard')), JSON.stringify(probed2));
+
+  const probed3 = [];
+  fs.existsSync = (p) => { probed3.push(String(p)); return false; };
+  try { wg.resolveConfigPath('clients/alice'); } finally { fs.existsSync = realExists; }
+  check('a relative path WITH a slash still reaches /etc/wireguard last',
+    probed3[probed3.length - 1] === '/etc/wireguard/clients/alice.conf', JSON.stringify(probed3));
+}
+
 console.log('\n--- 2. validation agrees with what the connector can resolve');
 const v = n => wg.validateVpnConfig(wg.normalizeVpnConfig(n));
 check('the .conf-less path now validates AND resolves',
@@ -79,6 +106,33 @@ check('a 15-char interface name is accepted',
   v({ config: conf, interface: 'a'.repeat(15) }).isValid === true);
 check('a traversal attempt in the interface name is rejected',
   v({ config: conf, interface: '../../etc/x' }).isValid === false);
+
+// wg-quick names the interface after the CONFIG FILE, so an explicit
+// `interface` alongside a file config cannot take effect -- tracking that name
+// made ip link show / ping -I target a device that never existed and the
+// health check fail on every attempt.
+check('interface + file config warns that the file wins',
+  v({ config: conf, interface: 'custom' }).warnings.some(w =>
+    w.includes('"interface" is ignored') && w.includes('myvpn') && w.includes('custom')),
+  JSON.stringify(v({ config: conf, interface: 'custom' }).warnings));
+check('interface alone with an inline config does NOT warn',
+  !v({ config_inline: '[Interface]\nPrivateKey=x\n[Peer]\nEndpoint=1.2.3.4:1\n', interface: 'custom' })
+    .warnings.some(w => w.includes('"interface" is ignored')));
+
+// The name that gets TRACKED, which must be the one wg-quick actually creates.
+const INLINE = '[Interface]\nPrivateKey=x\n[Peer]\nEndpoint=1.2.3.4:1\n';
+eq('a file config names the interface after the file, even with `interface` set',
+  wg.resolveInterfaceName({ config: '/etc/wireguard/wg0.conf', interface: 'custom' }), 'wg0');
+eq('a file config without .conf still yields the basename',
+  wg.resolveInterfaceName({ config: '/home/me/wg0' }), 'wg0');
+eq('an inline config DOES honour `interface` (it names the temp file)',
+  wg.resolveInterfaceName({ config_inline: INLINE, interface: 'custom' }), 'custom');
+check('an inline config with no name is stable across calls',
+  wg.resolveInterfaceName({ config_inline: INLINE }) === wg.resolveInterfaceName({ config_inline: INLINE }),
+  wg.resolveInterfaceName({ config_inline: INLINE }));
+check('the derived inline name fits IFNAMSIZ',
+  wg.resolveInterfaceName({ config_inline: INLINE }).length <= 15,
+  String(wg.resolveInterfaceName({ config_inline: INLINE }).length));
 
 console.log('\n--- 4. max_retries coercion (its own comment records the "31 attempts" bug)');
 eq('an absent max_retries defaults to 2', wg.normalizeVpnConfig({ config: conf }).max_retries, 2);
