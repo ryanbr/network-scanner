@@ -22,6 +22,9 @@
  * No network: ensureRelay binds a local listener; the upstream is never dialled.
  */
 
+const fs = require('fs');
+const net = require('net');
+const path = require('path');
 const { parseProxyUrl, prepareSocksRelays } = require('../lib/proxy');
 const { ensureRelay, getRelayPort, getRelayStats, closeAllRelays, upstreamKey } = require('../lib/socks-relay');
 
@@ -134,6 +137,64 @@ const check = (name, ok, detail) => {
       `${JSON.stringify(rotPorts)} vs ${JSON.stringify(lines2)}`);
     check('the distinguishing field is still not a credential',
       !/acct|tokenA|tokenB/.test(lines2.join('\n')), JSON.stringify(lines2));
+  }
+
+  // Relays drain CONCURRENTLY, not one after another. Three relays each
+  // holding a client that connects and never sends its SOCKS5 greeting force
+  // the DRAIN_TIMEOUT_MS path on all three at once: concurrently that is ~1x
+  // the budget, sequentially ~3x. Timed rather than asserted from the source
+  // because the defect was wall-clock on a path that runs from nwss's SIGINT
+  // handler, where the budget x N relays is the whole problem. The lower
+  // bound is load-bearing: without it the check would pass vacuously if the
+  // clients failed to stall and every server closed instantly.
+  //
+  // DRAIN_TIMEOUT_MS is module-private, so the budget is read from the
+  // shipped source and the bounds expressed as multiples of it -- the same
+  // approach test-flowproxy-budget.js takes to PER_URL_TIMEOUT_MS. Re-typed
+  // millisecond bounds would misreport the moment the constant is tuned:
+  // raise it past the hardcoded ceiling and a correctly concurrent teardown
+  // goes red for a reason that has nothing to do with concurrency.
+  {
+    await closeAllRelays(false);
+    const relaySrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'socks-relay.js'), 'utf8');
+    const drainMatch = relaySrc.match(/const DRAIN_TIMEOUT_MS = (\d+);/);
+    const budget = drainMatch ? parseInt(drainMatch[1], 10) : NaN;
+    // Checked separately so a regex that stops matching reports itself,
+    // rather than leaving the timing check to fail on NaN comparisons.
+    check('the drain budget is readable from the shipped module source',
+      Number.isInteger(budget) && budget > 0, `DRAIN_TIMEOUT_MS = ${budget}`);
+    // The stalled clients are what hold a server open, and the handshake
+    // watchdog destroys them at HANDSHAKE_TIMEOUT_MS -- which caps how slow a
+    // SEQUENTIAL teardown can look, independently of the drain budget.
+    // Measured while mutation-testing at a tuned budget of 5000: three relays
+    // sequentially took 10003ms, not 15000, because the watchdog got there
+    // first. Past roughly that point the cap falls below this check's own
+    // ceiling and the check stops discriminating -- so assert the headroom
+    // rather than let it quietly become decoration.
+    const hsMatch = relaySrc.match(/const HANDSHAKE_TIMEOUT_MS = (\d+);/);
+    const handshake = hsMatch ? parseInt(hsMatch[1], 10) : NaN;
+    check('the drain check still discriminates at the shipped constants',
+      Math.min(3 * budget, handshake) > 2 * budget,
+      `sequential ${3 * budget}ms capped by watchdog ${handshake}ms, ceiling ${2 * budget}ms`);
+    const drainPorts = [];
+    for (let i = 0; i < 3; i++) {
+      drainPorts.push(await ensureRelay(parseProxyUrl(`socks5://u:drain${i}@10.0.0.9:1080`), false));
+    }
+    const stalled = [];
+    await Promise.all(drainPorts.map(port => new Promise((resolve) => {
+      const c = net.connect(port, '127.0.0.1', () => resolve());   // connect, send nothing
+      c.on('error', () => resolve());
+      stalled.push(c);
+    })));
+    const t0 = Date.now();
+    await closeAllRelays(false);
+    const elapsed = Date.now() - t0;
+    for (const c of stalled) { try { c.destroy(); } catch (_) {} }
+    // Concurrent is ~1x the budget, sequential ~3x for three relays, so a
+    // 2x ceiling discriminates at any value of the constant.
+    check('three stalled relays drain concurrently, not one after another',
+      elapsed >= budget * 0.75 && elapsed < budget * 2,
+      `${elapsed}ms vs budget ${budget}ms (concurrent ~1x, sequential ~3x)`);
   }
 
   // A high relay count is a consequence of keying on credentials: a provider that
