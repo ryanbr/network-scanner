@@ -32,6 +32,14 @@ const { matchEntries } = require('../lib/har');
 const { pageUrlForSite, urlsOf } = require('../lib/capture');
 const { parseCapture } = require('../lib/capture');
 const { formatRules } = require('../lib/output');
+// Shared with `nwss.js --har`: one copy of the dig/whois confirmation and one
+// copy of the config normalization, because these two tools read the same
+// config and the same capture and must not disagree. They already did once,
+// over even_blocked -- 2 rules through one tool and 5 through the other.
+const { confirmCaptureDomains } = require('../lib/capture-confirm');
+const { normalizeSiteConfig } = require('../lib/validate_rules');
+const { parseDnsServers } = require('../lib/dns');
+const { enableDiskCache } = require('../lib/nettools');
 
 const args = process.argv.slice(2);
 const harPath = args.find(a => !a.startsWith('--'));
@@ -40,13 +48,28 @@ const argOf = (name, dflt = null) => {
   return i !== -1 && args[i + 1] && !args[i + 1].startsWith('--') ? args[i + 1] : dflt;
 };
 if (!harPath) {
-  console.error('usage: node scripts/har-rules.js <capture.har|netlog.json> [--config <config.json>] [--site <n|url>] [--include-blocked] [--show-skipped]');
+  console.error('usage: node scripts/har-rules.js <capture.har|netlog.json> [--config <config.json>] [--site <n|url>] [--include-blocked] [--show-skipped] [--dns <servers>] [--dns-cache]');
   process.exit(1);
 }
 
 
 const configPath = argOf('--config');
 let siteConfig = {}, ignoreDomains = [], cfgBlockedList = [], blockByUrl = [], ignoreByUrl = [];
+// Same spelling and same source as nwss: a CLI flag, not a config key. nwss
+// reads `dns` only from .nwssconfig's per-config settings map, which it turns
+// into this very flag, so taking the flag here is what keeps the two tools
+// pointed at the same resolver. Without it dig reads /etc/resolv.conf while
+// `nwss --har --dns ...` queries the configured servers, and a geo-split host
+// can answer differently -- a verdict difference, not a cosmetic one.
+const dnsServers = (() => {
+  const spec = argOf('--dns');
+  return spec ? parseDnsServers(spec) : [];
+})();
+// Same flag, same meaning, same files as a scan: without it dig/whois results
+// live only for this process, so every run of this tool re-queried names the
+// scan had already resolved into .digcache. Mirrors nwss.js's own
+// `if (dnsCacheMode) enableDiskCache();`.
+if (args.includes('--dns-cache')) enableDiskCache();
 if (configPath) {
   const cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
   ignoreDomains = cfg.ignoreDomains || [];
@@ -58,6 +81,16 @@ if (configPath) {
   const byIndex = /^\d+$/.test(sel) ? sites[Number(sel)] : null;
   siteConfig = byIndex || sites.find(s =>
     (Array.isArray(s.url) ? s.url : [s.url]).some(u => String(u).includes(sel))) || sites[0] || {};
+  // Same normalization a scan runs at startup. Without it `dig: "104.26."` --
+  // the string form the live configs use -- stays a string, every downstream
+  // Array.isArray() gate disables the feature, and this tool silently skips a
+  // confirmation that `nwss --har` performs.
+  // Index of the site actually selected, not 0: --site 4 reporting its
+  // warnings as "Site 0" sends the reader to the wrong entry.
+  const siteIdx = sites.indexOf(siteConfig);
+  const { warnings: nWarnings, errors: nErrors } = normalizeSiteConfig(siteConfig, siteIdx >= 0 ? siteIdx : 0);
+  for (const e of nErrors) console.warn('⚠ ' + e);
+  for (const w of nWarnings) console.warn('⚠ [config] ' + w);
 }
 
 let har;
@@ -107,7 +140,7 @@ const includeBlocked = args.includes('--include-blocked') || siteConfig.even_blo
 // resolution nwss.js --har uses, so the two tools cannot disagree on it.
 const siteUrlsForParty = siteConfig && siteConfig.url ? urlsOf(siteConfig) : [];
 const partyPageUrl = pageUrlForSite(har, siteUrlsForParty) || siteUrlsForParty[0] || har.pageUrl;
-const { matchedDomains, stats } = matchEntries(har.entries, siteConfig, {
+const { matchedDomains, hostsByKey, stats } = matchEntries(har.entries, siteConfig, {
   pageUrl: partyPageUrl,
   ignoreDomains,
   includeBlocked,
@@ -131,8 +164,19 @@ if (args.includes('--show-skipped') && siteConfig.filterRegex) {
   [...new Set(hit.map(e => e.url))].slice(0, 15).forEach(u => console.log(`  ${u.slice(0, 96)}`));
 }
 
-const rules = formatRules(matchedDomains, siteConfig, {});
-console.log('\nrules:');
-(Array.isArray(rules) ? rules : String(rules).split('\n')).filter(Boolean)
-  .forEach(r => console.log(`  ${r}`));
-console.log('');
+// Async only because the confirmation shells out to dig/whois. CommonJS has
+// no top-level await, so the tail runs inside an IIFE rather than the script
+// being converted to ESM for one call.
+(async () => {
+  const confirm = await confirmCaptureDomains(matchedDomains, hostsByKey, siteConfig, { dnsServers });
+  if (confirm.ran) {
+    console.log(`${confirm.tools}: ${confirm.before} candidate(s) -> ${confirm.after} confirmed ` +
+      `(${confirm.before - confirm.after} dropped)`);
+  }
+
+  const rules = formatRules(matchedDomains, siteConfig, {});
+  console.log('\nrules:');
+  (Array.isArray(rules) ? rules : String(rules).split('\n')).filter(Boolean)
+    .forEach(r => console.log(`  ${r}`));
+  console.log('');
+})();

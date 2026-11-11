@@ -606,6 +606,129 @@ for (const evenBlocked of [false, true]) {
     /blockDomainsByUrl: blockByUrl/.test(hrSrc), true);
 }
 
+// ---- dig/whois confirmation on the capture path ---------------------------
+//
+// The live path withholds a domain until dig/whois confirms it
+// (nwss.js: "if nettools validation is required ... NEVER add domains
+// immediately"). The capture path never ran that check at all -- the handler
+// is only built inside processUrl, which this branch returns long before --
+// so `dig` was inert here and a capture emitted every candidate: strictly
+// MORE rules than a scan of the same config, which reads as success.
+//
+// A fake dig on PATH keeps this hermetic. The question is which NAME gets
+// dug, and a live resolver would answer differently tomorrow.
+{
+  const shimDir = path.join(dir, 'bin');
+  fs.mkdirSync(shimDir, { recursive: true });
+  const digLog = path.join(dir, 'dig-argv.log');
+  // Answers the subdomain inside the operator's range and the registrable
+  // root outside it. That asymmetry is the point: the handler digs the output
+  // key first and only falls back to the subdomain it was HANDED, so a
+  // confirmation here proves the real host reached it rather than the key.
+  fs.writeFileSync(path.join(shimDir, 'dig'), [
+    '#!/bin/sh',
+    'echo "$@" >> ' + JSON.stringify(digLog),
+    'name=""; for a in "$@"; do case "$a" in -*|+*|A|AAAA|@*) ;; *) name="$a";; esac; done',
+    'case "$name" in cdn.*) ip=198.51.100.7 ;; *) ip=203.0.113.9 ;; esac',
+    'echo ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 1"',
+    'echo ";; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 0"',
+    'echo ""',
+    'echo ";; ANSWER SECTION:"',
+    'printf "%s.\t300\tIN\tA\t%s\n" "$name" "$ip"'
+  ].join('\n') + '\n', { mode: 0o755 });
+  process.env.PATH = shimDir + path.delimiter + process.env.PATH;
+
+  const digHar = F('dig.har');
+  fs.writeFileSync(digHar, JSON.stringify({ log: { version: '1.2', creator: { name: 't', version: '1' },
+    pages: [{ id: 'p1', startedDateTime: '2026-01-01T00:00:00.000Z', title: 'https://example.com/', pageTimings: {} }],
+    entries: [{ pageref: 'p1', startedDateTime: '2026-01-01T00:00:01.000Z', time: 1,
+      request: { method: 'GET', url: 'https://cdn.ad-loader.example/x.js', httpVersion: 'HTTP/2', cookies: [],
+                 headers: [{ name: 'Sec-Fetch-Dest', value: 'script' }], queryString: [], headersSize: -1, bodySize: -1 },
+      response: { status: 200, statusText: 'OK', httpVersion: 'HTTP/2', cookies: [], headers: [],
+                  content: { size: 1, mimeType: 'application/javascript' }, redirectURL: '', headersSize: -1, bodySize: 1 },
+      cache: {}, timings: { send: 0, wait: 1, receive: 0 } }] } }));
+
+  const digCfg = (dig) => {
+    const f = F(`dig-cfg-${String(dig).replace(/[^a-z0-9]/gi, '')}.json`);
+    fs.writeFileSync(f, JSON.stringify({ sites: [{ url: 'https://example.com/', filterRegex: 'ad-loader', dig }] }));
+    return f;
+  };
+
+  const okOut = run(['--custom-json', digCfg(['198.51.100.']), '--har', digHar]);
+  check('a dig-confirmed capture domain is emitted',
+    /\|\|ad-loader\.example\^/.test(okOut), true);
+
+  const noOut = run(['--custom-json', digCfg(['203.0.113.0']), '--har', digHar]);
+  check('a capture domain that fails dig is dropped',
+    /\|\|ad-loader\.example\^/.test(noOut), false);
+
+  // Without the hosts the matcher now carries, the handler would be handed the
+  // output key as its subdomain and the recovery dig would repeat the root --
+  // which this fake answers OUTSIDE the range, so the rule would vanish.
+  // Defensive read: if the confirmation pass never runs, dig is never invoked
+  // and this file does not exist. A throw here would abort the harness before
+  // the remaining checks report -- loud, but it hides which checks failed.
+  const dugNames = fs.existsSync(digLog) ? fs.readFileSync(digLog, 'utf8') : '';
+  check('the real host, not just the output key, reaches dig',
+    /cdn\.ad-loader\.example/.test(dugNames), true);
+
+  // normalizeSiteConfig never ran on this branch, so the string form -- which
+  // is what the live configs use -- stayed a string and every downstream
+  // Array.isArray() gate disabled the feature silently.
+  const strOut = run(['--custom-json', digCfg('203.0.113.0'), '--har', digHar]);
+  check('a string dig value is honoured here as it is in a scan',
+    /\|\|ad-loader\.example\^/.test(strOut), false);
+
+  // The invariant the even_blocked checks above exist for, extended to the
+  // confirmation pass. The two tools share one implementation
+  // (lib/capture-confirm.js) precisely so this cannot drift: a second copy is
+  // how they disagreed over even_blocked, and how extractDomainFromRule broke
+  // once in each of its two homes.
+  const hrRun = (cfg, extra = []) => {
+    try {
+      return execFileSync(process.execPath,
+        [path.join(__dirname, 'har-rules.js'), digHar, '--config', cfg, '--site', '0', ...extra],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (e) { return (e.stdout || '') + (e.stderr || ''); }
+  };
+  const rulesOf = (out) => String(out).split('\n')
+    .map(l => l.trim()).filter(l => l.startsWith('||')).sort().join(',');
+
+  check('har-rules.js applies dig too (confirmed domain survives)',
+    /\|\|ad-loader\.example\^/.test(hrRun(digCfg(['198.51.100.']))), true);
+  check('har-rules.js applies dig too (unconfirmed domain is dropped)',
+    /\|\|ad-loader\.example\^/.test(hrRun(digCfg(['203.0.113.0']))), false);
+  check('har-rules.js and nwss --har agree with dig configured',
+    rulesOf(hrRun(digCfg(['198.51.100.']))) === rulesOf(run(['--custom-json', digCfg(['198.51.100.']), '--har', digHar])), true);
+  // Pins har-rules.js's own normalizeSiteConfig call: without it the string
+  // form stays a string, Array.isArray() disables dig there, and the two
+  // tools part company on exactly the shape the live configs use.
+  check('har-rules.js and nwss --har agree on the string dig form',
+    rulesOf(hrRun(digCfg('203.0.113.0'))) === rulesOf(run(['--custom-json', digCfg('203.0.113.0'), '--har', digHar])), true);
+  check('har-rules.js and nwss --har agree when dig rejects',
+    rulesOf(hrRun(digCfg(['203.0.113.0']))) === rulesOf(run(['--custom-json', digCfg(['203.0.113.0']), '--har', digHar])), true);
+
+  // Resolver parity. dig otherwise reads /etc/resolv.conf, and a geo-split
+  // host answers differently per resolver, so this decides verdicts rather
+  // than formatting. nwss takes --dns (and .nwssconfig's `dns` is injected AS
+  // that flag -- it is never a scan-config key), so har-rules takes the same
+  // flag rather than inventing a config key nwss would ignore.
+  const argvAfter = (fn) => { fs.writeFileSync(digLog, ''); fn(); return fs.readFileSync(digLog, 'utf8'); };
+  const resCfg = digCfg(['198.51.100.']);
+  check('nwss --har routes capture digs through --dns',
+    /@9\.9\.9\.9/.test(argvAfter(() => run(['--custom-json', resCfg, '--har', digHar, '--dns', '9.9.9.9']))), true);
+  // Cache parity is asserted from SOURCE on purpose. enableDiskCache() writes
+  // .digcache at the repo root, so a behavioural check would clobber a real
+  // 10k-entry cache on a developer's machine. Verified by hand instead:
+  // har-rules --dns-cache digs once cold and zero times warm, and nwss --har
+  // --dns-cache then reads what har-rules wrote.
+  const hrSource = fs.readFileSync(path.join(__dirname, 'har-rules.js'), 'utf8');
+  check('har-rules.js honours --dns-cache, the same flag a scan uses',
+    /--dns-cache/.test(hrSource) && /enableDiskCache\(\)/.test(hrSource), true);
+  check('har-rules.js routes them through the same --dns',
+    /@9\.9\.9\.9/.test(argvAfter(() => hrRun(resCfg, ['--dns', '9.9.9.9']))), true);
+}
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

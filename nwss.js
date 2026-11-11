@@ -47,6 +47,8 @@ const { createCDPSession, createPageWithTimeout, setRequestInterceptionWithTimeo
 // Post-processing cleanup
 const { processResults } = require('./lib/post-processing');
 const { parseCapture, selectSitesForCapture, matchEntries: matchCaptureEntries, pageUrlForSite } = require('./lib/capture');
+// dig/whois confirmation for the capture path, shared with scripts/har-rules.js
+const { confirmCaptureDomains } = require('./lib/capture-confirm');
 const { useSubDomainsFor } = require('./lib/har');
 // Colorize various text when used
 const { messageColors, formatLogMessage } = require('./lib/colorize');
@@ -2230,6 +2232,20 @@ function setupFrameHandling(page, forceDebug) {
       process.exit(1);
     }
 
+    // Same per-site normalization the scan path runs at startup. It did not
+    // run here at all: the capture branch returns long before that loop, so a
+    // config reached this path un-normalized and several keys behaved
+    // differently depending on which path read it. `dig: "104.26."` is the
+    // one that matters most below -- every downstream consumer gates on
+    // Array.isArray(), so the string form stayed inert here while the scan
+    // path saw ["104.26."] -- but `blocked` and `resourceTypes` have the
+    // identical shape and both feed capture matching.
+    for (let i = 0; i < sites.length; i++) {
+      const { warnings: nWarnings, errors: nErrors } = normalizeSiteConfig(sites[i], i);
+      for (const e of nErrors) console.warn(messageColors.error('⚠ ' + e));
+      for (const w of nWarnings) console.warn(messageColors.warn('⚠ [config] ' + w));
+    }
+
     const chosenSites = selectSitesForCapture(sites, capture, captureSiteSel);
     if (chosenSites.length === 0) {
       const pageNote = capture.pageUrl ? ` (captured page: ${capture.pageUrl})` : '';
@@ -2313,7 +2329,7 @@ function setupFrameHandling(page, forceDebug) {
       // capture's blocked flag means the USER'S blocker cancelled it, which is
       // the same question asked of a different blocker, so the site's own
       // setting decides here too.
-      const { matchedDomains, stats } = matchCaptureEntries(capture.entries, siteConfig, {
+      const { matchedDomains, hostsByKey, stats } = matchCaptureEntries(capture.entries, siteConfig, {
         pageUrl: siteUrl,
         ignoreDomains,
         includeBlocked: siteConfig.even_blocked === true,
@@ -2329,6 +2345,27 @@ function setupFrameHandling(page, forceDebug) {
       if (!silentMode) {
         console.log(`  matching      : ${stats.total} requests -> ${stats.considered} considered -> ${stats.matched} matched` +
           (stats.skippedBlocked ? ` (${stats.skippedBlocked} skipped as blocked)` : ''));
+      }
+      // dig / whois confirmation -- the same gate the live path puts in front
+      // of matchedDomains. The implementation is shared with
+      // scripts/har-rules.js (lib/capture-confirm.js) rather than written
+      // here, because the two tools read the same config and the same capture
+      // and have already disagreed once, over even_blocked.
+      const netToolsResult = await confirmCaptureDomains(matchedDomains, hostsByKey, siteConfig, {
+        whoisDelay: siteConfig.whois_delay !== undefined ? siteConfig.whois_delay : whois_delay,
+        whoisServerMode: siteConfig.whois_server_mode || whois_server_mode,
+        processedWhoisDomains: globalProcessedWhoisDomains,
+        processedDigDomains: globalProcessedDigDomains,
+        getRootDomain,
+        dnsServers: dnsServersOverride,
+        debugLogFile,
+        forceDebug,
+        ignoreDomains,
+        matchesIgnoreDomain
+      });
+      if (netToolsResult.ran && !silentMode) {
+        console.log(`  ${netToolsResult.tools.padEnd(14)}: ${netToolsResult.before} candidate(s) -> ` +
+          `${netToolsResult.after} confirmed (${netToolsResult.before - netToolsResult.after} dropped)`);
       }
       results0.push({
         url: siteUrl,
