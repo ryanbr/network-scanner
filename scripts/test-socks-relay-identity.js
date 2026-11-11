@@ -12,10 +12,12 @@
  * providers that encode a session token in the password with a constant
  * username, where per-site rotation collapses onto the first session.
  *
- * The password is hashed into the key rather than stored, and stats report a
- * `display` field (host:port) instead of stripping the key's last segment —
- * otherwise adding the hash would have started leaking the username into stats
- * output that previously hid it.
+ * The password is hashed into the key rather than stored, and both stats and
+ * the teardown debug line report a `display` field (host:port) instead of
+ * stripping the key's last segment — once the hash was appended, stripping the
+ * last segment removed the HASH and left the username. getRelayStats was moved
+ * onto `display` at the time; closeAllRelays was not, and printed
+ * `closed relay for <host>:<port>:<username>` under --debug until it was.
  *
  * No network: ensureRelay binds a local listener; the upstream is never dialled.
  */
@@ -81,6 +83,57 @@ const check = (name, ok, detail) => {
       prepared === 2, `${prepared} relay(s) started (2 = the two distinct passwords)`);
   } finally {
     await closeAllRelays(false);
+  }
+
+  // The teardown line is the only debug output that names a relay's identity,
+  // and it was the one output path these checks never ran: every closeAllRelays
+  // here passes forceDebug=false, so the leak sat behind a flag the suite did
+  // not set while the checks above asserted the key and stats were clean.
+  {
+    await closeAllRelays(false);
+    await ensureRelay(parseProxyUrl('socks5://user1:passAAA@10.0.0.9:1080'), false);
+    const logged = [];
+    const realLog = console.log;
+    console.log = (...a) => logged.push(a.join(' ').replace(/\x1b\[[0-9;]*m/g, ''));
+    try {
+      await closeAllRelays(true);
+    } finally {
+      console.log = realLog;
+    }
+    const closeLines = logged.filter(l => /closed relay for/.test(l));
+    check('teardown debug reports the relay it closed', closeLines.length === 1,
+      `${closeLines.length} line(s)`);
+    check('teardown debug leaks neither username nor password',
+      !/user1|passAAA/.test(closeLines.join('\n')), JSON.stringify(closeLines[0]));
+    check('teardown debug still identifies the upstream by host:port',
+      /closed relay for 10\.0\.0\.9:1080(\s|$)/.test(closeLines[0] || ''),
+      JSON.stringify(closeLines[0]));
+
+    // Two relays the password-keying exists to separate: same host:port, so
+    // `display` is identical for both. Moving teardown onto `display` to stop
+    // the username leak removed the only thing that had varied between such
+    // lines, so the local port now carries it -- unique per relay, nothing
+    // sensitive, and the same value ensureRelay announced at startup.
+    await closeAllRelays(false);
+    const rotA = parseProxyUrl('socks5://acct:tokenA@10.0.0.9:1080');
+    const rotB = parseProxyUrl('socks5://acct:tokenB@10.0.0.9:1080');  // same user, rotated token
+    const rotPorts = [await ensureRelay(rotA, false), await ensureRelay(rotB, false)];
+    const logged2 = [];
+    console.log = (...a) => logged2.push(a.join(' ').replace(/\x1b\[[0-9;]*m/g, ''));
+    try {
+      await closeAllRelays(true);
+    } finally {
+      console.log = realLog;
+    }
+    const lines2 = logged2.filter(l => /closed relay for/.test(l));
+    check('two relays on one upstream get distinguishable teardown lines',
+      lines2.length === 2 && lines2[0] !== lines2[1], JSON.stringify(lines2));
+    check('each teardown line carries the local port ensureRelay announced',
+      rotPorts.length === 2 && rotPorts[0] !== rotPorts[1] &&
+      rotPorts.every(p => lines2.some(l => l.includes(`127.0.0.1:${p}`))),
+      `${JSON.stringify(rotPorts)} vs ${JSON.stringify(lines2)}`);
+    check('the distinguishing field is still not a credential',
+      !/acct|tokenA|tokenB/.test(lines2.join('\n')), JSON.stringify(lines2));
   }
 
   // A high relay count is a consequence of keying on credentials: a provider that
