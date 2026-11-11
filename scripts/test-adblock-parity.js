@@ -85,6 +85,70 @@ const TEST_LIST = [
   '||domainopt.test^$domain=publisher.test'    // domain= restricted
 ].join('\n');
 
+// Regex rules whose PATTERN contains a `$`. The options separator is `$` too,
+// so a `rule.split('$')` cut the pattern at its own end anchor: the rule lost
+// its closing `/`, stopped being recognised as a regex, AND lost every option
+// with it -- becoming an option-less path rule that matched nothing, counted as
+// neither invalid nor unsupported. 5 of the 30 regex rules in the published
+// lists are shaped this way, including one written for a rotating-host ad
+// endpoint, which is how it was found.
+const REGEX_LIST = [
+  '[Adblock Plus 2.0]',
+  '! regex parity fixture',
+  '/^https?:\\/\\/anchored\\.test\\/[a-z]+$/$image',           // $ anchor, one option
+  '/^https?:\\/\\/opts\\.test\\/[a-z]+$/$image,third-party',   // $ anchor, two options
+  '/^https?:\\/\\/plain\\.test\\/[a-z]+\\.js/$script',       // regex, no $ in the pattern
+  '/ads-path/banner.gif$image'                                    // NOT a regex: leading / plus options
+].join('\n');
+
+// A $-anchored regex with NO options at all. Held separately because the two
+// engines genuinely disagree on it (see the asymmetries group): every one of
+// the 5 $-anchored regex rules in the published lists carries options, so the
+// disagreement is unreachable in practice and is recorded rather than fixed.
+const REGEX_NO_OPTIONS_LIST = [
+  '[Adblock Plus 2.0]',
+  '! regex parity fixture, no options',
+  '/^https?:\\/\\/bare\\.test\\/[a-z]+$/',        // $ anchor, no options
+  '/^https?:\\/\\/esc\\.test\\/a\\/$/'          // ends with an ESCAPED slash, no options
+].join('\n');
+
+// A $-anchored regex carrying $popup -- an option neither engine can act on.
+// lib/adblock.js drops such rules before parsing, via a gate that derives the
+// option names itself. While that gate still used `split('$')` and the parser
+// had been taught about regex rules, the two disagreed: the gate saw the
+// option named `/`, let the rule through, and it became a live regex BLOCK
+// rule. $popup over-blocking in the JS engine alone is one of the two defects
+// this suite was written for, so it is pinned from this direction too.
+const REGEX_POPUP_LIST = [
+  '[Adblock Plus 2.0]',
+  '! regex $popup fixture',
+  '/^https?:\\/\\/popupregex\\.test\\/[a-z]+$/$popup'
+].join('\n');
+
+// A $-anchored regex EXCEPTION rule. `@@` is stripped before the rule reaches
+// the pattern/options split, so exceptions were broken in exactly the same way
+// -- and that is the worse direction: a failed exception OVER-blocks. Measured
+// on the pre-fix parser, `https://allowme.test/ok.js` was blocked despite an
+// exception that plainly allows it. No published list has one today (1
+// exception regex rule exists and its pattern carries no `$`), so this is
+// coverage for the `@@` path rather than a live defect.
+const REGEX_EXCEPTION_LIST = [
+  '[Adblock Plus 2.0]',
+  '! regex exception fixture',
+  '||allowme.test^',
+  '@@/^https?:\\/\\/allowme\\.test\\/[a-z]+\\.js$/$script'
+].join('\n');
+
+// An option VALUE that itself contains `$` and ends in `/`. This is why the
+// separator is searched for from the end and why the `/` before it must be the
+// pattern's own closing slash: a `lastIndexOf('$')` lands inside the value, and
+// an `endsWith('/')` shortcut swallows the whole options string.
+const REGEX_DOLLAR_OPTION_LIST = [
+  '[Adblock Plus 2.0]',
+  '! regex parity fixture, $ inside an option value',
+  '/^https?:\\/\\/param\\.test\\/[a-z]+$/$image,removeparam=/^utm_$/'
+].join('\n');
+
 const args = process.argv.slice(2);
 const HELP = args.includes('--help') || args.includes('-h');
 const LIST = args.includes('--list');
@@ -155,15 +219,20 @@ function loadPair(listPath) {
   };
 }
 
-/** Write the fixture list to a temp file for the duration of one check. */
-function withTestList(fn) {
+/** Write a filter list to a temp file for the duration of one check. */
+function withList(text, fn) {
   const listPath = path.join(os.tmpdir(), `nwss-parity-${process.pid}-${Math.random().toString(36).slice(2)}.txt`);
-  fs.writeFileSync(listPath, TEST_LIST);
+  fs.writeFileSync(listPath, text);
   try {
     return fn(listPath);
   } finally {
     try { fs.unlinkSync(listPath); } catch (_) { /* best effort */ }
   }
+}
+
+/** Write the fixture list to a temp file for the duration of one check. */
+function withTestList(fn) {
+  return withList(TEST_LIST, fn);
 }
 
 /**
@@ -260,6 +329,120 @@ check('verdicts', 'an exception rule wins in both engines', async () => {
         `${engine}: the exception unblocks`);
     }
     return 'block and exception both behave in both engines';
+  });
+});
+
+check('verdicts', 'a $-anchored regex rule is still parsed as a regex', async () => {
+  return withList(REGEX_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    const url = 'https://anchored.test/abc';
+    for (const engine of ['js', 'rust']) {
+      assertEqual(pair[engine].shouldBlock(url, 'https://site.test/', 'image').blocked, true,
+        `${engine}: the $-anchored regex matches`);
+      // The anchor has to still bind, or this would pass on a rule truncated to
+      // a bare substring -- which is exactly what the old split produced.
+      assertEqual(pair[engine].shouldBlock('https://anchored.test/abc/more', 'https://site.test/', 'image').blocked, false,
+        `${engine}: the $ anchor still ends the match`);
+    }
+    return 'pattern survives the options split in both engines';
+  });
+});
+
+check('verdicts', 'a $-anchored regex rule keeps its options', async () => {
+  return withList(REGEX_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    const url = 'https://opts.test/abc';
+    for (const engine of ['js', 'rust']) {
+      assertEqual(pair[engine].shouldBlock(url, 'https://site.test/', 'image').blocked, true,
+        `${engine}: $image + $third-party matches an image from another site`);
+      // Recovering the pattern but dropping the options would block these too.
+      assertEqual(pair[engine].shouldBlock(url, 'https://site.test/', 'script').blocked, false,
+        `${engine}: $image does not match a script`);
+      assertEqual(pair[engine].shouldBlock(url, 'https://opts.test/', 'image').blocked, false,
+        `${engine}: $third-party does not match a first-party request`);
+    }
+    return '$image and $third-party both survive on a $-anchored regex';
+  });
+});
+
+check('verdicts', 'a $-anchored regex carrying $popup is dropped, not turned into a block rule', async () => {
+  return withList(REGEX_POPUP_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    const url = 'https://popupregex.test/abc';
+    for (const type of ['script', 'image', 'sub_frame']) {
+      for (const engine of ['js', 'rust']) {
+        assertEqual(pair[engine].shouldBlock(url, 'https://site.test/', type).blocked, false,
+          `${engine}: a $popup rule does not block a ${type}`);
+      }
+    }
+    // Not blocking is necessary but not sufficient: a rule can fail to block
+    // because it was mis-parsed into something that matches nothing. The stat
+    // is what says it was RECOGNISED as unsupported and dropped on purpose.
+    assertEqual(pair.js.getStats().unsupportedOption, 1,
+      'js: the rule is counted as dropped for an unsupported option');
+    // lib/adblock-rust.js keeps its own count of rules it can act on, derived
+    // the same way. adblock-rs drops $popup rules itself, so counting this one
+    // would overstate the engine and put the two banners back out of step.
+    assertEqual(pair.rust.getStats().total, 0,
+      'rust: the rule is not counted as actionable');
+    return 'dropped by name in both engines, not merely inert';
+  });
+});
+
+check('verdicts', 'a $-anchored regex EXCEPTION rule is parsed, so it still excepts', async () => {
+  return withList(REGEX_EXCEPTION_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    for (const engine of ['js', 'rust']) {
+      assertEqual(pair[engine].shouldBlock('https://allowme.test/ok.js', 'https://site.test/', 'script').blocked, false,
+        `${engine}: the $-anchored exception beats the domain block`);
+      // The exception's own $script must still bind, or the check would pass on
+      // an exception that had been widened to every type.
+      assertEqual(pair[engine].shouldBlock('https://allowme.test/other.png', 'https://site.test/', 'image').blocked, true,
+        `${engine}: $script means the exception does not cover an image`);
+    }
+    return 'exception parses and keeps its type restriction in both engines';
+  });
+});
+
+check('verdicts', 'a path rule that merely starts with / keeps its options', async () => {
+  return withList(REGEX_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    // `/ads-path/banner.gif$image` is NOT a regex, so the separator search must
+    // fall back to the first `$`. Without that fall-back the rule parses with no
+    // options at all and blocks every resource type.
+    const url = 'https://cdn.test/ads-path/banner.gif';
+    for (const engine of ['js', 'rust']) {
+      assertEqual(pair[engine].shouldBlock(url, 'https://site.test/', 'image').blocked, true,
+        `${engine}: the path rule matches an image`);
+      assertEqual(pair[engine].shouldBlock(url, 'https://site.test/', 'script').blocked, false,
+        `${engine}: $image does not match a script`);
+    }
+    return 'leading-slash path rule is not mistaken for a regex';
+  });
+});
+
+check('corpus', 'no divergence across the regex fixture', async () => {
+  return withList(REGEX_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    const hosts = ['anchored.test', 'opts.test', 'plain.test', 'cdn.test', 'unrelated.test'];
+    // bare.test is deliberately absent: its rule lives in REGEX_NO_OPTIONS_LIST
+    // because the engines disagree on it, and that is pinned as an asymmetry.
+    const paths = ['/abc', '/abc/more', '/abc.js', '/ads-path/banner.gif', '/x'];
+    const sources = ['https://site.test/', 'https://anchored.test/', 'https://opts.test/'];
+    const cases = [];
+    for (const host of hosts) {
+      for (const pth of paths) {
+        for (let i = 0; i < REAL_TYPES.length; i++) {
+          cases.push([`https://${host}${pth}`, sources[i % sources.length], REAL_TYPES[i], null]);
+        }
+      }
+    }
+    const { checked, divergences } = compare(pair, cases);
+    assert(divergences.length === 0,
+      `${divergences.length} of ${checked} diverge:\n          ${describe(divergences)}`);
+    const blocked = cases.filter(([u, s, t]) => pair.rust.shouldBlock(u, s, t).blocked).length;
+    assert(blocked >= 4, `only ${blocked} of ${checked} block -- regex fixture is not exercising the engines`);
+    return `${checked} cases, ${blocked} blocking, 0 divergences`;
   });
 });
 
@@ -379,6 +562,55 @@ check('asymmetries', 'rust is never the stricter engine on document requests', a
   // Reported, not asserted: if the engines ever converge here that is an
   // improvement, and a test that fails on an improvement is a nuisance.
   return `${urls.length} urls (${innocuous.length} of them innocuous controls): sub_frame exact, document js-only=${jsOnly}, rust-only=0`;
+});
+
+check('asymmetries', 'a $-anchored regex with no options: the JS engine keeps it, rust drops it', async () => {
+  return withList(REGEX_NO_OPTIONS_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    // `/^...[a-z]+$/` has no options, so its trailing `$/` is ambiguous: rust
+    // reads the `$` as the options separator and discards the rule, while the
+    // JS engine requires the separator's `$` to directly follow the pattern's
+    // closing `/` and so keeps it -- which is what uBO does. Measured, not
+    // assumed, and asserted in the direction found: the JS engine is the
+    // stricter one here, the reverse of the document-request asymmetry.
+    //
+    // The second url covers the ESCAPED-slash branch: `/^...\/$/` ends with an
+    // escaped slash, so the `$` before it is part of the pattern, not a
+    // separator. Without that test the JS engine splits inside its own regex.
+    for (const url of ['https://bare.test/abc', 'https://esc.test/a/']) {
+      assertEqual(pair.js.shouldBlock(url, 'https://site.test/', 'image').blocked, true,
+        `js: keeps a $-anchored regex that carries no options (${url})`);
+      assertEqual(pair.rust.shouldBlock(url, 'https://site.test/', 'image').blocked, false,
+        `rust: drops it (${url})`);
+    }
+    // Unreachable from the published lists, which is why it is recorded rather
+    // than fixed: all 5 of their $-anchored regex rules carry options, and both
+    // engines agree on every one of those (the verdicts group covers that shape).
+    return 'js keeps it, rust drops it -- pinned, unreachable from the lists';
+  });
+});
+
+check('asymmetries', 'a $ inside an option value is not mistaken for the separator', async () => {
+  return withList(REGEX_DOLLAR_OPTION_LIST, (listPath) => {
+    const pair = loadPair(listPath);
+    const url = 'https://param.test/abc';
+    // `$image,removeparam=/^utm_$/`: the value holds a `$` AND ends in `/`.
+    // Splitting at the last `$`, or treating a trailing `/` as "no options",
+    // both destroy the rule -- it stops being a regex and loses $image with it.
+    assertEqual(pair.js.shouldBlock(url, 'https://site.test/', 'image').blocked, true,
+      'js: the pattern and its $image option both survive');
+    assertEqual(pair.js.shouldBlock(url, 'https://site.test/', 'script').blocked, false,
+      'js: $image still restricts the type, so a script does not match');
+    // rust does NOT block here, for an unrelated and correct reason: it
+    // implements $removeparam as a modifier, which rewrites a request rather
+    // than blocking it. The JS engine has no modifier support and ignores the
+    // option, so it blocks. That is a pre-existing semantic difference, not a
+    // parsing one, and it is out of scope here -- recorded so the asymmetry is
+    // not read as a regression in the separator logic.
+    assertEqual(pair.rust.shouldBlock(url, 'https://site.test/', 'image').blocked, false,
+      'rust: $removeparam is a modifier, so nothing is blocked');
+    return 'separator found past a $ in the option value; rust differs on modifier semantics';
+  });
 });
 
 check('asymmetries', 'hostless URLs agree, and neither engine calls them an error', async () => {

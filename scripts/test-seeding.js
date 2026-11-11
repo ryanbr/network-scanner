@@ -399,6 +399,12 @@ const TEST_LIST = [
   '@@/pop-target.html$popup,domain=never.example',
   '||some-unrelated-domain.test^$popup',
   '||ads.example.com^$popup,third-party',
+  // A $-anchored REGEX $popup rule. The options marker and the pattern's end
+  // anchor are both `$`, so locating the options with `split('$')` read this
+  // rule's option as `/` -- it named no option, so the signal matcher skipped
+  // it entirely and the rule was invisible as popunder signal. Both the matcher
+  // and the blocking gate now derive option names through lib/filter-syntax.js.
+  '/^https?:\\/\\/popupregex\\.test\\/[a-z]+$/$popup',
   '##.cosmetic-popup-rule',
   '||blocked-normally.test^'
 ].join('\n');
@@ -755,10 +761,10 @@ check('unit', 'popup signal: parses $popup rules that blocking discards', async 
   fs.writeFileSync(listPath, TEST_LIST);
   try {
     const sig = createPopupSignalMatcher(listPath);
-    // 3 non-exception $popup rules: one path rule, two exact-domain.
-    assertEqual(sig.size, 3, 'retained signal rules');
+    // 4 non-exception $popup rules: one path, two exact-domain, one regex.
+    assertEqual(sig.size, 4, 'retained signal rules');
     assertEqual(sig.domainEntries, 2, 'exact-domain signal rules');
-    assertEqual(sig.scanEntries, 1, 'path/regex signal rules');
+    assertEqual(sig.scanEntries, 2, 'path/regex signal rules');
     assertEqual(sig.unparseable, 0, 'unparseable signal rules');
 
     assertEqual(sig.match('http://x.test/pop-target.html?a=1', 'http://site.test/'), '/pop-target.html$popup', 'path rule match');
@@ -780,12 +786,22 @@ check('unit', 'popup signal: parses $popup rules that blocking discards', async 
     assertEqual(sig.match('http://ads.example.com/x', 'http://www.example.com/'), null, 'same-site opener is not third-party');
     assertEqual(sig.match('http://ads.example.com/x', 'http://other.test/'), '||ads.example.com^$popup,third-party', 'third-party opener matches');
 
+    // A $-anchored regex $popup rule is signal like any other. It was skipped
+    // here while the option names came from `split('$')`, which saw `/`.
+    assertEqual(sig.match('http://popupregex.test/abc', 'http://site.test/'),
+      '/^https?:\\/\\/popupregex\\.test\\/[a-z]+$/$popup', 'regex rule match');
+    assertEqual(sig.match('http://popupregex.test/abc/more', 'http://site.test/'), null,
+      'and its $ anchor still binds');
+
     // The same list must not contribute popup rules to BLOCKING.
     const blocker = parseAdblockRules(listPath, {});
     assertEqual(blocker.shouldBlock('http://x.test/pop-target.html', 'http://site.test/', 'document').blocked, false, '$popup rule does not block');
     assertEqual(blocker.shouldBlock('http://blocked-normally.test/x', 'http://site.test/', 'script').blocked, true, 'ordinary rule still blocks');
     assert(blocker.matchPopupSignal === undefined, 'signal is not exposed on the blocking matcher');
-    return 'composition, 6 match shapes, blocking unaffected';
+    // The regex $popup rule must not block either -- the gate drops it by name.
+    assertEqual(blocker.shouldBlock('http://popupregex.test/abc', 'http://site.test/', 'script').blocked, false,
+      'a $-anchored regex $popup rule does not block');
+    return 'composition, 8 match shapes, blocking unaffected';
   } finally {
     try { fs.unlinkSync(listPath); } catch (_) { /* best effort */ }
   }
