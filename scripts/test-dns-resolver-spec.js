@@ -27,6 +27,7 @@
  */
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 const { parseDnsServers, createRotatingResolver } = require('../lib/dns');
 
@@ -122,6 +123,51 @@ console.log('\nthe parse -> createRotatingResolver path does not abort the proce
     check(`--dns ${spec} falls back to system DNS, unpinned`,
       parsed != null && parsed.pinned === false && parsed.servers.every(srv => srv !== spec), detail);
   }
+}
+
+// --- Chrome DoH gate: which VPN backends may switch it off -------------------
+//
+// nwss skips Chrome's DoH flags when something else is already doing the
+// resolving. A WireGuard tunnel is: wg-quick applies `DNS =` from the .conf
+// natively, so the system resolver becomes the tunnel's. OpenVPN on Linux is
+// NOT -- it never applies DNS itself (2.6's `--dns` only hands values to
+// scripts/plugins), and the directives that would (`--up`, `--down`,
+// `--script-security`) are blocked as root code-exec in openvpn_vpn.js. The
+// gate used to treat both the same, so an OpenVPN site had DoH turned off in
+// favour of a handover that never happened, dropping resolution to plaintext
+// port 53 on the system resolver -- out of the tunnel entirely on a host whose
+// resolver is a local stub or on the LAN.
+//
+// Asserted from source because reaching the real gate needs a live tunnel and
+// root. The condition is extracted rather than re-typed, the same way
+// test-flowproxy-budget.js reads PER_URL_TIMEOUT_MS.
+{
+  const nwssSrc = fs.readFileSync(path.join(__dirname, '..', 'nwss.js'), 'utf8');
+
+  const gate = nwssSrc.match(/\.\.\.\(\(chromeDoh\.templates([\s\S]*?)\)\s*\?\s*\['--dns-over-https-mode/);
+  check('the DoH launch-flag gate is still findable in nwss.js', !!gate,
+    'extraction regex matched nothing — the checks below would pass vacuously');
+  const cond = gate ? gate[1] : '';
+
+  check('DoH is skipped for a WireGuard site', /!anyWireguardConfigured/.test(cond), cond.trim());
+  check('DoH is NOT skipped merely because some VPN is configured',
+    !/anyVpnConfigured/.test(cond), cond.trim());
+  // The narrowing must not have cost the other two reasons to skip.
+  check('DoH still honours --doh-disable', /!dohDisabled/.test(cond), cond.trim());
+  check('DoH is still skipped on a proxied launch', /--proxy-server/.test(cond), cond.trim());
+
+  const wg = nwssSrc.match(/const anyWireguardConfigured = [^;]+;/);
+  check('anyWireguardConfigured keys off the wireguard field only',
+    !!wg && /\bs\.vpn\b/.test(wg[0]) && !/openvpn/.test(wg[0]), wg ? wg[0] : 'not found');
+
+  // The curl-resolve fallback's own guard is about egress path, not DNS, and
+  // must keep covering BOTH backends -- narrowing it was not part of this fix.
+  const anyVpn = nwssSrc.match(/const anyVpnConfigured = [^;]+;/);
+  check('anyVpnConfigured still covers both backends for the curl path',
+    !!anyVpn && /\bs\.vpn\b/.test(anyVpn[0]) && /s\.openvpn/.test(anyVpn[0]),
+    anyVpn ? anyVpn[0] : 'not found');
+  check('the curl-resolve fallback still guards on anyVpnConfigured',
+    /curlResolveOk = [^;]*!anyVpnConfigured/.test(nwssSrc));
 }
 
 finished = true;

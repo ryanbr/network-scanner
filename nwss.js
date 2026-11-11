@@ -559,7 +559,8 @@ const dohDisabled = args.includes('--doh-disable');
 const chromeDoh = dnsServersOverride.length > 0
   ? dohTemplatesForResolvers(dnsServersOverride)
   : { templates: '', mapped: [], unmapped: [] };
-// anyVpnConfigured and the DoH startup log live inside the main IIFE below:
+// anyVpnConfigured / anyWireguardConfigured and the DoH startup log live
+// inside the main IIFE below:
 // `sites` is destructured from the config later in module load, so referencing
 // it at this point in top-level evaluation would TDZ-throw.
 // Circuit breaker: if resolver errors dominate, suspend the pre-check for a
@@ -2395,11 +2396,28 @@ function setupFrameHandling(page, forceDebug) {
   // here (not at module top) because `sites` is only initialized by this point.
   // Read by createBrowser's launch args; the startup log reports the decision.
   const anyVpnConfigured = Array.isArray(sites) && sites.some(s => s && (s.vpn || s.openvpn));
+  // WireGuard ONLY, and deliberately not `anyVpnConfigured`. wg-quick applies
+  // `DNS =` from the .conf natively (resolvconf / systemd-resolved), so the
+  // system resolver really does become the tunnel's and local DoH would fight
+  // it. OpenVPN on Linux never applies DNS itself -- not even 2.6's `--dns`,
+  // which the man page defines as configuration handed to scripts/plugins --
+  // and the directives that WOULD apply it (--up, --down, --script-security)
+  // are in openvpn_vpn.js's BLOCKED_EXTRA_ARGS as root code-exec. Turning DoH
+  // off for an OpenVPN site therefore disabled it on the strength of something
+  // that was not happening: resolution fell back to plaintext port 53 on the
+  // system resolver, i.e. adding a VPN made DNS less private than a direct
+  // run, and on a host whose resolver is a local stub or on the LAN the query
+  // never enters the tunnel at all.
+  //
+  // A WireGuard .conf with no `DNS =` line sets nothing either and keeps the
+  // old deferral. Not narrowed further because nothing here reads the .conf,
+  // and that case is no worse than it already was.
+  const anyWireguardConfigured = Array.isArray(sites) && sites.some(s => s && s.vpn);
   if (dnsServersOverride.length > 0 && !silentMode) {
     if (dohDisabled) {
       console.log(formatLogMessage('info', `Chrome DoH disabled via --doh-disable — navigation uses system resolv.conf; --dns still pins the pre-check and dig.`));
     } else if (chromeDoh.templates) {
-      console.log(formatLogMessage('info', `Chrome navigation will use DoH (automatic) on direct connections: ${chromeDoh.templates}${anyVpnConfigured ? ' — VPN configured, so it defers to VPN resolution' : ' — deferred to proxy resolution on proxied sites'}`));
+      console.log(formatLogMessage('info', `Chrome navigation will use DoH (automatic) on direct connections: ${chromeDoh.templates}${anyWireguardConfigured ? ' — WireGuard configured, so it defers to the tunnel\'s own DNS' : ' — deferred to proxy resolution on proxied sites'}`));
     } else {
       console.warn(formatLogMessage('warn', `--dns servers (${chromeDoh.unmapped.join(', ')}) have no known DoH endpoint — Chrome navigation stays on system resolv.conf; only the pre-check and dig are pinned. Known providers: Google, Cloudflare, Quad9, OpenDNS, AdGuard, CleanBrowsing, DNS.SB, Mullvad.`));
     }
@@ -2514,14 +2532,17 @@ function setupFrameHandling(page, forceDebug) {
         '--enable-features=NetworkService',
         // DoH for Chrome's navigation resolver when --dns maps to a known
         // provider — but ONLY on direct connections. A proxied launch carries
-        // a --proxy-server in extraArgs and does its own (remote) DNS; a VPN
-        // tunnels resolution. In both cases local DoH is redundant and could
-        // resolve geo-split domains to the wrong region, so it's skipped and
-        // Chrome defers to the proxy/VPN. 'automatic' keeps a system-DNS
-        // fallback if DoH is unreachable. Flags omitted when not applicable.
+        // a --proxy-server in extraArgs and does its own (remote) DNS, and a
+        // WIREGUARD tunnel replaces the system resolver via wg-quick's `DNS =`.
+        // In both cases local DoH is redundant and could resolve geo-split
+        // domains to the wrong region, so it's skipped and Chrome defers to
+        // them. OpenVPN is NOT in that set -- see anyWireguardConfigured above:
+        // it sets no DNS on Linux, so skipping DoH there deferred to nothing.
+        // 'automatic' keeps a system-DNS fallback if DoH is unreachable. Flags
+        // omitted when not applicable.
         ...((chromeDoh.templates
              && !dohDisabled
-             && !anyVpnConfigured
+             && !anyWireguardConfigured
              && !extraArgs.some(a => typeof a === 'string' && a.startsWith('--proxy-server')))
           ? ['--dns-over-https-mode=automatic', `--dns-over-https-templates=${chromeDoh.templates}`]
           : []),
