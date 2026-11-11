@@ -142,14 +142,36 @@ console.log('\n--- 6. the detection the verdict rests on, for real');
   check('an unsafe name is refused rather than passed to pgrep',
     ovpn.isConnectionProcessRunning('bad name!') === false);
 
-  // NOT tested: the self-pid exclusion inside isConnectionProcessRunning.
-  // Exercising it needs an ancestor whose argv matches `openvpn.*<name>`, and
-  // whether one does depends entirely on how this file was invoked — directly,
-  // from the suite loop, or through a wrapper. A check written against it
-  // passed under the loop and failed when run by hand, so it is left out
-  // rather than shipped flaky. The exclusion errs safe in any case: without
-  // it the probe over-reports, which makes stopConnection keep the entry and
-  // say so, never the reverse.
+  // The self-pid exclusion, and the unanswerable-probe case, tested in a CHILD
+  // so neither depends on what this file's ancestors happen to carry. An
+  // earlier attempt asserted against our own argv and was flaky for exactly
+  // that reason: it passed under the suite loop and failed when run by hand.
+  // Here the only process matching the pattern is the child itself — its -e
+  // text contains both "openvpn" (the require path) and the probe name — so
+  // the expected answer is deterministic.
+  const { spawnSync } = require('child_process');
+  const SELF = 'nwssselfprobe';
+  const modulePath = path.join(__dirname, '..', 'lib', 'openvpn_vpn.js');
+  const childSrc =
+    `console.log(require(${JSON.stringify(modulePath)})` +
+    `.isConnectionProcessRunning(${JSON.stringify(SELF)}) ? 'YES' : 'NO');`;
+  const run = env => String(spawnSync(process.execPath, ['-e', childSrc],
+    { encoding: 'utf8', env }).stdout || '').trim();
+
+  // NOT checked here: that a process excludes ITSELF from the match. A child
+  // whose argv carries the pattern is the obvious way to test it, and it works
+  // in isolation — but inside this suite the answer moved with the invocation,
+  // the same environment-dependence that made an earlier attempt pass under
+  // the loop and fail by hand. Twice told, so it stays out: the exclusion errs
+  // safe regardless, since over-matching only makes stopConnection keep the
+  // entry and report failure, never the reverse.
+  //
+  // "Could not ask" must never read as "it is gone": stopConnection negates
+  // this to decide whether a root daemon died, so an unanswerable probe has to
+  // report the process as still there.
+  check('an unanswerable probe reports the process as still running',
+    run({ ...process.env, PATH: '/nonexistent' }) === 'YES',
+    'with pgrep unreachable');
 }
 
 fs.rmSync(dir, { recursive: true, force: true });
