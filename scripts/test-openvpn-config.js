@@ -91,6 +91,26 @@ eq('stopConnection on a name never started',
   ovpn.stopConnection('never-started'), { success: true, alreadyDown: true });
 eq('nothing is tracked in a fresh process', ovpn.getActiveConnections(), []);
 
+console.log('\n--- 4b. the temp directory is unpredictable, not a fixed /tmp path');
+// This directory holds the "<username>\\n<password>" auth file. A fixed path
+// under world-writable /tmp could be pre-created as a symlink, sending those
+// credentials wherever the attacker points.
+{
+  const d1 = ovpn.tempDir();
+  eq('the directory is created once and reused', d1, ovpn.tempDir());
+  check('it lives under the system temp dir', d1.startsWith(os.tmpdir()), d1);
+  check('its name is not the old fixed path', d1 !== '/tmp/nwss-openvpn', d1);
+  check('its name carries random characters after the prefix',
+    /nwss-openvpn-[A-Za-z0-9]{6,}$/.test(d1), path.basename(d1));
+  check('it exists and is 0700', fs.statSync(d1).isDirectory() &&
+    (fs.statSync(d1).mode & 0o777) === 0o700, (fs.statSync(d1).mode & 0o777).toString(8));
+  ovpn.disconnectAll();
+  check('disconnectAll removes it', !fs.existsSync(d1), d1);
+  const d3 = ovpn.tempDir();
+  check('a later call makes a fresh one', d3 !== d1 && fs.existsSync(d3), d3);
+  fs.rmSync(d3, { recursive: true, force: true });
+}
+
 console.log('\n--- 5. teardown contract (source-level: needs a real root daemon otherwise)');
 const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'openvpn_vpn.js'), 'utf8');
 const sudoSync = src.match(/spawnSync\('sudo',\s*\[[^\]]*\]/g) || [];

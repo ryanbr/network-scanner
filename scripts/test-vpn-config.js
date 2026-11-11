@@ -134,6 +134,31 @@ check('the derived inline name fits IFNAMSIZ',
   wg.resolveInterfaceName({ config_inline: INLINE }).length <= 15,
   String(wg.resolveInterfaceName({ config_inline: INLINE }).length));
 
+console.log('\n--- 3b. the temp directory is unpredictable, not a fixed /tmp path');
+// It was /tmp/nwss-wireguard/<pid>. /tmp is world-writable and the PARENT was
+// predictable, so a local user could pre-create it as a symlink: mkdirSync
+// (recursive) succeeds on one and writeFileSync follows it, which sends a
+// WireGuard PrivateKey wherever they point. 0o600 guards the contents, not
+// the destination.
+{
+  const d1 = wg.tempConfigDir();
+  const d2 = wg.tempConfigDir();
+  eq('the directory is created once and reused', d1, d2);
+  check('it lives under the system temp dir', d1.startsWith(os.tmpdir()), d1);
+  check('its name is not the old fixed path',
+    !d1.startsWith('/tmp/nwss-wireguard/') && d1 !== '/tmp/nwss-wireguard', d1);
+  check('its name carries random characters after the prefix',
+    /nwss-wireguard-[A-Za-z0-9]{6,}$/.test(d1), path.basename(d1));
+  check('it exists and is 0700 (mkdtemp owns that, not us)',
+    fs.statSync(d1).isDirectory() && (fs.statSync(d1).mode & 0o777) === 0o700,
+    (fs.statSync(d1).mode & 0o777).toString(8));
+  wg.disconnectAll();
+  check('disconnectAll removes it', !fs.existsSync(d1), d1);
+  const d3 = wg.tempConfigDir();
+  check('a later call makes a fresh one, not the removed path', d3 !== d1 && fs.existsSync(d3), d3);
+  fs.rmSync(d3, { recursive: true, force: true });
+}
+
 console.log('\n--- 4. max_retries coercion (its own comment records the "31 attempts" bug)');
 eq('an absent max_retries defaults to 2', wg.normalizeVpnConfig({ config: conf }).max_retries, 2);
 eq('an explicit 0 is honoured, not treated as falsy',
