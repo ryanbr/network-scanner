@@ -1167,6 +1167,42 @@ check('browser', 'a page that neuters localStorage.clear does not get a clean re
   }
 });
 
+check('browser', 'clear_sitedata spares a cookie a concurrent URL has claimed', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // The other half of the same race. Network.clearBrowserCookies is
+    // browser-wide and unconditional, so a sibling URL's clear deleted the
+    // cookies this URL had just been seeded with; the sibling re-seeds right
+    // after, but a reload whose document commits inside that window reads a page
+    // with no cookies -- 2 of 20 reproducer runs, always the first URL's reload.
+    // The clear now honours the same refcount teardown does.
+    const holder = await browser.newPage();
+    await holder.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    // retain:true is what an initial per-URL seed does.
+    const seeded = (await applySiteCookies(holder, { cookies: { seededcookie: 'v1' } },
+      `${ctx.server.ipBase}/`, false, false, true)).cookies;
+    // Something in the jar that nobody claimed: this is what clear_sitedata
+    // exists to remove, and sparing it would mean not clearing at all.
+    await holder.evaluate(() => { document.cookie = 'organic=1; path=/'; });
+
+    const sibling = await browser.newPage();
+    await sibling.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    const { output } = await captureLogs(() =>
+      clearSiteData(sibling, `${ctx.server.ipBase}/gate`, true, true));
+
+    const left = (await holder.browserContext().cookies()).map(c => c.name).sort();
+    assertEqual(left, ['seededcookie'], 'the claimed seed survives and the unclaimed cookie is gone');
+    assertIncludes(output, 'Kept 1 seeded cookie(s)', 'sparing a claimed cookie is reported');
+
+    // Release the claim: _seedRefs is module state shared by every check here,
+    // so a claim left behind would spare this cookie in later ones.
+    await removeCookies(holder, seeded, false);
+    return 'claimed cookie kept, unclaimed cookie cleared';
+  } finally {
+    await browser.close();
+  }
+});
+
 check('browser', 'storage teardown survives the seeding page closing', async (ctx) => {
   const browser = await launchBrowser();
   try {
