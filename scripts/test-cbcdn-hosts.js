@@ -20,7 +20,8 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fullyDecode, valuesIn, hostsFrom, alreadyListed } = require('./cbcdn-hosts');
+const { execFileSync } = require('child_process');
+const { fullyDecode, valuesIn, hostsFrom, alreadyListed, digKeep } = require('./cbcdn-hosts');
 
 let pass = 0, fail = 0;
 const check = (name, got, want) => {
@@ -137,5 +138,98 @@ check('a malformed escape does not throw', fullyDecode('host%2'), 'host%2');
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-console.log(`\n${pass} passed, ${fail} failed\n`);
-process.exit(fail ? 1 : 0);
+// ---- the gate ---------------------------------------------------------------
+// digKeep decides what gets PUBLISHED and had no coverage at all. The resolver
+// is injected rather than stubbed on the dns module: this script uses node's
+// dns, so the house trick of a fake `dig` on PATH cannot reach it.
+(async () => {
+  const stub = (records) => async () => records;
+  const boom = (code) => async () => { const e = new Error('nope'); e.code = code; throw e; };
+
+  // A records, ANY -- the behaviour that shipped, pinned for the first time.
+  check('A/any: a prefix match keeps the host',
+    (await digKeep('h.example', ['192.0.2.', '198.51.100.'], { resolve: stub(['192.0.2.7']) })).keep, true);
+  check('A/any: no prefix match drops it',
+    (await digKeep('h.example', ['192.0.2.'], { resolve: stub(['203.0.113.9']) })).keep, false);
+  check('no terms means no gate',
+    (await digKeep('h.example', [], { resolve: boom('ESERVFAIL') })).keep, true);
+
+  // Failures are never a mismatch: losing a real host to a dns blip is the
+  // expensive direction, so it is kept and flagged.
+  const failed = await digKeep('h.example', ['192.0.2.'], { resolve: boom('ESERVFAIL') });
+  check('a dns failure keeps the host', failed.keep, true);
+  check('and says it is unconfirmed', /kept unconfirmed/.test(failed.note), true);
+  // An empty answer is the same situation: no records is not evidence of a
+  // mismatch. `.find()` over [] returned undefined, which DROPPED the host.
+  const empty = await digKeep('h.example', ['192.0.2.'], { resolve: stub([]) });
+  check('an empty answer keeps the host too', empty.keep, true);
+  check('and says so rather than claiming a mismatch', /no A records/.test(empty.note), true);
+
+  // NS + ALL: the nameserver PAIR. This is the whole point of the two new
+  // options -- a single Cloudflare nameserver name is shared across unrelated
+  // accounts, so only the pair identifies the operator.
+  const PAIR = ['ns1.operator.example', 'ns2.operator.example'];
+  check('NS/all: both nameservers present keeps the host',
+    (await digKeep('h.example', PAIR, { recordType: 'NS', mode: 'all',
+      resolve: stub(['ns2.operator.example', 'ns1.operator.example']) })).keep, true);
+  check('NS/all: only ONE of the pair drops it',
+    (await digKeep('h.example', PAIR, { recordType: 'NS', mode: 'all',
+      resolve: stub(['ns1.operator.example', 'someone.else.example']) })).keep, false);
+  // ...and the mode is load-bearing: the same records pass under ANY.
+  check('NS/any: one of the pair is enough',
+    (await digKeep('h.example', PAIR, { recordType: 'NS', mode: 'any',
+      resolve: stub(['ns1.operator.example', 'someone.else.example']) })).keep, true);
+  // A resolver may apply DNS 0x20 mixed-case randomisation to the answer.
+  check('NS matching is case-insensitive',
+    (await digKeep('h.example', PAIR, { recordType: 'NS', mode: 'all',
+      resolve: stub(['Ns1.Operator.Example', 'NS2.operator.example']) })).keep, true);
+
+  // The real-world case the record type exists for: an A-record gate on shared
+  // CDN ranges confirms hosts that are not the operator's at all -- measured,
+  // including the first-party site. Same records, two gates, opposite verdicts.
+  const CDN_RANGES = ['192.0.2.', '198.51.100.'];
+  const notOperator = stub(['192.0.2.9', '192.0.2.44']);
+  check('A/any on shared CDN ranges confirms a host that is not the operator',
+    (await digKeep('firstparty.example', CDN_RANGES, { resolve: notOperator })).keep, true);
+  check('NS/all on the pair rejects that same host',
+    (await digKeep('firstparty.example', PAIR, { recordType: 'NS', mode: 'all',
+      resolve: stub(['ns7.unrelated.example', 'ns8.unrelated.example']) })).keep, false);
+
+  // The note is what an operator reads beside a host before it is published,
+  // so it has to carry the RECORD, not just the term they already typed.
+  const prefixNote = await digKeep('h.example', ['192.0.2.'], { resolve: stub(['192.0.2.7']) });
+  check('a prefix match names the record it matched', prefixNote.note, '192.0.2. in 192.0.2.7');
+  const exactNote = await digKeep('h.example', ['ns1.operator.example'],
+    { recordType: 'NS', resolve: stub(['ns1.operator.example']) });
+  check('a term that IS the whole record is not printed twice',
+    exactNote.note, 'ns1.operator.example');
+
+  // A flag that is present must carry a value. Both ways of getting this wrong
+  // used to pass silently and make the gate answer a different question: an
+  // empty --dig left NO terms, so every harvested host was published
+  // unconfirmed, and a trailing --dig-type fell back to A while NS was asked
+  // for. Driven through the CLI because that is where the parsing lives.
+  const cli = (args) => {
+    try {
+      execFileSync(process.execPath, [path.join(__dirname, 'cbcdn-hosts.js'), ...args],
+        { stdio: ['ignore', 'pipe', 'pipe'] });
+      return { code: 0, err: '' };
+    } catch (e) {
+      return { code: e.status, err: String(e.stderr || '') };
+    }
+  };
+  const emptyDig = cli(['--dig', '', os.devNull]);
+  check('an empty --dig is refused, not treated as "no gate"', emptyDig.code, 1);
+  check('and says which flag', /--dig needs a value/.test(emptyDig.err), true);
+  const danglingType = cli(['--dig', '192.0.2.', os.devNull, '--dig-type']);
+  check('a trailing --dig-type is refused, not silently A', danglingType.code, 1);
+  check('and says which flag', /--dig-type needs a value/.test(danglingType.err), true);
+
+  // An unknown type must not quietly answer a different question.
+  const bogus = await digKeep('h.example', ['x'], { recordType: 'MX' });
+  check('an unsupported record type is named, not silently treated as A', bogus.keep, true);
+  check('and says which types exist', /unsupported dig type MX \(want A\/NS\)/.test(bogus.note), true);
+
+  console.log(`\n${pass} passed, ${fail} failed\n`);
+  process.exit(fail ? 1 : 0);
+})();
