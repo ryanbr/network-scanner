@@ -3,8 +3,31 @@
 // puppeteer for browser automation, fs for file system operations, psl for domain parsing.
 // const pLimit = require('p-limit'); // Will be dynamically imported
 const useObscura = process.argv.includes('--use-obscura');
+const useCloak = process.argv.includes('--use-cloak');
+// An external stealth browser supplies its OWN identity, so nwss's injection
+// has to stand down for every such browser. One named flag rather than a
+// growing list of `!useObscura` tests at each site: the sites are three files
+// apart, and adding a second browser by editing two of them is how the popup
+// gate and the parser came to disagree about the same rule.
+const externalStealth = useObscura || useCloak;
 const usePuppeteerCore = process.argv.includes('--use-puppeteer-core') || useObscura;
-const puppeteer = usePuppeteerCore ? require('puppeteer-core') : require('puppeteer');
+// CloakBrowser is a drop-in Puppeteer replacement (it ships its own patched
+// Chromium), so it swaps in at the require -- the same shape as puppeteer-core
+// above and lib/adblock-rust.js. Optional dependency: a missing package must
+// say so by name, because the alternative is a stack trace about a module
+// nobody asked for. colorize is not loaded this early, hence plain console.
+let puppeteer;
+if (useCloak) {
+  try {
+    puppeteer = require('cloakbrowser/puppeteer');
+  } catch (cloakErr) {
+    console.error(`[nwss] --use-cloak needs the optional 'cloakbrowser' package: npm install cloakbrowser`);
+    console.error(`[nwss]   (${cloakErr.message})`);
+    process.exit(1);
+  }
+} else {
+  puppeteer = usePuppeteerCore ? require('puppeteer-core') : require('puppeteer');
+}
 const fs = require('fs');
 const os = require('os');
 const net = require('net');
@@ -301,6 +324,7 @@ if (fs.existsSync(NWSSCONFIG_PATH)) {
         load_extension: ['--load-extension'],
         eval_on_doc: ['--eval-on-doc'],
         use_puppeteer_core: ['--use-puppeteer-core'],
+        use_cloak: ['--use-cloak'],
         ignore_cache: ['--ignore-cache'],
         clear_cache: ['--clear-cache'],
         block_ads: ['--block-ads'],
@@ -1006,6 +1030,9 @@ General Options:
   --use-puppeteer-core           Use puppeteer-core with system Chrome instead of bundled Chromium
   --use-obscura                  Connect to running Obscura CDP server (ws://127.0.0.1:9222 or OBSCURA_WS env)
                                  Skips fingerprint injection — Obscura provides built-in stealth
+  --use-cloak                    Launch CloakBrowser's patched Chromium instead of Chrome (needs the
+                                 optional 'cloakbrowser' package and a licence key; one concurrent
+                                 session on the free key). Skips fingerprint injection — it sets its own
   --load-extension <path>        Load unpacked Chrome extension from directory
   --cdp                          Enable Chrome DevTools Protocol logging (now per-page if enabled)
   --remove-dupes                 Remove duplicate domains from output (only with -o)
@@ -1543,6 +1570,7 @@ const MAX_CONCURRENT_SITES = (() => {
   // Use default
   return CONCURRENCY_LIMITS.DEFAULT;
 })();
+
 
 const RESOURCE_CLEANUP_INTERVAL = (() => {
   // Check command line argument first
@@ -2465,6 +2493,60 @@ function setupFrameHandling(page, forceDebug) {
    * Uses system Chrome and temporary directories to minimize disk usage
    * @returns {Promise<import('puppeteer').Browser>} Browser instance
    */
+  // Latched, because a stale engine is a property of the MACHINE, not of the
+  // page: repeating it per browser restart would train the operator to ignore
+  // it. Memoised for the same reason -- the answer cannot change mid-run.
+  let engineGapReported = false;
+  let engineProbe = null;
+
+  /**
+   * Report the engine, but do NOT choose it.
+   *
+   * Every spoof surface derives from the pinned Chrome major, so they agree
+   * with each other whatever browser is underneath -- which is how a real
+   * 12-major gap went unseen: nwss drove system Chrome 145 while advertising
+   * 157, and `typeof Iterator.concat === 'function'` is false on 145 and true
+   * from 157, so one line of feature detection reads through the disguise.
+   *
+   * An earlier version of this PICKED the newest browser available rather than
+   * the first path that exists. That is reverted deliberately and should not be
+   * reintroduced without solving what it broke: preferring puppeteer's bundled
+   * build made `scripts/test-seeding.js` fail intermittently on the
+   * sessionStorage seed -- 3 of 5 runs, against 4 of 4 clean on the installed
+   * Chrome, measured serially on one machine. Scans still produced rules, so
+   * the damage would have been quiet. Surfacing the gap costs one `--version`
+   * spawn and changes no behaviour; CLOSING it belongs in the installed
+   * browser, where the package manager already offers the pinned major.
+   */
+  async function reportEngineGap(chosenPath) {
+    if (engineGapReported) return engineProbe;
+    engineGapReported = true;
+    let target = chosenPath;
+    if (!target) {
+      // No system Chrome: puppeteer resolves its own download, so that is the
+      // binary whose version matters.
+      try { target = await puppeteer.executablePath(); } catch { target = null; }
+    }
+    if (!target) return null;
+    const probe = await runProcess(target, ['--version'], { timeout: 5000 });
+    const match = String(probe.stdout || '').match(/\b(\d+)\.\d+\.\d+\.\d+\b/);
+    if (!match) return null;
+    engineProbe = { major: parseInt(match[1], 10), version: match[0] };
+    if (forceDebug) {
+      console.log(formatLogMessage('debug', `Browser engine: ${engineProbe.version} (${target})`));
+    }
+    const spoofedMajor = parseInt(((USER_AGENT_COLLECTIONS.get('chrome') || '').match(/Chrome\/(\d+)/) || [])[1], 10);
+    // `info`, not `warn`, and gated on silentMode -- the same shape as the VPN
+    // concurrency notice: an environment-driven condition the operator should
+    // see, not a failure of this run. The repo reserves `warn` for actual
+    // errors, and scripts/test-seeding.js pins that an ordinary scan emits no
+    // `[warn]` at all, which a per-run notice at that severity broke.
+    if (Number.isFinite(spoofedMajor) && engineProbe.major < spoofedMajor && (forceDebug || !silentMode)) {
+      console.log(formatLogMessage('info', `Browser engine is Chrome ${engineProbe.major} but the spoof advertises ${spoofedMajor}: a page can detect the difference by feature-probing APIs ${engineProbe.major} lacks, which no UA/UA-CH spoofing hides. Upgrading the installed Chrome closes it.`));
+    }
+    return engineProbe;
+  }
+
   async function createBrowser(extraArgs = []) {
     // Obscura mode: connect to a running Obscura CDP server instead of launching Chrome
     if (useObscura) {
@@ -2528,21 +2610,55 @@ function setupFrameHandling(page, forceDebug) {
     Object.freeze(systemChromePaths);
 
 
+    // Under --use-cloak the binary is CloakBrowser's own patched Chromium,
+    // resolved by the package. Choosing one here would point it at system
+    // Chrome and the run would be ordinary Chrome under a stealth flag --
+    // stealth that reports success while doing nothing.
     let executablePath = null;
-    for (const chromePath of systemChromePaths) {
-      if (fs.existsSync(chromePath)) {
-        executablePath = chromePath;
-        if (forceDebug) {
-          console.log(formatLogMessage('debug', `Using system Chrome: ${chromePath}`));
+    if (!useCloak) {
+      for (const chromePath of systemChromePaths) {
+        if (fs.existsSync(chromePath)) {
+          executablePath = chromePath;
+          if (forceDebug) console.log(formatLogMessage('debug', `Using system Chrome: ${chromePath}`));
+          break;
         }
-        break;
       }
+      await reportEngineGap(executablePath);
     }
     if (usePuppeteerCore && !executablePath) {
       console.error(formatLogMessage('error', '--use-puppeteer-core requires a system Chrome installation. No Chrome found in standard paths.'));
       process.exit(1);
     }
-    const browser = await puppeteer.launch({
+    // chrome-headless-shell is a SEPARATE binary, and `headless: 'shell'` only
+    // takes effect when puppeteer resolves the browser itself -- an explicit
+    // executablePath makes it a no-op. That is why this setting sat INERT on
+    // every machine with a system Chrome, and why it went live the moment the
+    // engine chooser above started preferring the bundled build: measured, the
+    // default run switched from google-chrome to
+    // chrome-headless-shell-linux64/chrome-headless-shell.
+    //
+    // It is not a browser this scanner wants. Its UA carries the FULL build
+    // (HeadlessChrome/156.0.8078.47) where real Chrome reduces it to X.0.0.0 --
+    // no Chrome has exposed a build in the UA since the v101 reduction, so it
+    // contradicts the spoof on every request -- and it loads no extensions,
+    // which --load-extension needs. The existing `needsStealth` branch above
+    // already prefers full Chrome for this reason; that preference was simply
+    // unreachable while executablePath was always set.
+    //
+    // Costs some startup speed, which is what 'shell' was chosen for. Under
+    // --use-cloak it is dropped for a second reason: CloakBrowser ships one
+    // patched Chromium and nothing resolves the shell's name at all.
+    if (headlessMode === 'shell' && (useCloak || !executablePath)) {
+      headlessMode = true;
+      if (forceDebug) {
+        console.log(formatLogMessage('debug', useCloak
+          ? `Using headless=true for CloakBrowser (no chrome-headless-shell binary)`
+          : `Using headless=true: 'shell' would launch chrome-headless-shell, whose UA leaks the full build`));
+      }
+    }
+    let browser;
+    try {
+      browser = await puppeteer.launch({
       // Use system Chrome if available to avoid downloads
       executablePath: executablePath,
       // Force temporary user data directory for complete cleanup control
@@ -2708,7 +2824,26 @@ function setupFrameHandling(page, forceDebug) {
         slowMo: 0, // No artificial delays
         defaultViewport: null, // Use system default viewport
         ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=AutomationControlled'] // Avoid automation detection
-    });
+      });
+    } catch (launchErr) {
+      // Falling back to normal Chrome here would be the worst outcome: the scan
+      // would run, produce rules and report success while being exactly the
+      // browser --use-cloak was passed to avoid. Named failure, non-zero exit.
+      if (useCloak) {
+        console.error(formatLogMessage('error', `CloakBrowser failed to launch: ${launchErr.message}`));
+        if (launchErr && launchErr.name === 'CloakBrowserLicenseError') {
+          console.error(formatLogMessage('error', `Set CLOAKBROWSER_LICENSE_KEY, or run: npx cloakbrowser login`));
+          // Deliberately NOT advice about --max-concurrent: nwss runs ONE browser
+          // for the whole scan (see createBrowser's single call site) and its
+          // concurrency is over PAGES inside it, so a one-session key is enough
+          // at any concurrency. Suggesting otherwise would send the operator to
+          // throttle a setting that is not the cause.
+          console.error(formatLogMessage('error', `A seat is consumed per browser session; nwss uses one, so concurrency is not the cause.`));
+        }
+        process.exit(1);
+      }
+      throw launchErr;
+    }
     
     // Store the user data directory on the browser object for cleanup
     browser._nwssUserDataDir = tempUserDataDir;
@@ -2741,7 +2876,13 @@ function setupFrameHandling(page, forceDebug) {
   // Enhanced browser validation for Puppeteer 23.x
   try {
     const browserVersion = await browser.version();
-    if (forceDebug) console.log(formatLogMessage('debug', `Browser launched successfully: ${browserVersion}`));
+    // The spawned PATH, not just the version: browser.version() reports the
+    // same string for full Chrome and for chrome-headless-shell, so a swap
+    // between them was invisible in this log.
+    const spawnedBinary = (() => {
+      try { return browser.process() ? browser.process().spawnfile : null; } catch { return null; }
+    })();
+    if (forceDebug) console.log(formatLogMessage('debug', `Browser launched successfully: ${browserVersion}${spawnedBinary ? ` [${spawnedBinary}]` : ''}`));
   } catch (versionError) {
     console.error(formatLogMessage('error', `Browser version check failed: ${versionError.message}`));
     throw new Error(`Browser startup validation failed: ${versionError.message}`);
@@ -3298,12 +3439,15 @@ function setupFrameHandling(page, forceDebug) {
       }
 
       // --- Apply all fingerprint spoofing (user agent, Brave, fingerprint protection) ---
-      // Skip when using Obscura — it has built-in stealth that conflicts with our injection
+      // Skip for an external stealth browser — its built-in fingerprinting
+      // conflicts with our injection, and two layers claiming different GPUs,
+      // canvases or UAs is the one-property contradiction a detector reads as
+      // a tell. See externalStealth at the top of this file.
       try {
-        if (!useObscura) {
+        if (!externalStealth) {
           await applyAllFingerprintSpoofing(page, siteConfig, forceDebug, currentUrl);
         } else if (forceDebug) {
-          console.log(formatLogMessage('debug', `Skipping fingerprint injection — Obscura provides built-in stealth`));
+          console.log(formatLogMessage('debug', `Skipping fingerprint injection — ${useCloak ? 'CloakBrowser' : 'Obscura'} provides built-in stealth`));
         }
 
         // Neutralize the Fullscreen API before any page script runs so a
@@ -3329,8 +3473,10 @@ function setupFrameHandling(page, forceDebug) {
           }
         }
         
-        // Client Hints protection for Chrome user agents (skipped under Obscura — it sets its own)
-        if (!useObscura && siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
+        // Client Hints protection for Chrome user agents (skipped for an
+        // external stealth browser — it sets its own, and these headers derive
+        // from CHROME_BUILD, which would then contradict the real engine)
+        if (!externalStealth && siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
           const userAgentKey = siteConfig.userAgent.toLowerCase();
           let platform = 'Windows';
           let platformVersion = '19.0.0'; // Win11 — MUST match fingerprint.js's userAgentData platformVersion
@@ -3403,7 +3549,7 @@ function setupFrameHandling(page, forceDebug) {
             chHeaders['Sec-CH-Device-Memory'] = '8';
           }
           await page.setExtraHTTPHeaders(chHeaders);
-        } else if (!useObscura && siteConfig.userAgent &&
+        } else if (!externalStealth && siteConfig.userAgent &&
             siteConfig.userAgent.toLowerCase().startsWith('firefox')) {
           // Accept-Language for the Gecko families, set at the HTTP layer so
           // EVERY request carries it -- document, subresources and fetch()

@@ -52,6 +52,7 @@
   "homepage": "https://github.com/ryanbr/network-scanner",
   "optionalDependencies": {
     "adblock-rs": "^0.13.3",
+    "cloakbrowser": "^0.7.2",
     "puppeteer-core": ">=24.0.0"
   },
   "devDependencies": {

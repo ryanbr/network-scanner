@@ -465,6 +465,82 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
     }
   }
 
+  // ---- Which ENGINE carries the spoofed identity -------------------------
+  //
+  // Every surface above derives from the pinned major, so they agree with each
+  // other no matter what browser is underneath -- which is how a real 12-major
+  // gap went unnoticed: nwss drives the first existing path from its standard
+  // list, which on the machine this was found on is Chrome 145 while the pin
+  // advertises 157. `typeof Iterator.concat === "function"` is false on 145 and
+  // true from 157, so one line of feature detection reads through the disguise.
+  //
+  // The gap is REPORTED here, not closed. A variant that picked the newest
+  // browser installed instead made scripts/test-seeding.js fail intermittently
+  // on the sessionStorage seed -- 3 of 5 runs, against 4 of 4 clean on the
+  // installed Chrome, measured serially on one machine -- and scans still
+  // produced rules, so the damage would have been quiet. Closing the gap
+  // belongs in the installed browser. These pin the reporting AND the revert.
+  {
+    const STANDARD_PATHS = [
+      '/usr/bin/google-chrome-stable', '/usr/bin/google-chrome',
+      '/usr/bin/chromium-browser', '/usr/bin/chromium', '/snap/bin/chromium',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium'
+    ];
+    const run = (cmd, args) => new Promise((res) =>
+      execFile(cmd, args, { timeout: 20000, maxBuffer: 8 << 20 },
+        (err, stdout, stderr) => res({ err, stdout: String(stdout || ''), stderr: String(stderr || '') })));
+
+    const firstExisting = STANDARD_PATHS.find(c => fs.existsSync(c)) || null;
+    const pinnedMajor = parseInt((USER_AGENT_COLLECTIONS.get('chrome').match(/Chrome\/(\d+)/) || [])[1], 10);
+
+    const cfg = path.join(os.tmpdir(), `nwss-engine-${process.pid}.json`);
+    // Port 9 is on Chrome's blocked list, so navigation fails immediately --
+    // the browser still launches, which is the only part under test.
+    fs.writeFileSync(cfg, JSON.stringify({ sites: [{ url: 'http://127.0.0.1:9/', filterRegex: 'doubleclick' }] }));
+    const out = path.join(os.tmpdir(), `nwss-engine-${process.pid}.txt`);
+    const scan = await run(process.execPath, [path.join(REPO, 'nwss.js'), '--custom-json', cfg, '-o', out, '--debug']);
+    for (const f of [cfg, out]) { try { fs.unlinkSync(f); } catch {} }
+    const log = scan.stdout + scan.stderr;
+
+    const engineLine = (log.match(/Browser engine: .*/) || [])[0] || '';
+    const engineMajor = parseInt((engineLine.match(/\b(\d+)\.\d+\.\d+\.\d+\b/) || [])[1], 10);
+    check('nwss reports which engine it is driving', engineLine !== '',
+      'no "Browser engine:" line under --debug');
+
+    // Pins the REVERT: a newest-wins chooser is what broke seeding, so
+    // selection staying first-match is a decision rather than an accident.
+    if (firstExisting) {
+      check('the engine is the FIRST existing standard path, not the newest installed',
+        engineLine.includes(firstExisting), `${engineLine} (first existing: ${firstExisting})`);
+    }
+
+    // Anchored to the line: `[^[]*` matched across newlines, so with the path
+    // removed this ran on to the NEXT log line's `[debug]` prefix and captured
+    // "debug" -- non-empty and not the shell, so both checks below passed on
+    // garbage. Found by mutating the log line away and seeing nothing fail.
+    const spawned = (log.match(/Browser launched successfully:[^[\n]*\[([^\]\n]+)\]/) || [])[1] || '';
+    check('the launch log names the binary that actually spawned', spawned !== '',
+      'no [path] on the "Browser launched successfully" line');
+
+    // chrome-headless-shell is a different binary, reached by `headless:
+    // 'shell'` only when puppeteer resolves the browser itself. Not merely a
+    // fingerprinting tell: measured, it seeds 0 of 4 sessionStorage items, so
+    // it breaks the seeding this scanner depends on.
+    check('nwss does not drive chrome-headless-shell (it breaks storage seeding)',
+      spawned !== '' && !/chrome-headless-shell/.test(spawned), `spawned ${spawned}`);
+
+    // Reported when the gap exists, not invented when it does not -- an
+    // unconditional notice trains the operator to ignore it. NOTE: the no-gap
+    // branch is unreachable on a machine whose Chrome is behind the pin, so a
+    // mutation making this unconditional cannot be caught there.
+    const reported = /spoof advertises/.test(log);
+    check(`engine/spoof gap is reported iff present (engine ${engineMajor}, pin ${pinnedMajor})`,
+      reported === (Number.isFinite(engineMajor) && engineMajor < pinnedMajor),
+      `reported=${reported}, engine=${engineMajor}, pinned=${pinnedMajor}`);
+  }
+
+
   console.log(`\n${failed === 0 ? '✅' : '❌'} ${passed} passed, ${failed} failed\n`);
   process.exit(failed === 0 ? 0 : 1);
 })().catch(e => { console.error('FATAL', e); process.exit(1); });
