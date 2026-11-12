@@ -62,6 +62,7 @@ const { runProcess } = require('../lib/spawn-async');
 const { registrableDomain, siteScope } = require('../lib/site-scope');
 const { normalizeCookies, applyCookies, applySiteCookies, retainSeeded, removeCookies } = require('../lib/cookies');
 const { applySiteStorage, retainSeeded: retainSeededStorage, removeStorage } = require('../lib/storage');
+const { clearSiteData } = require('../lib/clear_sitedata');
 const { createPopupSignalMatcher, parseAdblockRules } = require('../lib/adblock');
 const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = require('../lib/css-blocking');
 const { installFetchXhrInterception, watchForReloadLoop } = require('../lib/eval-on-doc');
@@ -355,6 +356,11 @@ function resolverRuleArg() {
 /** localStorage keys currently visible to a page, as a sorted array. */
 function storageKeys(page) {
   return page.evaluate(() => Object.keys(localStorage).sort());
+}
+
+/** sessionStorage keys currently visible to a page, as a sorted array. */
+function sessionKeys(page) {
+  return page.evaluate(() => Object.keys(sessionStorage).sort());
 }
 
 /**
@@ -1049,6 +1055,113 @@ check('browser', 'storage writes are per-key: one over-quota value does not stop
     await page.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
     assertEqual(await storageKeys(page), ['a', 'b', 'd'], 'keys written alongside the failing one');
     return '3 of 4 keys written';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', "clear_sitedata leaves a concurrent sibling's sessionStorage alone", async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // THE bug behind test-seeding's intermittent "4 cookies + 4 local + 4
+    // session on every load" failure. nwss runs a site's URLs concurrently in
+    // ONE browser, so same-origin siblings are normal -- and
+    // Storage.clearDataForOrigin({storageTypes:'local_storage'}) does not stay
+    // inside localStorage: it tears down the sessionStorage namespace of EVERY
+    // tab on the origin. One sibling's clear therefore wiped the other's seeded
+    // session entries while its reloaded document was committing, so the seed's
+    // write landed, verified, and vanished with the namespace; localStorage came
+    // back because it is a persistent origin store and the injected seed
+    // rewrites it per document. Measured on the repro: 6 of 20 two-URL runs
+    // failed, 0 of 12 single-URL runs.
+    //
+    // The clear is in-page now, which removes the same origin-wide localStorage
+    // data without touching any session namespace. Probed side by side on two
+    // tabs each holding s1 + l1:
+    //   clearDataForOrigin local_storage -> sibling s:[] l:[]
+    //   in-page localStorage.clear()     -> sibling s:[s1] l:[]
+    const a = await browser.newPage();
+    const b = await browser.newPage();
+    for (const p of [a, b]) {
+      await p.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+      await p.evaluate(() => {
+        sessionStorage.setItem('s1', '1'); sessionStorage.setItem('s2', '2');
+        localStorage.setItem('l1', '1'); localStorage.setItem('l2', '2');
+      });
+    }
+
+    // Exactly what the reload path runs: quickMode = true.
+    await clearSiteData(b, `${ctx.server.ipBase}/gate`, false, true);
+
+    assertEqual(await sessionKeys(a), ['s1', 's2'], "the sibling's sessionStorage survives");
+    assertEqual(await sessionKeys(b), [], 'the clearing tab loses its own');
+    // The contract the clear still has to honour: localStorage IS origin-wide,
+    // so both tabs lose it. A "fix" that spared the sibling's localStorage
+    // would simply not be clearing site data.
+    assertEqual(await storageKeys(a), [], 'localStorage is still cleared origin-wide');
+    assertEqual(await storageKeys(b), [], 'for the clearing tab too');
+    return 'sibling session intact; localStorage cleared for both';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'clear_sitedata still clears storage with no document on the origin', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // The in-page clear needs a document on the origin, and the PRE-NAVIGATION
+    // clear has none -- it runs on about:blank, where storage access throws
+    // SecurityError. CDP can reach an origin without a document on it, so it
+    // stays the fallback; without it the first clear of every URL would quietly
+    // do nothing and inherit the previous site's state.
+    const seeder = await browser.newPage();
+    await seeder.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    await seeder.evaluate(() => localStorage.setItem('stale', '1'));
+    await seeder.close();
+
+    const fresh = await browser.newPage();           // on about:blank
+    const { output } = await captureLogs(() => clearSiteData(fresh, `${ctx.server.ipBase}/gate`, true, true));
+    // An off-origin session area is a SKIP, not a failure: there is nothing of
+    // this origin's to clear in this tab. It was reported as
+    // "sessionStorage clear failed: denied: SecurityError" on every
+    // pre-navigation clear, a failure line for a no-op.
+    assertExcludes(output, 'sessionStorage clear failed', 'an off-origin session area is not a failure');
+
+    const verify = await browser.newPage();
+    await verify.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    assertEqual(await storageKeys(verify), [], 'the stale localStorage entry is gone');
+    return 'CDP fallback cleared it; no false failure reported';
+  } finally {
+    await browser.close();
+  }
+});
+
+check('browser', 'a page that neuters localStorage.clear does not get a clean report', async (ctx) => {
+  const browser = await launchBrowser();
+  try {
+    // The in-page clear runs code the page can tamper with, which the CDP call
+    // could not be. Unverified, a site defending its own storage would get a
+    // "Cleared: ... localStorage" report and keep the session-cap state
+    // clear_sitedata exists to remove -- reporting success while doing nothing.
+    // So the in-page result is read back, and a non-empty area falls through to
+    // CDP, which the page cannot reach.
+    const page = await browser.newPage();
+    await page.goto(`${ctx.server.ipBase}/gate`, { waitUntil: 'domcontentloaded' });
+    await page.evaluate(() => {
+      localStorage.setItem('capped', '1');
+      // A real own property, which shadows Storage.prototype.clear -- verified:
+      // typeof is function, hasOwnProperty is true, and getItem('clear') is
+      // null, so it is not stored as an item.
+      localStorage.clear = () => {};
+    });
+    await clearSiteData(page, `${ctx.server.ipBase}/gate`, false, true);
+    // Asserted on ITEMS, not Object.keys(localStorage): the assignment above is
+    // an own property, so Object.keys lists "clear" whether or not the storage
+    // was cleared. `length` and getItem see items only. (The first version of
+    // this check compared Object.keys to [] and could not pass.)
+    assertEqual(await page.evaluate(() => [localStorage.length, localStorage.getItem('capped')]),
+      [0, null], 'the entry is gone despite the neutered clear');
+    return 'fell through to CDP and cleared it';
   } finally {
     await browser.close();
   }
