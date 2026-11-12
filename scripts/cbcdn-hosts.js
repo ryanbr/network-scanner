@@ -51,6 +51,7 @@ const path = require('path');
 const dns = require('dns').promises;
 const { parseCapture } = require('../lib/capture');
 const { hostRejectionReason } = require('../lib/output');
+const { rootDomainForHost } = require('../lib/har');
 
 /** Decode a percent-encoded value repeatedly, until it settles. */
 function fullyDecode(value) {
@@ -117,6 +118,31 @@ const RESOLVERS = Object.freeze({
 });
 
 /**
+ * Record types that exist only at a zone APEX. A records answer at any label,
+ * but NS records are the delegation itself, so a subdomain has none of its own
+ * unless it is separately delegated -- `www.<site>` returns nothing while the
+ * registrable root returns the pair. Asking such a type at a subdomain and
+ * treating the empty answer as final left the gate with NO rejecting power for
+ * every subdomain host: each one fell through the fail-open path and was
+ * published unconfirmed. That is the same defect the record-type gate was
+ * added to remove, one label down.
+ */
+const APEX_ONLY_TYPES = Object.freeze(new Set(['NS']));
+
+/**
+ * DNS outcomes that mean "authoritatively, there are no such records HERE",
+ * and so are safe to re-ask at the root: NODATA (the name exists, this type
+ * does not) and NXDOMAIN (the name does not exist).
+ *
+ * Deliberately NOT every failure. A SERVFAIL or a timeout leaves it UNKNOWN
+ * whether the host carries its own delegation, and answering from the root in
+ * that state would attribute the root operator's nameservers to a host that
+ * may belong to someone else -- inventing a confirmation out of a blip. Those
+ * keep the host unconfirmed exactly as before.
+ */
+const NO_RECORDS_HERE = Object.freeze(new Set(['ENODATA', 'ENOTFOUND', 'NOTFOUND']));
+
+/**
  * Keep a host when its records satisfy the dig terms.
  *
  * `mode: 'any'` keeps on the first term that matches; `mode: 'all'` requires
@@ -141,6 +167,11 @@ const RESOLVERS = Object.freeze({
  * mismatch, and the previous `.find()` would have returned undefined and
  * DROPPED the host, which contradicts that principle.
  *
+ * For an apex-only type an empty answer is RE-ASKED at the registrable root
+ * before that fail-open applies -- see APEX_ONLY_TYPES -- and any note that
+ * came from the root says `(at root <name>)`, so a confirmation can never be
+ * misread as being about the subdomain itself.
+ *
  * Matching is `startsWith` on a lowercased pair, so an address prefix still works as a
  * prefix and a nameserver name survives a resolver that applies DNS 0x20
  * mixed-case randomisation to its answer.
@@ -161,13 +192,40 @@ async function digKeep(host, terms, options = {}) {
   if (!lookup) {
     return { keep: true, note: `unsupported dig type ${type} (want ${Object.keys(RESOLVERS).join('/')}) -- kept unconfirmed` };
   }
-  let records;
-  try { records = await lookup(host, type); } catch (err) {
-    return { keep: true, note: `dns failed (${err.code || err.message}) -- kept unconfirmed` };
+  // One query, two possible names. `scope` is carried into every note below:
+  // an answer from the root must never read as an answer about the host, or
+  // the operator sees a confirmation and believes the host itself is on the
+  // fingerprint.
+  const ask = async (name) => {
+    try {
+      const got = await lookup(name, type);
+      return { records: (got || []).map(r => String(r).toLowerCase()), failure: null };
+    } catch (err) {
+      return { records: [], failure: err };
+    }
+  };
+
+  let { records, failure } = await ask(host);
+  let scope = '';
+  if (!records.length && APEX_ONLY_TYPES.has(type) &&
+      (!failure || NO_RECORDS_HERE.has(failure.code))) {
+    const root = rootDomainForHost(host);
+    // An apex host is already the root; re-asking would spend a second query
+    // to get the same empty answer AND tag the note `(at root ...)` for a name
+    // that IS the host, which is the misreading `scope` exists to prevent.
+    // Compared lowercased because the root is: psl normalises its answer, so a
+    // host spelled in mixed case would otherwise never equal its own root.
+    if (root && root !== String(host).toLowerCase()) {
+      scope = ` (at root ${root})`;
+      ({ records, failure } = await ask(root));
+    }
   }
-  records = (records || []).map(r => String(r).toLowerCase());
+
+  if (failure) {
+    return { keep: true, note: `dns failed (${failure.code || failure.message})${scope} -- kept unconfirmed` };
+  }
   if (!records.length) {
-    return { keep: true, note: `no ${type} records -- kept unconfirmed` };
+    return { keep: true, note: `no ${type} records${scope} -- kept unconfirmed` };
   }
   const lower = terms.map(t => t.toLowerCase());
   // Keep the RECORD that satisfied each term, not just the term. The note is
@@ -180,8 +238,8 @@ async function digKeep(host, terms, options = {}) {
     .filter(x => x.record);
   const ok = mode === 'all' ? hits.length === lower.length : hits.length > 0;
   return ok
-    ? { keep: true, note: hits.map(x => x.record === x.term ? x.record : `${x.term} in ${x.record}`).join('+') }
-    : { keep: false, note: `${mode === 'all' ? 'not all terms' : 'no term'} matched ${type} (${records.join(', ')})` };
+    ? { keep: true, note: hits.map(x => x.record === x.term ? x.record : `${x.term} in ${x.record}`).join('+') + scope }
+    : { keep: false, note: `${mode === 'all' ? 'not all terms' : 'no term'} matched ${type}${scope} (${records.join(', ')})` };
 }
 
 /** Hosts already present in a list file, as `||host^` or one per line. */

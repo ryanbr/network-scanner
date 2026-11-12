@@ -230,6 +230,113 @@ check('a malformed escape does not throw', fullyDecode('host%2'), 'host%2');
   check('an unsupported record type is named, not silently treated as A', bogus.keep, true);
   check('and says which types exist', /unsupported dig type MX \(want A\/NS\)/.test(bogus.note), true);
 
+  // An apex-only type at a SUBDOMAIN. NS records ARE the delegation, so a
+  // subdomain has none of its own unless it is separately delegated: the query
+  // returns NODATA and the old code took that as final, fell through the
+  // fail-open path and published the host unconfirmed. Every subdomain host
+  // therefore passed the gate -- no rejecting power at all, the same defect the
+  // record-type gate exists to remove. These pin the retry AND its limits; the
+  // resolver answers per NAME and records what it was asked, because "did it
+  // ask the root?" is half of what is being tested.
+  const byName = (answers) => {
+    const asked = [];
+    const fn = async (name) => {
+      asked.push(name);
+      const a = answers[name];
+      if (a === undefined) { const e = new Error('nope'); e.code = 'ENODATA'; throw e; }
+      if (a instanceof Error) throw a;
+      return a;
+    };
+    fn.asked = asked;
+    return fn;
+  };
+  const err = (code) => Object.assign(new Error('nope'), { code });
+
+  const onPair = byName({ 'example.co.uk': PAIR });
+  const subOnPair = await digKeep('a.b.example.co.uk', PAIR,
+    { recordType: 'NS', mode: 'all', resolve: onPair });
+  check('a subdomain with no NS of its own confirms from its registrable root',
+    subOnPair.keep, true);
+  check('and the root it was answered from is the PSL root, not the parent label',
+    onPair.asked, ['a.b.example.co.uk', 'example.co.uk']);
+  check('and the note says the answer came from the root, not the host',
+    subOnPair.note, 'ns1.operator.example+ns2.operator.example (at root example.co.uk)');
+
+  // The rejecting power that was missing: a subdomain whose root is on SOMEONE
+  // ELSE's nameservers is now dropped instead of published unconfirmed.
+  const offPair = await digKeep('a.sub.example.co.uk', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: byName({ 'example.co.uk': ['ns7.unrelated.example', 'ns8.unrelated.example'] }) });
+  check('a subdomain whose root is NOT on the pair is now rejected', offPair.keep, false);
+  check('and the rejection says where it looked',
+    /not all terms matched NS \(at root example\.co\.uk\)/.test(offPair.note), true);
+
+  // A DELEGATED subdomain answers for itself, and the root is never consulted:
+  // its own nameservers are the authoritative answer and the root's would be
+  // the wrong operator.
+  const delegated = byName({
+    'ns.sub.example.co.uk': ['ns7.unrelated.example', 'ns8.unrelated.example'],
+    'example.co.uk': PAIR
+  });
+  const own = await digKeep('ns.sub.example.co.uk', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: delegated });
+  check('a delegated subdomain is judged on its OWN records', own.keep, false);
+  check('and the root is never asked', delegated.asked, ['ns.sub.example.co.uk']);
+  check('so its note carries no root tag', /at root/.test(own.note), false);
+
+  // An apex host IS the root. Re-asking would spend a second query to receive
+  // the same empty answer.
+  const apex = byName({ 'example.co.uk': [] });
+  const apexEmpty = await digKeep('example.co.uk', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: apex });
+  check('an apex host is not re-asked at itself', apex.asked, ['example.co.uk']);
+  check('and still fails open', apexEmpty.keep, true);
+  check('with no root tag on the note', apexEmpty.note, 'no NS records -- kept unconfirmed');
+
+  // `rootDomainForHost` normalises case (psl does), so comparing its answer
+  // against the raw host made an apex host spelled in mixed case unequal to its
+  // own root: re-queried at itself, and the note tagged `(at root ...)` for a
+  // name that IS the host -- the misreading the tag exists to prevent. The CLI
+  // lowercases before it gets here, but digKeep is exported.
+  const mixed = byName({ 'Example.CO.UK': [] });
+  const mixedApex = await digKeep('Example.CO.UK', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: mixed });
+  check('a mixed-case apex host is recognised as its own root', mixed.asked, ['Example.CO.UK']);
+  check('and its note carries no root tag', mixedApex.note, 'no NS records -- kept unconfirmed');
+
+  // The limit on the retry. A SERVFAIL leaves it UNKNOWN whether the host is
+  // delegated elsewhere, so answering from the root would attribute the root
+  // operator's nameservers to a host that may not be theirs -- a confirmation
+  // invented out of a blip.
+  const blip = byName({ 'a.b.example.co.uk': err('ESERVFAIL'), 'example.co.uk': PAIR });
+  const unknown = await digKeep('a.b.example.co.uk', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: blip });
+  check('a SERVFAIL is NOT answered from the root', blip.asked, ['a.b.example.co.uk']);
+  check('and keeps the host unconfirmed', unknown.keep, true);
+  check('naming the failure', /dns failed \(ESERVFAIL\) -- kept unconfirmed/.test(unknown.note), true);
+
+  // NXDOMAIN does retry: the name does not exist, so it carries no delegation.
+  const gone = byName({ 'a.b.example.co.uk': err('ENOTFOUND'), 'example.co.uk': PAIR });
+  const nx = await digKeep('a.b.example.co.uk', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: gone });
+  check('NXDOMAIN at the host is re-asked at the root', gone.asked.length, 2);
+  check('and the root answer decides it', nx.keep, true);
+
+  // A records answer at ANY label, so the retry must not apply to them -- or a
+  // subdomain on its own address would be judged by its root's.
+  const aRecords = byName({ 'a.b.example.co.uk': [], 'example.co.uk': ['192.0.2.7'] });
+  const aEmpty = await digKeep('a.b.example.co.uk', ['192.0.2.'], { resolve: aRecords });
+  check('an empty A answer is NOT re-asked at the root', aRecords.asked, ['a.b.example.co.uk']);
+  check('and fails open as before', aEmpty.keep, true);
+
+  // The root query can fail too; that is still fail-open, and the note has to
+  // say which name failed.
+  const rootBlip = byName({ 'example.co.uk': err('ESERVFAIL') });
+  const rb = await digKeep('a.b.example.co.uk', PAIR, { recordType: 'NS', mode: 'all',
+    resolve: rootBlip });
+  check('a failure at the root keeps the host', rb.keep, true);
+  check('and says it was the root that failed',
+    rb.note, 'dns failed (ESERVFAIL) (at root example.co.uk) -- kept unconfirmed');
+
   console.log(`\n${pass} passed, ${fail} failed\n`);
   process.exit(fail ? 1 : 0);
 })();
