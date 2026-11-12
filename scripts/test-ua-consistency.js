@@ -192,7 +192,15 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
           img.src = '/report?d=' + encodeURIComponent(JSON.stringify({
             userAgent: navigator.userAgent, brands: d ? d.brands : null,
             platform: d ? d.platform : null, mobile: d ? d.mobile : null, high: hi,
-            manifestVersion }));
+            manifestVersion,
+            // Locale/timezone view. Wrapped because a hostile or broken Intl
+            // must not abort the whole report -- a null reads as a failure
+            // below rather than as a silently missing check.
+            tz: (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return null; } })(),
+            icuLocale: (() => { try { return Intl.DateTimeFormat().resolvedOptions().locale; } catch (e) { return null; } })(),
+            tzOffset: new Date().getTimezoneOffset(),
+            navLanguage: navigator.language,
+            navPlatform: navigator.platform }));
         })();
       </script></body></html>`);
     }
@@ -322,6 +330,72 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
       fh['accept'], '*/*');
     eqJSON('chrome fetch(): User-Agent still carries the spoof',
       fh['user-agent'], js.userAgent);
+  }
+
+  // ---- locale / timezone / platform coherence ----------------------------
+  //
+  // nwss already does the hard part the right way: the timezone is emulated at
+  // the CDP level (Emulation.setTimezoneOverride), not by overriding Intl and
+  // Date.getTimezoneOffset, which lib/fingerprint.js records as "actively
+  // harmful" because the hardcoded offsets ignored DST. What nothing pinned is
+  // that the surfaces AGREE. They agree today by convention -- every profile
+  // timezone is America/* and acceptLanguageFor always returns en-US -- so a
+  // Europe/Berlin profile, or a locale change, would ship an en-US page sitting
+  // in a German timezone. That is a first-order contradiction, the same class
+  // as a Chrome 145 engine advertising 157, and no UA surface would notice.
+  //
+  // These are discriminating on this host rather than passing by luck: the
+  // machine's real zone is Pacific/Auckland, so an emulation failure reports
+  // Auckland against an America/* profile and the check fails. navigator
+  // .language is the exception -- it is spoofed to en-US and the host is also
+  // en-US, so its check proves coherence with the header, not that spoofing ran.
+  {
+    const fpSrc = fs.readFileSync(path.join(REPO, 'lib', 'fingerprint.js'), 'utf8');
+    const zones = [...new Set([...fpSrc.matchAll(/timezone:\s*'([^']+)'/g)].map(m => m[1]))];
+    const langFamily = (acceptLanguageFor(chromeUa).split(',')[0] || '').trim();
+
+    check('fingerprint.js declares at least one timezone', zones.length > 0, String(zones.length));
+    // If a non-US locale or a non-American zone is introduced this SHOULD fail:
+    // the pairing is the decision being pinned, not an implementation detail.
+    check(`every declared timezone matches the ${langFamily} locale region`,
+      langFamily === 'en-US' && zones.every(z => z.startsWith('America/')),
+      `locale ${langFamily}, zones ${zones.join(', ')}`);
+
+    check('the page reports a spoofed timezone from the declared set',
+      zones.includes(js.tz), `page tz ${js.tz}, declared ${zones.join(', ')}`);
+
+    // getTimezoneOffset is derived by the engine from the emulated zone, so it
+    // must match an independent computation for that zone -- the DST correctness
+    // the JS-override approach kept getting wrong. Computed via formatToParts
+    // rather than Date parsing, which is implementation-defined.
+    //
+    // A REGRESSION guard, labelled as one: while the zone comes from
+    // emulateTimezone, Date and Intl agree by construction, so no mutation
+    // reaches this -- disabling emulation leaves the page reporting its real
+    // zone AND that zone's offset, which still agrees. It fails only if someone
+    // reintroduces JS-level timezone patching, which is the decision it pins.
+    const offsetFor = (zone, when = new Date()) => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: zone, hour12: false, year: 'numeric', month: '2-digit',
+        day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit'
+      }).formatToParts(when).filter(x => x.type !== 'literal');
+      const f = Object.fromEntries(parts.map(x => [x.type, x.value]));
+      const asUTC = Date.UTC(+f.year, +f.month - 1, +f.day,
+        f.hour === '24' ? 0 : +f.hour, +f.minute, +f.second);
+      return Math.round((when.getTime() - asUTC) / 60000);
+    };
+    if (js.tz) {
+      const want = offsetFor(js.tz);
+      check('Date.getTimezoneOffset agrees with the emulated zone (DST included)',
+        Math.abs(js.tzOffset - want) <= 1, `page ${js.tzOffset}, computed ${want} for ${js.tz}`);
+    } else {
+      check('Date.getTimezoneOffset agrees with the emulated zone (DST included)',
+        false, 'page reported no timezone');
+    }
+
+    eqJSON('navigator.language matches the Accept-Language family', js.navLanguage, langFamily);
+    check('ICU locale agrees with navigator.language',
+      String(js.icuLocale || '').startsWith(langFamily), `${js.icuLocale} vs ${langFamily}`);
   }
 
   console.log('\n=== Firefox family coherence ===');
