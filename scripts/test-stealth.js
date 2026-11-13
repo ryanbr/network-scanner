@@ -364,6 +364,25 @@ function formatResult(target, result) {
             while (o && !d) { d = Object.getOwnPropertyDescriptor(o, prop); if (!d) o = Object.getPrototypeOf(o); }
             if (!d || typeof d.get !== 'function') continue;
             if (d.get.name !== `get ${prop}`) bad.push(`${path}.${prop} getter name=${JSON.stringify(d.get.name)}`);
+            // WHERE the accessor lives. Chrome keeps these on
+            // Navigator.prototype / Screen.prototype, so a spoof that defines
+            // them on the instance makes
+            // Object.getOwnPropertyDescriptor(navigator, 'platform') return a
+            // descriptor where a real browser returns undefined -- one
+            // expression per property, needing no function metadata at all.
+            // Specifically SHADOWING: an own property sitting in front of a
+            // prototype slot that exists. A property the context does not
+            // expose natively at all (navigator.deviceMemory on about:blank,
+            // which Chrome gates) has no slot to mirror, so defining it on the
+            // instance is the only option and is not this defect.
+            const ownHere = Object.getOwnPropertyDescriptor(obj, prop);
+            let protoHas = false;
+            for (let o = Object.getPrototypeOf(obj); o; o = Object.getPrototypeOf(o)) {
+              if (Object.getOwnPropertyDescriptor(o, prop)) { protoHas = true; break; }
+            }
+            if (ownHere && protoHas) {
+              bad.push(`${path}.${prop} is an OWN property shadowing the prototype slot`);
+            }
           }
           return bad;
         })(),
