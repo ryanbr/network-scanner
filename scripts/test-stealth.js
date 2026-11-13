@@ -364,6 +364,17 @@ function formatResult(target, result) {
             while (o && !d) { d = Object.getOwnPropertyDescriptor(o, prop); if (!d) o = Object.getPrototypeOf(o); }
             if (!d || typeof d.get !== 'function') continue;
             if (d.get.name !== `get ${prop}`) bad.push(`${path}.${prop} getter name=${JSON.stringify(d.get.name)}`);
+            // SOURCE. An arrow function prints ITSELF, so a spoofed getter
+            // returned "() => spoof.platform" where Chrome returns
+            // "function get platform() { [native code] }", and screen.width
+            // returned "() => spoof.screen[prop]" -- it does not just reveal
+            // the patch, it prints the spoof's internals. Measured at 13 of 22
+            // probed accessors, every one installed by the injection that had
+            // no toString masking of its own. A native getter satisfies this
+            // already, so the assertion holds either way.
+            let gsrc = '';
+            try { gsrc = d.get.toString(); } catch (e) { gsrc = 'THREW ' + e.message; }
+            if (!gsrc.includes('[native code]')) bad.push(`${path}.${prop} getter source=${JSON.stringify(gsrc.slice(0, 48))}`);
             // WHERE the accessor lives. Chrome keeps these on
             // Navigator.prototype / Screen.prototype, so a spoof that defines
             // them on the instance makes
@@ -384,6 +395,36 @@ function formatResult(target, result) {
               bad.push(`${path}.${prop} is an OWN property shadowing the prototype slot`);
             }
           }
+          // Function.prototype.toString is itself replaced -- once per
+          // injection, so twice -- and is the function a detector is likeliest
+          // to inspect. Four things have to match a real one.
+          (() => {
+            const ts = Function.prototype.toString;
+            let tsrc = '';
+            try { tsrc = ts.toString(); } catch (e) { tsrc = 'THREW ' + e.message; }
+            if (!tsrc.includes('[native code]')) bad.push(`Function.prototype.toString source=${JSON.stringify(tsrc.slice(0, 48))}`);
+            if (ts.name !== 'toString') bad.push(`Function.prototype.toString name=${JSON.stringify(ts.name)}`);
+            if (ts.length !== 0) bad.push(`Function.prototype.toString length=${ts.length}`);
+            // A function EXPRESSION has an own `prototype`; a native function
+            // and a method shorthand do not. One expression, and it cannot be
+            // deleted after the fact.
+            const own = Object.getOwnPropertyNames(ts).sort().join(',');
+            if (own !== 'length,name') bad.push(`Function.prototype.toString ownProps=${own}`);
+            // Calling it on a non-function throws, and the stack COUNTS THE
+            // WRAPPERS: Chrome's builtin frame carries no source position,
+            // every layer here does, which is what makes them countable.
+            // Measured 3 frames against a clean browser's 1.
+            try { ts.call({}); } catch (err) {
+              const frames = String((err && err.stack) || '').split('\n')
+                .filter(line => /^\s*at (?:[\w$]+\.)?toString \(<anonymous>:\d+:\d+\)$/.test(line));
+              if (frames.length) bad.push(`Function.prototype.toString leaks ${frames.length} wrapper frame(s) in its error stack`);
+            }
+            // The chain must not swallow a page's OWN source: a wrapper that
+            // answered "[native code]" for everything would break every
+            // library that inspects a function, and be caught in one line.
+            function harnessOwnFn(a, b) { return a + b; }
+            if (!harnessOwnFn.toString().includes('return a + b')) bad.push('a page function no longer reports its own source');
+          })();
           return bad;
         })(),
         // Canvas noise has to reach OffscreenCanvas, a SEPARATE interface from
