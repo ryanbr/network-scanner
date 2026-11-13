@@ -41,7 +41,7 @@ const { getCssBlockedSelectors, injectCssBlocking, applyCssBlockingNow } = requi
 const { createGrepHandler, validateGrepAvailability } = require('./lib/grep');
 const { compressMultipleFiles } = require('./lib/compress');
 const { parseSearchStrings, createResponseHandler } = require('./lib/searchstring');
-const { applyAllFingerprintSpoofing, acceptLanguageFor, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION } = require('./lib/fingerprint');
+const { applyAllFingerprintSpoofing, acceptLanguageFor, USER_AGENT_COLLECTIONS, CHROME_BUILD, CHROME_GREASE_BRAND, CHROME_GREASE_VERSION, chromeClientHints } = require('./lib/fingerprint');
 const { formatRules, handleOutput, getFormatDescription, outputKeyFromUrl } = require('./lib/output');
 // Curl functionality (replace searchstring curl handler)
 const { validateCurlAvailability, createCurlHandler: createCurlModuleHandler } = require('./lib/curl');
@@ -3516,19 +3516,6 @@ function setupFrameHandling(page, forceDebug) {
         // from CHROME_BUILD, which would then contradict the real engine)
         if (!externalStealth && siteConfig.userAgent && siteConfig.userAgent.toLowerCase().includes('chrome')) {
           const userAgentKey = siteConfig.userAgent.toLowerCase();
-          let platform = 'Windows';
-          let platformVersion = '19.0.0'; // Win11 — MUST match fingerprint.js's userAgentData platformVersion
-          let arch = 'x86';
-          
-          if (userAgentKey === 'chrome_mac') {
-            platform = 'macOS';
-            platformVersion = '13.5.0';
-            arch = 'arm';
-          } else if (userAgentKey === 'chrome_linux') {
-            platform = 'Linux';
-            platformVersion = '6.5.0';
-            arch = 'x86';
-          }
 
           // Derive the Chrome major version from the SAME UA string the
           // browser actually sends (USER_AGENT_COLLECTIONS, via
@@ -3550,6 +3537,17 @@ function setupFrameHandling(page, forceDebug) {
           const chromeMajor = (browserUa.match(/Chrome\/(\d+)/) || [])[1]
             || ((USER_AGENT_COLLECTIONS.get('chrome') || '').match(/Chrome\/(\d+)/) || [])[1];
           const fullVer = `${chromeMajor}.0.${CHROME_BUILD}`;
+          // platform / platformVersion / arch come from lib/fingerprint's
+          // chromeClientHints -- the SAME object handed to the browser as
+          // userAgentMetadata in applyUserAgentSpoofing. They were derived
+          // separately here, each copy carrying a comment that it must match
+          // the other, which is the arrangement that let the brand ORDER drift
+          // between the headers and the JS. Fall back to this UA collection's
+          // own entry if the site named a key we cannot resolve.
+          const hints = chromeClientHints(browserUa || USER_AGENT_COLLECTIONS.get('chrome'));
+          const platform = hints ? hints.platform : 'Windows';
+          const platformVersion = hints ? hints.platformVersion : '19.0.0';
+          const arch = hints ? hints.architecture : 'x86';
 
           const chHeaders = {
             // Brand list order + grease match real Chrome of this major exactly

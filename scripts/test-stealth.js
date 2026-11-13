@@ -271,11 +271,15 @@ function formatResult(target, result) {
   // exploits: two bugs found this way were window.chrome being built under a
   // Firefox/Safari UA, and Firefox reporting 5 PDF plugins with 0 mimeTypes.
   // Cheap, offline (about:blank), and independent of any third-party page.
-  if (!NO_SPOOF) {
+  // Run for BOTH fingerprint_protection profiles. The harness only ever
+  // exercised 'random', which is why it never saw that the FIXED profile
+  // reported navigator.platform Win32 under a Linux or Mac UA while the UA,
+  // userAgentData and Sec-CH-UA-Platform all said otherwise.
+  for (const fpProfile of (NO_SPOOF ? [] : ['random', true])) {
     const page = await browser.newPage();
     try {
       await applyAllFingerprintSpoofing(page,
-        { userAgent: UA_FLAG, fingerprint_protection: 'random' }, false, 'https://example.com');
+        { userAgent: UA_FLAG, fingerprint_protection: fpProfile }, false, 'https://example.com');
       await page.goto('about:blank');
       const f = await page.evaluate(() => ({
         ua: navigator.userAgent,
@@ -283,6 +287,7 @@ function formatResult(target, result) {
         vendor: navigator.vendor,
         chromeObj: typeof window.chrome !== 'undefined',
         uaData: typeof navigator.userAgentData !== 'undefined',
+        uaDataPlatform: navigator.userAgentData ? navigator.userAgentData.platform : null,
         perfMemory: typeof performance.memory !== 'undefined',
         deviceMemory: typeof navigator.deviceMemory !== 'undefined',
         connection: typeof navigator.connection !== 'undefined',
@@ -458,6 +463,13 @@ function formatResult(target, result) {
       // OS and vendor must track the UA.
       if (uaOS === 'Windows' && !/Win/.test(f.platform)) issues.push(`UA says Windows but platform=${f.platform}`);
       if (uaOS === 'Mac' && !/Mac/.test(f.platform)) issues.push(`UA says Mac but platform=${f.platform}`);
+      // The Linux case was missing, and it is the one the fixed profile broke.
+      if (uaOS === 'Linux' && !/Linux/.test(f.platform)) issues.push(`UA says Linux but platform=${f.platform}`);
+      // navigator.platform against the UA-CH platform, which is now the
+      // browser's own: these two disagreeing is a one-subtraction check.
+      if (f.uaDataPlatform && uaOS === 'Linux' && f.uaDataPlatform !== 'Linux') issues.push(`UA says Linux but userAgentData.platform=${f.uaDataPlatform}`);
+      if (f.uaDataPlatform && uaOS === 'Windows' && f.uaDataPlatform !== 'Windows') issues.push(`UA says Windows but userAgentData.platform=${f.uaDataPlatform}`);
+      if (f.uaDataPlatform && uaOS === 'Mac' && f.uaDataPlatform !== 'macOS') issues.push(`UA says Mac but userAgentData.platform=${f.uaDataPlatform}`);
       if (isSafari && f.vendor !== 'Apple Computer, Inc.') issues.push(`UA claims Safari but vendor=${JSON.stringify(f.vendor)}`);
       // A PDF plugin with no PDF mime type (or the reverse) is incoherent.
       if (f.plugins > 0 && f.mimeTypes === 0) issues.push(`${f.plugins} plugins but 0 mimeTypes`);
@@ -509,15 +521,15 @@ function formatResult(target, result) {
         issues.push(`canvas coherence check could not run: ${f.canvas.error}`);
       }
 
-      collected.push({ name: 'self-consistency', url: 'about:blank', ok: true, durationMs: 0,
+      collected.push({ name: `self-consistency (fp=${fpProfile})`, url: 'about:blank', ok: true, durationMs: 0,
         result: { passed: issues.length === 0 ? 1 : 0, failed: issues.length, warn: 0,
                   total: 1, failures: issues, warnings: [] } });
       if (FORMAT !== 'json') {
-        console.log(`\nself-consistency (--ua=${UA_FLAG}): ${issues.length === 0 ? 'OK' : issues.length + ' issue(s)'}`);
+        console.log(`\nself-consistency (--ua=${UA_FLAG}, fingerprint_protection=${fpProfile}): ${issues.length === 0 ? 'OK' : issues.length + ' issue(s)'}`);
         issues.forEach(i => console.log(`  - ${i}`));
       }
     } catch (err) {
-      collected.push({ name: 'self-consistency', url: 'about:blank', ok: false, durationMs: 0, error: err.message });
+      collected.push({ name: `self-consistency (fp=${fpProfile})`, url: 'about:blank', ok: false, durationMs: 0, error: err.message });
     } finally {
       try { await page.close(); } catch (_) {}
     }
