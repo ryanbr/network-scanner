@@ -376,10 +376,55 @@ function formatResult(target, result) {
               crossDocument = inFrame === inTop ? 'agree' : 'differ';
             } catch (e) { crossDocument = 'error:' + e.name; }
 
+            // Font normalisation: a non-standard family must be drawn AND
+            // measured as if only the standard set were installed, generics must
+            // be left alone, and ctx.font must still read back what the page set.
+            const renderWith = (font) => {
+              const ctx = ctxOf('html', 160, 30);
+              ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, 160, 30);
+              ctx.fillStyle = '#000000'; ctx.font = font; ctx.fillText('Handgloves 123', 2, 20);
+              return hash(ctx.getImageData(0, 0, 160, 30).data);
+            };
+            const widthWith = (font) => {
+              const ctx = ctxOf('html', 10, 10);
+              ctx.font = font; return +ctx.measureText('Handgloves 123').width.toFixed(2);
+            };
+            const arialRender = renderWith('16px Arial');
+            // Control: can this host tell two families apart at all? Measured
+            // with TWO STANDARD families, which normalisation never rewrites --
+            // so the control stays independent of everything it gates. Using
+            // monospace here (the first attempt) made the control and the
+            // generic-preservation assertion the same measurement, so breaking
+            // generics turned the control false and gated its own check out:
+            // the mutation passed clean.
+            const fontsDiffer = renderWith('16px "Times New Roman"') !== arialRender;
+            const font = {
+              fontsDiffer,
+              normalisedRender: renderWith('16px "DejaVu Sans Mono"') === arialRender,
+              normalisedWidth: widthWith('16px "DejaVu Sans Mono"') === widthWith('16px Arial'),
+              genericPreserved: renderWith('16px monospace') !== arialRender,
+              leak: (() => {
+                const ctx = ctxOf('html', 10, 10);
+                const asked = '16px "DejaVu Sans Mono"';
+                ctx.font = asked; ctx.fillText('x', 1, 1);
+                return ctx.font !== asked;
+              })(),
+              // Function.name and Function.length are own properties, so a
+              // wrapper assigned to a prototype slot reports name '' and its own
+              // declared arity unless both are restored. Lengths are the spec
+              // arities of these three methods.
+              identity: [['fillText', 3], ['strokeText', 3], ['measureText', 1]]
+                .filter(([n, len]) => {
+                  const f = CanvasRenderingContext2D.prototype[n];
+                  return !f || f.name !== n || f.length !== len;
+                }).map(([n]) => n)
+            };
+
             const hx = ctxOf('html', 120, 40); draw(hx);
             const ox = ctxOf('off', 120, 40); draw(ox);
             return {
               available: true,
+              font,
               impossiblePixels,
               crossDocument,
               html: profile('html'),
@@ -443,6 +488,16 @@ function formatResult(target, result) {
           }
         }
         if (!f.canvas.agree) issues.push('HTMLCanvas and OffscreenCanvas return different pixels for the same drawing');
+        if (f.canvas.font) {
+          const fo = f.canvas.font;
+          if (fo.fontsDiffer) {
+            if (!fo.normalisedRender) issues.push('a non-standard font is drawn as itself — canvas font normalisation is not reaching fillText');
+            if (!fo.normalisedWidth) issues.push('measureText reports a non-standard font\'s own metrics while fillText draws another font');
+            if (!fo.genericPreserved) issues.push('a CSS generic family (monospace) is being rewritten to Arial');
+          }
+          if (fo.leak) issues.push('ctx.font does not read back what the page set — the font substitution is visible to the page');
+          if (fo.identity.length) issues.push(`wrapped text method(s) report the wrong name/length: ${fo.identity.join(', ')}`);
+        }
         if (f.canvas.impossiblePixels > 0) {
           issues.push(`${f.canvas.impossiblePixels} fully transparent pixel(s) returned non-zero RGB — premultiplied alpha makes that impossible in a real canvas`);
         }
