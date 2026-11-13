@@ -294,7 +294,102 @@ function formatResult(target, result) {
         // Collection TYPES, not just lengths: a plain array passes a length
         // check but fails `instanceof`, which is false on no real browser.
         pluginsIsPluginArray: (() => { try { return navigator.plugins instanceof PluginArray; } catch (e) { return false; } })(),
-        mimeIsMimeTypeArray: (() => { try { return navigator.mimeTypes instanceof MimeTypeArray; } catch (e) { return false; } })()
+        mimeIsMimeTypeArray: (() => { try { return navigator.mimeTypes instanceof MimeTypeArray; } catch (e) { return false; } })(),
+        // Canvas noise has to reach OffscreenCanvas, a SEPARATE interface from
+        // HTMLCanvasElement whose 2d context has its own prototype. Measured
+        // before it did: the same drawing came back noised through one and RAW
+        // through the other, so a fingerprinter read the true canvas by using
+        // OffscreenCanvas, and the disagreement was itself a one-line test that
+        // a patch was present. '16px Arial' is deliberate -- a standard family
+        // keeps fillText's font-normalisation branch out of the comparison.
+        canvas: (() => {
+          try {
+            if (typeof OffscreenCanvas === 'undefined') return { available: false };
+            const hash = (a) => { let h = 2166136261; for (let i = 0; i < a.length; i++) { h ^= a[i]; h = (h * 16777619) >>> 0; } return h.toString(16); };
+            const ctxOf = (kind, w, h) => kind === 'html'
+              ? (() => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c.getContext('2d'); })()
+              : new OffscreenCanvas(w, h).getContext('2d');
+            // A solid mid-grey fill is uniform BEFORE noise, so every departure
+            // from 0x80 is the noise and can be counted. 0x80 so a +/-1
+            // perturbation cannot be lost to clamping at 0 or 255.
+            //
+            // Counting rather than just asking "did anything change" is the
+            // point: the shipped noise was once a constant -1 on EVERY pixel
+            // (a broken hash whose low bits were all rounded to zero), which
+            // changes every pixel and so passes any did-anything-change test
+            // while randomising nothing and being invertible by adding 1 back.
+            // unchanged>0, both directions present, and nothing beyond +/-1 are
+            // what separate real per-pixel noise from a blanket offset.
+            const profile = (kind) => {
+              const ctx = ctxOf(kind, 60, 20);
+              ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 60, 20);
+              const d = ctx.getImageData(0, 0, 60, 20).data;
+              let unchanged = 0, up = 0, down = 0, other = 0;
+              for (let i = 0; i < d.length; i += 4) {
+                if (d[i] === 0x80) unchanged++;
+                else if (d[i] === 0x81) up++;
+                else if (d[i] === 0x7f) down++;
+                else other++;
+              }
+              return { unchanged, up, down, other, total: d.length / 4 };
+            };
+            const draw = (ctx) => {
+              ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 120, 40);
+              ctx.fillStyle = '#069'; ctx.font = '16px Arial'; ctx.fillText('probe', 4, 30);
+            };
+            // A fresh canvas is fully transparent, and because a canvas stores
+            // premultiplied alpha a real browser can only ever return 0,0,0,0
+            // for such a pixel. Noise that touches R/G regardless of alpha
+            // invents an impossible state -- measured at 17 of 400 pixels, and
+            // bot.sannysoft.com's TRANSPARENT_PIXEL row caught it.
+            let impossiblePixels = 0;
+            {
+              const t = document.createElement('canvas'); t.width = 40; t.height = 10;
+              const td = t.getContext('2d').getImageData(0, 0, 40, 10).data;
+              for (let i = 0; i < td.length; i += 4) {
+                if (td[i + 3] === 0 && (td[i] || td[i + 1] || td[i + 2])) impossiblePixels++;
+              }
+            }
+
+            // Two documents on the SAME host must get the same canvas. The
+            // seed was once Math.random() per document, which only looked fine
+            // while the noise hash was broken and the seed did nothing --
+            // measured once it worked: a same-origin iframe and a reload each
+            // produced a different fingerprint, which real Chrome never does.
+            // The canvas is built inside the iframe's own document so it is the
+            // IFRAME's patched prototype and its own seed being read, not this
+            // document's.
+            let crossDocument = 'n/a';
+            try {
+              const ifr = document.createElement('iframe');
+              ifr.style.display = 'none';
+              document.body.appendChild(ifr);
+              const solidHash = (doc) => {
+                const c = doc.createElement('canvas'); c.width = 60; c.height = 20;
+                const cx = c.getContext('2d');
+                cx.fillStyle = '#808080'; cx.fillRect(0, 0, 60, 20);
+                return hash(cx.getImageData(0, 0, 60, 20).data);
+              };
+              const inFrame = solidHash(ifr.contentDocument);
+              const inTop = solidHash(document);
+              ifr.remove();
+              crossDocument = inFrame === inTop ? 'agree' : 'differ';
+            } catch (e) { crossDocument = 'error:' + e.name; }
+
+            const hx = ctxOf('html', 120, 40); draw(hx);
+            const ox = ctxOf('off', 120, 40); draw(ox);
+            return {
+              available: true,
+              impossiblePixels,
+              crossDocument,
+              html: profile('html'),
+              off: profile('off'),
+              agree: hash(hx.getImageData(0, 0, 120, 40).data) === hash(ox.getImageData(0, 0, 120, 40).data),
+              offWrapVisible: typeof OffscreenCanvasRenderingContext2D !== 'undefined'
+                && !/\[native code\]/.test(String(OffscreenCanvasRenderingContext2D.prototype.getImageData))
+            };
+          } catch (e) { return { available: true, error: e.name }; }
+        })()
       }));
 
       const isFirefox = /Firefox\//.test(f.ua);
@@ -325,6 +420,39 @@ function formatResult(target, result) {
       // Type integrity of the collections, checked regardless of length.
       if (!f.pluginsIsPluginArray) issues.push('navigator.plugins is not a PluginArray');
       if (!f.mimeIsMimeTypeArray) issues.push('navigator.mimeTypes is not a MimeTypeArray');
+      // Canvas coherence. Three checks because none of them covers another,
+      // both mutations verified: dropping the OffscreenCanvas wrap leaves that
+      // path unnoised AND disagreeing, while giving it a SECOND, independent
+      // noise implementation leaves it noised and still disagreeing -- which is
+      // the drift the shared noiseImageData exists to prevent.
+      if (f.canvas && f.canvas.available && !f.canvas.error) {
+        for (const [kind, c] of [['HTMLCanvas', f.canvas.html], ['OffscreenCanvas', f.canvas.off]]) {
+          if (c.up + c.down === 0) issues.push(`canvas noise is not reaching ${kind} getImageData`);
+          else if (c.unchanged === 0) issues.push(`${kind} noise alters EVERY pixel — a blanket offset, not per-pixel noise`);
+          else if (c.up === 0 || c.down === 0) issues.push(`${kind} noise moves pixels one way only (up=${c.up} down=${c.down})`);
+          if (c.other > 0) issues.push(`${kind} noise moved ${c.other} pixel(s) by more than +/-1`);
+          // The RATE, not just the shape. The gate selects 2 of 16 pixels and a
+          // third of those draw a 0 shift, so ~8.3% of pixels move; at n=1200
+          // this band sits about 7 sigma out, so it cannot flake. Added because
+          // a mutation that broke only the GATE (every pixel selected, shifts
+          // still distributed) passed every check above -- unchanged>0 was
+          // satisfied by the zero-shift third rather than by the gate.
+          const movedPct = (c.up + c.down) * 100 / c.total;
+          if (c.up + c.down > 0 && (movedPct < 2 || movedPct > 20)) {
+            issues.push(`${kind} noise moved ${movedPct.toFixed(1)}% of pixels, expected ~8% (12.5% selected, a third of them by 0)`);
+          }
+        }
+        if (!f.canvas.agree) issues.push('HTMLCanvas and OffscreenCanvas return different pixels for the same drawing');
+        if (f.canvas.impossiblePixels > 0) {
+          issues.push(`${f.canvas.impossiblePixels} fully transparent pixel(s) returned non-zero RGB — premultiplied alpha makes that impossible in a real canvas`);
+        }
+        if (f.canvas.crossDocument === 'differ') {
+          issues.push('canvas fingerprint differs between two documents on the same host — a per-document seed, so a reload or a same-origin iframe sees a different canvas');
+        }
+        if (f.canvas.offWrapVisible) issues.push('OffscreenCanvas getImageData wrapper is not masked as [native code]');
+      } else if (f.canvas && f.canvas.error) {
+        issues.push(`canvas coherence check could not run: ${f.canvas.error}`);
+      }
 
       collected.push({ name: 'self-consistency', url: 'about:blank', ok: true, durationMs: 0,
         result: { passed: issues.length === 0 ? 1 : 0, failed: issues.length, warn: 0,
