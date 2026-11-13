@@ -300,6 +300,73 @@ function formatResult(target, result) {
         // check but fails `instanceof`, which is false on no real browser.
         pluginsIsPluginArray: (() => { try { return navigator.plugins instanceof PluginArray; } catch (e) { return false; } })(),
         mimeIsMimeTypeArray: (() => { try { return navigator.mimeTypes instanceof MimeTypeArray; } catch (e) { return false; } })(),
+        // Every method this spoof replaces must still report its own name and
+        // arity. Function.name and Function.length are OWN properties of a
+        // function object, so an anonymous expression assigned to a prototype
+        // slot reports name '' plus whatever arity it declared -- measured at
+        // 18 of 26 probed methods before this was fixed, which makes
+        // `WebGLRenderingContext.prototype.getParameter.name === 'getParameter'`
+        // a one-expression detector. Lengths are the spec arities, taken from
+        // a clean browser.
+        wrapIdentity: (() => {
+          const expect = [
+            ['WebGLRenderingContext.prototype', 'getParameter', 1],
+            ['WebGLRenderingContext.prototype', 'getExtension', 1],
+            ['WebGLRenderingContext.prototype', 'getSupportedExtensions', 0],
+            ['WebGL2RenderingContext.prototype', 'getParameter', 1],
+            ['WebGL2RenderingContext.prototype', 'getExtension', 1],
+            ['HTMLCanvasElement.prototype', 'getContext', 1],
+            ['HTMLCanvasElement.prototype', 'toDataURL', 0],
+            ['HTMLCanvasElement.prototype', 'toBlob', 1],
+            ['CanvasRenderingContext2D.prototype', 'getImageData', 4],
+            ['CanvasRenderingContext2D.prototype', 'fillText', 3],
+            ['CanvasRenderingContext2D.prototype', 'strokeText', 3],
+            ['CanvasRenderingContext2D.prototype', 'measureText', 1],
+            ['OffscreenCanvasRenderingContext2D.prototype', 'getImageData', 4],
+            ['OffscreenCanvasRenderingContext2D.prototype', 'fillText', 3],
+            ['OffscreenCanvasRenderingContext2D.prototype', 'measureText', 1],
+            ['OffscreenCanvas.prototype', 'convertToBlob', 0],
+            ['EventTarget.prototype', 'addEventListener', 2],
+            ['EventTarget.prototype', 'removeEventListener', 2],
+            ['navigator.permissions', 'query', 1],
+            ['navigator', 'getBattery', 0],
+            ['performance', 'now', 0],
+            ['Notification', 'requestPermission', 0],
+            ['console', 'debug', 0]
+          ];
+          const bad = [];
+          for (const [path, method, len] of expect) {
+            let obj = null;
+            try { obj = path.split('.').reduce((o, k) => o[k], window); } catch (e) { obj = null; }
+            const fn = obj && obj[method];
+            // Absent interface (an older Chrome without WebGL2, say) is not a
+            // finding; a present one reporting the wrong identity is.
+            if (typeof fn !== 'function') continue;
+            if (fn.name !== method) bad.push(`${path}.${method} name=${JSON.stringify(fn.name)}`);
+            else if (fn.length !== len) bad.push(`${path}.${method} length=${fn.length} want ${len}`);
+          }
+          // Accessors carry names too: a getter written as `{ get: () => ... }`
+          // in an object literal takes its name from the KEY, so a spoofed
+          // property reported "get" where real Chrome reports "get platform".
+          // Measured at 13 of 22 probed accessors. Checked for properties
+          // whether or not this config spoofs them -- a native getter already
+          // has the right name, so the assertion holds either way.
+          for (const [path, prop] of [
+            ['navigator', 'platform'], ['navigator', 'hardwareConcurrency'], ['navigator', 'deviceMemory'],
+            ['navigator', 'maxTouchPoints'], ['navigator', 'languages'], ['navigator', 'language'],
+            ['navigator', 'vendor'], ['navigator', 'cookieEnabled'], ['navigator', 'doNotTrack'],
+            ['screen', 'width'], ['screen', 'height'], ['screen', 'availWidth'], ['screen', 'colorDepth']
+          ]) {
+            let obj = null;
+            try { obj = path === 'window' ? window : path.split('.').reduce((o, k) => o[k], window); } catch (e) { obj = null; }
+            if (!obj) continue;
+            let d = null, o = obj;
+            while (o && !d) { d = Object.getOwnPropertyDescriptor(o, prop); if (!d) o = Object.getPrototypeOf(o); }
+            if (!d || typeof d.get !== 'function') continue;
+            if (d.get.name !== `get ${prop}`) bad.push(`${path}.${prop} getter name=${JSON.stringify(d.get.name)}`);
+          }
+          return bad;
+        })(),
         // Canvas noise has to reach OffscreenCanvas, a SEPARATE interface from
         // HTMLCanvasElement whose 2d context has its own prototype. Measured
         // before it did: the same drawing came back noised through one and RAW
@@ -477,6 +544,9 @@ function formatResult(target, result) {
       // Type integrity of the collections, checked regardless of length.
       if (!f.pluginsIsPluginArray) issues.push('navigator.plugins is not a PluginArray');
       if (!f.mimeIsMimeTypeArray) issues.push('navigator.mimeTypes is not a MimeTypeArray');
+      if (f.wrapIdentity && f.wrapIdentity.length) {
+        issues.push(`wrapped method(s) report the wrong name/length: ${f.wrapIdentity.slice(0, 6).join('; ')}${f.wrapIdentity.length > 6 ? ` (+${f.wrapIdentity.length - 6} more)` : ''}`);
+      }
       // Canvas coherence. Three checks because none of them covers another,
       // both mutations verified: dropping the OffscreenCanvas wrap leaves that
       // path unnoised AND disagreeing, while giving it a SECOND, independent
