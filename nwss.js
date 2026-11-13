@@ -2658,7 +2658,7 @@ function setupFrameHandling(page, forceDebug) {
     }
     let browser;
     try {
-      browser = await puppeteer.launch({
+      const launchConfig = {
       // Use system Chrome if available to avoid downloads
       executablePath: executablePath,
       // Force temporary user data directory for complete cleanup control
@@ -2824,7 +2824,45 @@ function setupFrameHandling(page, forceDebug) {
         slowMo: 0, // No artificial delays
         defaultViewport: null, // Use system default viewport
         ignoreDefaultArgs: ['--enable-automation', '--enable-blink-features=AutomationControlled'] // Avoid automation detection
-      });
+      };
+      // CloakBrowser's launch() takes its OWN option shape: it reads `headless`
+      // and `args` by those names and forwards ONLY `launchOptions` to
+      // puppeteer. Everything passed flat beside those two is therefore
+      // dropped, silently -- MEASURED by intercepting puppeteer-core's launch,
+      // not inferred: protocolTimeout, acceptInsecureCerts, userDataDir and
+      // slowMo all arrived absent.
+      //
+      // acceptInsecureCerts is the one that was LIVE: puppeteer defaults it to
+      // false, so under --use-cloak the CDP cert bypass never installed and a
+      // scanner whose job is to reach self-signed ad and embed domains quietly
+      // stopped reaching them.
+      //
+      // protocolTimeout was LATENT, and saying otherwise would overstate it:
+      // puppeteer's fallback is `timeout ?? 180_000` and
+      // TIMEOUTS.PROTOCOL_TIMEOUT is 180000, so the dropped value and the
+      // default coincide TODAY. It is still a real defect -- editing that
+      // constant would change every path except this one, with nothing said --
+      // and it is the same drop as the other three, fixed by the same nesting.
+      //
+      // userDataDir goes through launchOptions and must STAY there. Cloak's
+      // own TOP-LEVEL `userDataDir` is a different thing: it switches on
+      // persistent-profile seeding, which writes <dir>/.cloakbrowser-seed and
+      // pins one `--fingerprint=<seed>` across launches so a profile keeps one
+      // identity. Nothing here wants that -- the dir is puppeteer-<ts>-<rand>,
+      // fresh per run and swept at teardown, so there is no returning visitor
+      // for a stable seed to be consistent with, and cloak's random per-launch
+      // seed is the better identity. Forwarding it in launchOptions only gives
+      // the browser the profile nwss declares, restoring the cleanup contract
+      // browser._nwssUserDataDir records below.
+      //
+      // Nesting the same object is safe in both directions:
+      // cloak sets executablePath, args, headless and ignoreDefaultArgs itself
+      // AFTER spreading launchOptions, so a forwarded copy cannot override its
+      // own choices, and its defaultViewport resolver returns the null we pass.
+      const { headless: cloakHeadless, args: cloakArgs, ...puppeteerLaunchOptions } = launchConfig;
+      browser = await puppeteer.launch(useCloak
+        ? { headless: cloakHeadless, args: cloakArgs, launchOptions: puppeteerLaunchOptions }
+        : launchConfig);
     } catch (launchErr) {
       // Falling back to normal Chrome here would be the worst outcome: the scan
       // would run, produce rules and report success while being exactly the
