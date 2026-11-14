@@ -40,7 +40,37 @@ const CF_PATH = path.join(__dirname, '..', 'lib', 'cloudflare.js');
 // these guards live in aren't exported. Compile the real file with one extra
 // line appended to expose them, rather than widening module.exports for tests.
 function loadInternals() {
-  const code = fs.readFileSync(CF_PATH, 'utf8') +
+  // The shipped TIMEOUTS/FAST_TIMEOUTS are Object.freeze'd, and several checks
+  // below shorten a wait to keep this suite quick. Strip the freeze for the
+  // in-test copy only -- the real module stays immutable, which a check further
+  // down asserts by compiling it untouched. The replacement count is asserted:
+  // a substitution that silently stopped matching would turn every timeout
+  // write below into a no-op, and some of those checks would then pass slowly
+  // instead of failing.
+  const rawSource = fs.readFileSync(CF_PATH, 'utf8');
+  // Unfreeze ONLY the two tables this suite shortens, by name. Counting every
+  // `Object.freeze({` in the file and asserting the total coupled the harness
+  // to how many frozen objects the module happens to have: freezing a third one
+  // -- RETRY_CONFIG is the obvious next -- would have killed the whole suite
+  // with a message about the wrong thing. Each name is asserted present, so a
+  // rename still fails loudly rather than turning the timeout writes below into
+  // silent no-ops.
+  let unfrozen = rawSource;
+  for (const table of ['TIMEOUTS', 'FAST_TIMEOUTS']) {
+    const frozen = `const ${table} = Object.freeze({`;
+    if (unfrozen.includes(frozen)) {
+      unfrozen = unfrozen.replace(frozen, `const ${table} = ({`);
+    } else if (!unfrozen.includes(`const ${table} = `)) {
+      // GONE, not merely unfrozen: the timeout writes below would silently
+      // become no-ops against a table this suite can no longer find, and some
+      // checks would then pass slowly instead of failing. Loud, immediately.
+      throw new Error(`cannot find ${table} in lib/cloudflare.js to unfreeze for the tests`);
+    }
+    // Present but NOT frozen needs no substitution, and must not abort: that is
+    // exactly the regression `the shipped ${table} is frozen` exists to report,
+    // and aborting here would replace a one-line check failure with a stack.
+  }
+  const code = unfrozen +
     '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
@@ -433,6 +463,33 @@ const DETACHED = 'Attempted to use detached Frame';
         'skipped(domain_timeout)');
       eq('a real timeout keeps its label',
         cfB._internals.buildOutcomeString({ timedOut: true }, null, {}), 'timeout');
+    }
+    {
+      // The SHIPPED tables must be immutable: compile the source untouched (the
+      // harness unfreezes only its own copy) and check both. CLAUDE.md names
+      // TIMEOUTS as one of the tables that should be frozen, and this module
+      // was the one place it was not -- which is how a probe came to shorten a
+      // production constant to make itself fast.
+      const realSrc = fs.readFileSync(CF_PATH, 'utf8') +
+        '\nmodule.exports._frozen = { TIMEOUTS, FAST_TIMEOUTS };\n';
+      const rm = new Module(CF_PATH, null);
+      rm.filename = CF_PATH;
+      rm.paths = Module._nodeModulePaths(path.dirname(CF_PATH));
+      rm._compile(realSrc, CF_PATH);
+      const t = rm.exports._frozen;
+      check('the shipped TIMEOUTS is frozen', Object.isFrozen(t.TIMEOUTS));
+      check('the shipped FAST_TIMEOUTS is frozen', Object.isFrozen(t.FAST_TIMEOUTS));
+      const before = t.TIMEOUTS.POST_SOLVE_REDIRECT_MS;
+      try { t.TIMEOUTS.POST_SOLVE_REDIRECT_MS = 1; } catch (e) { /* strict callers throw */ }
+      eq('a write to a shipped constant does not take', t.TIMEOUTS.POST_SOLVE_REDIRECT_MS, before);
+      // ...and nothing in the module writes into them either, so freezing
+      // cannot break a path that relied on mutating one.
+      // Comment-stripped, like the document.cookie check above: a future comment
+      // documenting "never write TIMEOUTS.X = ..." would otherwise fail this.
+      const noComments = fs.readFileSync(CF_PATH, 'utf8').split('\n')
+        .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+      const assigns = (noComments.match(/(?:FAST_)?TIMEOUTS\.[A-Z_]+\s*=[^=]/g) || []).length;
+      eq('the module itself never assigns into them', assigns, 0);
     }
     check('getAggregateStats no longer carries a bySolveMethod duplicate',
       !('bySolveMethod' in snap), Object.keys(snap).join(','));
