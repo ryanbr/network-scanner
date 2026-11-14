@@ -280,6 +280,55 @@ async function digArgvFor(spec, { servfail = false } = {}) {
           loadedSub === 1 && getDnsCacheStats().digIgnored === before + 1
             && digged.length > 0 && !digged.some(l => l.includes('sub.apex-live.example.test')),
           `entries=${loadedSub} digIgnored ${before}->${getDnsCacheStats().digIgnored} argv=${JSON.stringify(digged)}`);
+        // === the list against the dig cache ===
+        // Note for anything added here: the shim matches NWSS_TEST_DIG_SERVFAIL
+        // as a SUBSTRING of its argv, and a root domain is a suffix of its own
+        // subdomain, so failing `root.example.test` fails `sub.root.example.test`
+        // too. A probe written that way reported the fallback cache broken when
+        // it was the pattern — pick non-nesting names when only one must fail.
+
+        // A skipped domain must leave NO cache entry: nothing was looked up, so
+        // there is no verdict to remember. Otherwise removing a domain from the
+        // list would keep reading a skip-shaped answer from cache instead of
+        // digging — the list would be sticky after an edit, which is the
+        // opposite of what an operator editing it expects.
+        fs.writeFileSync(ignoreFile, '# test\nrelist.example.test\n');
+        loadDnsIgnore();
+        fs.writeFileSync(argvLog, '');
+        await h('relist.example.test', 'relist.example.test');
+        const whileListed = fs.readFileSync(argvLog, 'utf8').trim();
+        fs.writeFileSync(ignoreFile, '# emptied\n');
+        loadDnsIgnore();
+        fs.writeFileSync(argvLog, '');
+        await h('relist.example.test', 'relist.example.test');
+        const afterDelisting = fs.readFileSync(argvLog, 'utf8').trim();
+        check('a skipped domain is not cached — delisting it digs for real',
+          whileListed === '' && afterDelisting.includes('relist.example.test'),
+          `while listed=${JSON.stringify(whileListed)} after=${JSON.stringify(afterDelisting)}`);
+
+        // And the skip comes BEFORE the cache is consulted: a domain with a warm
+        // entry, then listed, is skipped rather than served from cache. Asserted
+        // on digHits, because "no dig ran" alone cannot tell a skip from a hit —
+        // and a skip counted as a cache hit would inflate the hit rate with
+        // lookups that never happened.
+        fs.writeFileSync(argvLog, '');
+        const warm = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(),
+          processedWhoisDomains: new Set(), matchedDomains: new Set() });
+        await warm('cachewarm.example.test', 'cachewarm.example.test');
+        const warmed = fs.readFileSync(argvLog, 'utf8').trim();
+        fs.writeFileSync(ignoreFile, '# test\ncachewarm.example.test\n');
+        loadDnsIgnore();
+        const hitsBefore = getDnsCacheStats().digHits;
+        const ignoredBefore = getDnsCacheStats().digIgnored;
+        fs.writeFileSync(argvLog, '');
+        const afterListing = createNetToolsHandler({ digTerms: ['127.0.0.1'], processedDigDomains: new Set(),
+          processedWhoisDomains: new Set(), matchedDomains: new Set() });
+        await afterListing('cachewarm.example.test', 'cachewarm.example.test');
+        const st = getDnsCacheStats();
+        check('the skip short-circuits ahead of the cache, not counted as a hit',
+          warmed.includes('cachewarm.example.test') && fs.readFileSync(argvLog, 'utf8').trim() === ''
+            && st.digHits === hitsBefore && st.digIgnored === ignoredBefore + 1,
+          `warmed=${JSON.stringify(warmed.split('\n')[0])} hits ${hitsBefore}->${st.digHits} digIgnored ${ignoredBefore}->${st.digIgnored}`);
       } finally {
         fs.rmSync(ignoreFile, { force: true });
         delete process.env.NWSS_TEST_DIG_SERVFAIL;
