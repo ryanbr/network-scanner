@@ -392,6 +392,48 @@ const DETACHED = 'Attempted to use detached Frame';
     // tally was a duplicate kept per URL that no caller read.
     const cf = loadInternals();
     const snap = cf.getAggregateStats();
+    {
+      // One domain timeout, then the siblings that skip on its cached outcome.
+      // Each skip used to be counted as its own timeout and to emit its own
+      // `timeout | duration=0ms` warn for work it never attempted: measured,
+      // one 2505ms event reported timedOut=3.
+      const cfA = loadInternals();
+      cfA._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = 150;
+      cfA._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = 150;
+      const hangingPage = {
+        isClosed: () => false, url: async () => 'https://slow.test/a',
+        frames: () => [], cookies: async () => [],
+        // indicators present, and every handler below finds nothing, so the
+        // adaptive timeout is what ends it
+        evaluate: async () => ({ hasIndicators: true, title: 'Just a moment...', url: 'https://slow.test/a', bodySnippet: 'Verify you are human' }),
+        waitForSelector: async () => { await new Promise(r => setTimeout(r, 5000)); throw new Error('nope'); },
+        $: async () => null, click: async () => {}, reload: async () => {}
+      };
+      await cfA.handleCloudflareProtection(hangingPage, 'https://slow.test/a', { cloudflare_bypass: true }, false);
+      for (const u of ['https://slow.test/b', 'https://slow.test/c']) {
+        hangingPage.url = async () => u;
+        await cfA.handleCloudflareProtection(hangingPage, u, { cloudflare_bypass: true }, false);
+      }
+      const agg = cfA.getAggregateStats();
+      eq('one domain timeout is counted once', agg.timedOut, 1);
+      eq('the siblings are counted as skips', agg.skippedAfterDomainTimeout, 2);
+      eq('the skips get their own outcome bucket', agg.byOutcome['skipped(domain_timeout)'], 2);
+      eq('and are not in the timeout bucket', agg.byOutcome['timeout'], 1);
+      // The counter has to reset with the rest, or a multi-scan process
+      // accumulates it across runs -- which is the whole point of {reset:true}.
+      cfA.getAggregateStats({ reset: true });
+      eq('the new counter resets with the others', cfA.getAggregateStats().skippedAfterDomainTimeout, 0);
+    }
+    {
+      // A replay must not rewrite the cache entry it came from: that object is
+      // shared by every URL on the domain for the TTL.
+      const cfB = loadInternals();
+      eq('a replay is labelled apart from a real timeout',
+        cfB._internals.buildOutcomeString({ timedOut: true, domainTimeoutReplay: true }, null, {}),
+        'skipped(domain_timeout)');
+      eq('a real timeout keeps its label',
+        cfB._internals.buildOutcomeString({ timedOut: true }, null, {}), 'timeout');
+    }
     check('getAggregateStats no longer carries a bySolveMethod duplicate',
       !('bySolveMethod' in snap), Object.keys(snap).join(','));
     check('byOutcome is still there to carry the breakdown', 'byOutcome' in snap);
