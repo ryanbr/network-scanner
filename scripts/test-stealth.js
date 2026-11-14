@@ -332,6 +332,22 @@ function formatResult(target, result) {
             minDelta: minDelta === Infinity ? null : +minDelta.toFixed(5)
           };
         })(),
+        // fpCollect's `debugTool` test, which bot.sannysoft.com scores as
+        // CHR_DEBUG_TOOLS: hand console.debug an object whose toString()
+        // counts its own calls, and ask whether it fired MORE THAN ONCE.
+        // One call is Chrome's own serialization; a second means something
+        // is stringifying the argument on the way through -- a devtools
+        // detector's reading of "the inspector is open", and equally our own
+        // console wrapper if it joins its arguments. Measured unspoofed at 1,
+        // and at 2 with the wrapper's `args.join(' ')`, which is what made
+        // the page's one warn row OUR row rather than the browser's.
+        debugToolCalls: (() => {
+          let cpt = 0;
+          const regexp = /./;
+          regexp.toString = () => { cpt++; return 'spooky'; };
+          console.debug(regexp);
+          return cpt;
+        })(),
         wrapIdentity: (() => {
           const expect = [
             ['WebGLRenderingContext.prototype', 'getParameter', 1],
@@ -934,6 +950,12 @@ function formatResult(target, result) {
       for (const li of listenerIssues) issues.push(`mousemove listener wrapper: ${li}`);
       for (const gi of gcIssues) issues.push(`mousemove listener wrapper: ${gi}`);
       for (const wi of glIssues) issues.push(`WebGL context wrapper: ${wi}`);
+      // console.debug must not stringify what it is handed. Judged on the
+      // COUNT rather than on whether a wrapper exists, since the wrapper is
+      // wanted -- it is the arg-stringifying that is the tell.
+      if (typeof f.debugToolCalls === 'number' && f.debugToolCalls > 1) {
+        issues.push(`console.debug stringified its argument ${f.debugToolCalls} times (native: 1) — fpCollect's debugTool test reads >1 as an open inspector`);
+      }
       // The clock, judged on behaviour rather than on how it is wrapped.
       if (f.clock) {
         if (f.clock.decreases > 0) {
