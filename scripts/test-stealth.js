@@ -653,9 +653,103 @@ function formatResult(target, result) {
         await settle();
         if (t !== 0) bad.push(`${t} invocation(s) after one handler on two targets was removed from both`);
 
+        // An IMPLICIT removal is not observable from in here: `once` firing,
+        // and an aborted `signal`, both detach the wrapper without telling the
+        // registry, which is exactly why the browser has to be the thing that
+        // de-duplicates. Re-adding the same handler must attach it again.
+        let o = 0;
+        const h5 = () => { o++; };
+        el.addEventListener('mousemove', h5, { once: true });
+        await fire(el);
+        if (o !== 1) bad.push(`a {once:true} listener fired ${o} time(s), expected 1`);
+        await fire(el);
+        if (o !== 1) bad.push(`a {once:true} listener fired again after detaching (${o} total)`);
+        el.addEventListener('mousemove', h5, { once: true });
+        await fire(el);
+        if (o !== 2) bad.push(`re-adding a fired {once:true} listener did not re-attach it (${o} total, expected 2)`);
+
+        let s2 = 0;
+        const h6 = () => { s2++; };
+        const ac = new AbortController();
+        el.addEventListener('mousemove', h6, { signal: ac.signal });
+        ac.abort();
+        await fire(el);
+        if (s2 !== 0) bad.push(`an aborted signal left the listener attached (${s2} invocation(s))`);
+        el.addEventListener('mousemove', h6);
+        await fire(el);
+        if (s2 !== 1) bad.push(`re-adding after an aborted signal did not attach (${s2} invocation(s), expected 1)`);
+        el.removeEventListener('mousemove', h6);
+
+        // The options dictionary must be read exactly ONCE per add. Reading
+        // `capture` for the registry key and letting the native method read it
+        // again ran a page's own getter twice, which is a one-expression probe
+        // -- and a getter answering differently on the two reads would key the
+        // registry on one value while registering the other. The ORDER is
+        // pinned too, since a page's getter side effects are observable; it is
+        // the dictionary's own (capture from EventListenerOptions, then
+        // once/passive/signal), measured identical in a clean browser.
+        const reads = { capture: 0, once: 0, passive: 0, signal: 0 };
+        const order = [];
+        el.addEventListener('mousemove', () => {}, {
+          get capture() { reads.capture++; order.push('capture'); return false; },
+          get once() { reads.once++; order.push('once'); return false; },
+          get passive() { reads.passive++; order.push('passive'); return false; },
+          get signal() { reads.signal++; order.push('signal'); return undefined; }
+        });
+        for (const k of Object.keys(reads)) {
+          if (reads[k] !== 1) bad.push(`options.${k} was read ${reads[k]} time(s) on one add, expected 1`);
+        }
+        if (order.join(',') !== 'capture,once,passive,signal') {
+          bad.push(`options members read in the order ${order.join(',') || '(none)'}, expected capture,once,passive,signal`);
+        }
+
         el.remove(); a.remove(); b.remove();
         return bad;
       });
+
+      // ...and the registry must not RETAIN those handlers. An implicit removal
+      // cannot be observed, so both levels of the registry are weak; a strong
+      // map of listeners would hold every fired `once` handler for as long as
+      // the target lives, which on window or document is the whole document.
+      // Measured on a strong inner Map: 20,000 such handlers retained 3.81MB
+      // after a forced GC against 0.01MB unspoofed, and 0 of 5000 were
+      // collected. A FinalizationRegistry answers that directly, instead of
+      // reading it off a heap delta that also carries the deferral's own
+      // timers. The target is kept ALIVE on purpose -- the whole question is
+      // whether a dead listener survives a live target. Threshold rather than
+      // equality because GC progress is not contractual; the broken case
+      // collects none at all, so there is no band to flake in.
+      const gcIssues = await (async () => {
+        const out = [];
+        const N = 2000;
+        await page.evaluate(async (n) => {
+          window.__nwssGcTarget = document.createElement('div');
+          document.body.appendChild(window.__nwssGcTarget);
+          window.__nwssCollected = 0;
+          window.__nwssFr = new FinalizationRegistry(() => { window.__nwssCollected++; });
+          for (let i = 0; i < n; i++) {
+            const h = () => {};
+            window.__nwssFr.register(h);
+            window.__nwssGcTarget.addEventListener('mousemove', h, { once: true });
+          }
+          window.__nwssGcTarget.dispatchEvent(new MouseEvent('mousemove'));
+          await new Promise(r => setTimeout(r, 300));
+        }, N);
+        const cdp = await page.createCDPSession();
+        try {
+          for (let i = 0; i < 4; i++) await cdp.send('HeapProfiler.collectGarbage');
+        } finally {
+          await cdp.detach().catch(() => {});
+        }
+        const collected = await page.evaluate(async () => {
+          await new Promise(r => setTimeout(r, 200));
+          return window.__nwssCollected;
+        });
+        if (collected < N / 2) {
+          out.push(`${N - collected} of ${N} detached mousemove listeners are still retained by the wrapper's registry`);
+        }
+        return out;
+      })();
 
       const isFirefox = /Firefox\//.test(f.ua);
       const isSafari = /Version\/.*Safari/.test(f.ua) && !/Chrome\//.test(f.ua);
@@ -696,6 +790,7 @@ function formatResult(target, result) {
         issues.push(`wrapped method(s) report the wrong name/length: ${f.wrapIdentity.slice(0, 6).join('; ')}${f.wrapIdentity.length > 6 ? ` (+${f.wrapIdentity.length - 6} more)` : ''}`);
       }
       for (const li of listenerIssues) issues.push(`mousemove listener wrapper: ${li}`);
+      for (const gi of gcIssues) issues.push(`mousemove listener wrapper: ${gi}`);
       // Canvas coherence. Three checks because none of them covers another,
       // both mutations verified: dropping the OffscreenCanvas wrap leaves that
       // path unnoised AND disagreeing, while giving it a SECOND, independent
