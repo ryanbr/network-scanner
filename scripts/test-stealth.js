@@ -308,6 +308,30 @@ function formatResult(target, result) {
         // `WebGLRenderingContext.prototype.getParameter.name === 'getParameter'`
         // a one-expression detector. Lengths are the spec arities, taken from
         // a clean browser.
+        // performance.now() must behave like a CLOCK. It used to get +/-1ms of
+        // noise on every call, which made a monotonic clock run backwards --
+        // measured at 2463 of 4999 consecutive pairs decreasing, worst jump
+        // 1.96ms -- and destroyed Chrome's 100us clamp, giving sub-microsecond
+        // readings no real Chrome produces. Both are one-line detectors, and
+        // the first breaks any page computing elapsed = now() - start.
+        clock: (() => {
+          const N = 2000;
+          const v = new Array(N);
+          for (let i = 0; i < N; i++) v[i] = performance.now();
+          let decreases = 0;
+          let minDelta = Infinity;
+          for (let i = 1; i < N; i++) {
+            if (v[i] < v[i - 1]) decreases++;
+            const d = v[i] - v[i - 1];
+            if (d > 0 && d < minDelta) minDelta = d;
+          }
+          return {
+            decreases,
+            // Chrome clamps to 100us, so the smallest step between two
+            // DIFFERENT readings cannot be a fraction of a microsecond.
+            minDelta: minDelta === Infinity ? null : +minDelta.toFixed(5)
+          };
+        })(),
         wrapIdentity: (() => {
           const expect = [
             ['WebGLRenderingContext.prototype', 'getParameter', 1],
@@ -910,6 +934,15 @@ function formatResult(target, result) {
       for (const li of listenerIssues) issues.push(`mousemove listener wrapper: ${li}`);
       for (const gi of gcIssues) issues.push(`mousemove listener wrapper: ${gi}`);
       for (const wi of glIssues) issues.push(`WebGL context wrapper: ${wi}`);
+      // The clock, judged on behaviour rather than on how it is wrapped.
+      if (f.clock) {
+        if (f.clock.decreases > 0) {
+          issues.push(`performance.now() went backwards ${f.clock.decreases} time(s) in 2000 reads — a monotonic clock cannot`);
+        }
+        if (f.clock.minDelta !== null && f.clock.minDelta < 0.05) {
+          issues.push(`performance.now() resolved to ${f.clock.minDelta}ms, finer than Chrome's 100us clamp`);
+        }
+      }
       // Canvas coherence. Three checks because none of them covers another,
       // both mutations verified: dropping the OffscreenCanvas wrap leaves that
       // path unnoised AND disagreeing, while giving it a SECOND, independent
