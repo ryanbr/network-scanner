@@ -75,7 +75,7 @@ function loadInternals() {
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
     'clickInShadowDOM, attemptChallengeSolveWithTimeout, quickCloudflareDetection, ' +
-    'readChallengeMarkers, ' +
+    'readChallengeMarkers, watchChallengeTraffic, ' +
     'FAST_TIMEOUTS, TIMEOUTS, ' +
     'buildOutcomeString, CHALLENGE_HTTP_STATUSES };\n';
   const m = new Module(CF_PATH, null);
@@ -564,6 +564,28 @@ const DETACHED = 'Attempted to use detached Frame';
           'document.querySelectorAll(\'script[src*="challenge-platform"]\').forEach(s => s.remove());' +
           `}, ${clearAt});</script></body></html>`);
       }
+      if (req.url.startsWith('/navigates-')) {
+        // A challenge page that clears by NAVIGATING to the url its state
+        // object names. ?tk picks the answered param, ?rt the running one that
+        // the page sets on itself via replaceState while still working --
+        // matching the two loosely would read "still going" as "done".
+        const answered = req.url.includes('answered');
+        const to = answered ? '/landed-chal?__cf_chl_tk=yes' : '/landed-chal?__cf_chl_rt_tk=still';
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html><head><title>Just a moment...</title></head><body>' +
+          '<div class="cf-challenge-container"><p>Verify you are human</p></div>' +
+          `<script>window._cf_chl_opt={cRay:"r",cUPMDTk:"${to}"};` +
+          `setTimeout(function(){ location.href="${to}"; }, 150);</script>` +
+          '</body></html>');
+      }
+      if (req.url.startsWith('/landed-chal')) {
+        // The landing target still LOOKS like a challenge, so nothing can
+        // complete through the DOM path and the only signal available is the
+        // navigation itself.
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html><head><title>Just a moment...</title></head><body>' +
+          '<div class="cf-challenge-container"><p>Verify you are human</p></div></body></html>');
+      }
       if (req.url.startsWith('/recaptcha-form')) {
         // A FOREIGN captcha: reCAPTCHA's canonical markup, no Cloudflare
         // anything. data-sitekey is reCAPTCHA's and hCaptcha's attribute too,
@@ -706,6 +728,43 @@ const DETACHED = 'Attempted to use detached Frame';
       check('fixture is seen as both a JS and a Turnstile challenge',
         info.isJSChallenge === true && info.isTurnstile === true,
         `js=${info.isJSChallenge} turnstile=${info.isTurnstile}`);
+
+      // --- completion from the challenge's own traffic --------------------
+      {
+        // The DOM is our inference about the challenge; the request stream is
+        // the challenge talking. A cleared challenge page navigates to the url
+        // its state object names, carrying __cf_chl_tk=, and here the landing
+        // page still shows challenge markup -- so the navigation is the ONLY
+        // available signal and the DOM cannot supply a false pass.
+        const answered = await browser.newPage();
+        const beforeResp = answered.listenerCount('response');
+        const beforeNav = answered.listenerCount('framenavigated');
+        const w1 = I.watchChallengeTraffic(answered);
+        await answered.goto(`http://127.0.0.1:${PORT}/navigates-answered`, { waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 500));
+        const a = await I.checkChallengeCompletion(answered);
+        check('a landing navigation carrying __cf_chl_tk= completes the challenge',
+          a.isCompleted === true && a.via === 'landing_navigation',
+          `isCompleted=${a.isCompleted} via=${a.via}`);
+        w1.stop();
+        check('the watcher removes both listeners it added',
+          answered.listenerCount('response') === beforeResp &&
+          answered.listenerCount('framenavigated') === beforeNav,
+          `response ${beforeResp}->${answered.listenerCount('response')}, framenavigated ${beforeNav}->${answered.listenerCount('framenavigated')}`);
+        await answered.close();
+
+        // ...and the RUNNING variant must not count as an answer.
+        const running = await browser.newPage();
+        const w2 = I.watchChallengeTraffic(running);
+        await running.goto(`http://127.0.0.1:${PORT}/navigates-running`, { waitUntil: 'domcontentloaded' });
+        await new Promise(r => setTimeout(r, 500));
+        const rr = await I.checkChallengeCompletion(running);
+        check('a __cf_chl_rt_tk= navigation does NOT complete it',
+          w2.seen.landed === false && rr.isCompleted === false,
+          `landed=${w2.seen.landed} isCompleted=${rr.isCompleted}`);
+        w2.stop();
+        await running.close();
+      }
 
       // --- page versus widget -------------------------------------------
       {
