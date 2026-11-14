@@ -456,6 +456,33 @@ const DETACHED = 'Attempted to use detached Frame';
       eq('the new counter resets with the others', cfA.getAggregateStats().skippedAfterDomainTimeout, 0);
     }
     {
+      // Every path must REPORT, including the ones that return early. The
+      // outcome string and the aggregate bump both live in logOutcome, which
+      // wraps all of its summary work in a try/catch so logging can never
+      // affect the return -- so anything that throws in there is swallowed and
+      // the path goes silent while still returning a correct-looking result.
+      //
+      // That is not hypothetical: moving the traffic handle's declaration below
+      // logOutcome puts it in the TDZ for the invalid-url, failed-detection and
+      // no-indicators paths, the ReferenceError is caught by that same try, and
+      // the mutation passed every other check in this file.
+      const cfP = loadInternals();
+      const cleanPage = {
+        isClosed: () => false, url: async () => 'https://quiet.test/a',
+        frames: () => [], cookies: async () => [],
+        evaluate: async () => ({ hasIndicators: false, title: 'Shop', url: 'https://quiet.test/a', bodySnippet: '' })
+      };
+      const r = await cfP.handleCloudflareProtection(cleanPage, 'https://quiet.test/a', {}, false);
+      eq('a no-indicators URL still returns its skip', !!r.skippedNoIndicators, true);
+      const agg = cfP.getAggregateStats();
+      eq('...and the early path still reaches the aggregate', agg.total, 1);
+      eq('...with its own outcome recorded', agg.byOutcome['no_indicators'], 1);
+
+      const badUrl = { isClosed: () => false, url: async () => 'chrome://version', frames: () => [], cookies: async () => [], evaluate: async () => ({}) };
+      await cfP.handleCloudflareProtection(badUrl, 'chrome://version', {}, false);
+      eq('a non-http URL reports too', cfP.getAggregateStats().byOutcome['skipped(non-http)'], 1);
+    }
+    {
       // The flow/orchestrate counts the watcher records now have a reader: a
       // timeout where the challenge's own traffic NEVER APPEARED is a different
       // failure from one where it appeared and did not finish. The first says
