@@ -734,6 +734,37 @@ const DETACHED = 'Attempted to use detached Frame';
         return res.end('<html><body><span class="ctp-checkbox" ' +
           'style="display:block;width:20px;height:20px"></span></body></html>');
       }
+      if (req.url === '/shadow-dupe-inner') {
+        // A hidden 0x0 checkbox in the FIRST open shadow root, a visible one in
+        // the SECOND, and a third inside a NESTED root. Challenge markup
+        // carries hidden duplicates, and the first match used to end the
+        // search -- so the visible checkbox was never clicked.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body style="margin:0">' +
+          '<div id="a"></div><div id="b" style="padding:30px"></div><div id="c" style="padding:10px"></div>' +
+          '<script>window.__clicks = [];' +
+          'var rec = function(t){ return function(e){ window.__clicks.push({tag:t, isTrusted:e.isTrusted}); }; };' +
+          'var ra = document.getElementById("a").attachShadow({mode:"open"});' +
+          'ra.innerHTML = \'<input type="checkbox" id="x" style="width:0;height:0;position:absolute;left:-9999px">\';' +
+          'ra.getElementById("x").addEventListener("click", rec("hidden-A"));' +
+          'var rb = document.getElementById("b").attachShadow({mode:"open"});' +
+          'rb.innerHTML = \'<input type="checkbox" id="x" style="width:30px;height:30px">\';' +
+          'rb.getElementById("x").addEventListener("click", rec("visible-B"));' +
+          'var rc = document.getElementById("c").attachShadow({mode:"open"});' +
+          'rc.innerHTML = \'<div id="mid"></div>\';' +
+          'var rn = rc.getElementById("mid").attachShadow({mode:"open"});' +
+          'rn.innerHTML = \'<input type="checkbox" id="x" style="width:20px;height:20px">\';' +
+          'rn.getElementById("x").addEventListener("click", rec("nested-C"));' +
+          '</script></body></html>');
+      }
+      if (req.url === '/shadow-dupe') {
+        // The widget in an IFRAME at a known offset, so a frame-relative
+        // coordinate is distinguishable from a main-frame one.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body style="margin:0;padding:100px 0 0 70px">' +
+          '<iframe src="/shadow-dupe-inner" width="400" height="260" style="border:0"></iframe>' +
+          '</body></html>');
+      }
       if (req.url === '/shadow-none') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
         return res.end('<html><body><div class="cf-turnstile"><span>widget</span></div></body></html>');
@@ -1050,6 +1081,64 @@ const DETACHED = 'Attempted to use detached Frame';
       const lateHit = await I.clickInShadowDOM(page, SELS, false);
       check('a later candidate that renders after 800ms is still clicked',
         lateHit.found === true && lateHit.clicked === true, JSON.stringify(lateHit));
+
+      // --- the click must LAND, and land TRUSTED ------------------------
+      // A challenge ignores an untrusted event, so a click that reports
+      // success while arriving isTrusted:false is a silent failure. Measured
+      // on this fixture before the fix: the in-page fallback clicked with
+      // isTrusted FALSE and still returned clicked:true, and a hidden 0x0
+      // duplicate in an earlier shadow root made BOTH paths return
+      // clicked:false with x:0 -- clicking nothing at all.
+      const CB = ['input[type="checkbox"]'];
+      await page.goto(`http://127.0.0.1:${PORT}/shadow-dupe`, { waitUntil: 'networkidle2' });
+      let dupeFrame = page.frames().find(f => f.url().includes('/shadow-dupe-inner'));
+      check('the widget iframe is reachable as a frame', !!dupeFrame, String(dupeFrame && dupeFrame.url()));
+
+      const dupeHit = await I.clickInShadowDOM(dupeFrame, CB, false, 1500);
+      const dupeClicks = await dupeFrame.evaluate(() => window.__clicks);
+      check('a hidden duplicate in an earlier shadow root does not end the search',
+        dupeHit.clicked === true, JSON.stringify(dupeHit));
+      check('...and the VISIBLE checkbox is the one clicked',
+        dupeClicks.length === 1 && dupeClicks[0].tag === 'visible-B', JSON.stringify(dupeClicks));
+      check('...with the click arriving TRUSTED, as a challenge requires',
+        dupeClicks.length === 1 && dupeClicks[0].isTrusted === true, JSON.stringify(dupeClicks));
+      // The iframe sits at left:70 top:100, so a frame-relative centre would
+      // report ~49,48 for this element and a main-frame one ~119,148. Only the
+      // latter is what page.mouse.click wants.
+      check('...and the reported point is MAIN-FRAME, not frame-relative',
+        dupeHit.x > 100 && dupeHit.y > 120, `(${dupeHit.x},${dupeHit.y})`);
+
+      // The evaluateHandle fallback, reached only when waitForSelector never
+      // settles. Stubbed, because pierce/ otherwise wins first.
+      await page.goto(`http://127.0.0.1:${PORT}/shadow-dupe`, { waitUntil: 'networkidle2' });
+      dupeFrame = page.frames().find(f => f.url().includes('/shadow-dupe-inner'));
+      const stubCtx = {
+        waitForSelector: () => Promise.reject(new Error('stubbed: never settles')),
+        $$: () => Promise.resolve([]),
+        evaluate: (...a) => dupeFrame.evaluate(...a),
+        evaluateHandle: (...a) => dupeFrame.evaluateHandle(...a)
+      };
+      const fbHit = await I.clickInShadowDOM(stubCtx, CB, false, 50);
+      const fbClicks = await dupeFrame.evaluate(() => window.__clicks);
+      check('the fallback path still clicks the visible checkbox',
+        fbHit.clicked === true && fbClicks.length === 1 && fbClicks[0].tag === 'visible-B',
+        `${JSON.stringify(fbHit)} ${JSON.stringify(fbClicks)}`);
+      check('...and the FALLBACK click is trusted too, not an in-page el.click()',
+        fbClicks.length === 1 && fbClicks[0].isTrusted === true, JSON.stringify(fbClicks));
+
+      // Nested open roots: shadow inside shadow, with the shallower hosts gone.
+      await page.goto(`http://127.0.0.1:${PORT}/shadow-dupe`, { waitUntil: 'networkidle2' });
+      dupeFrame = page.frames().find(f => f.url().includes('/shadow-dupe-inner'));
+      await dupeFrame.evaluate(() => {
+        document.getElementById('a').remove();
+        document.getElementById('b').remove();
+      });
+      const nestHit = await I.clickInShadowDOM(dupeFrame, CB, false, 1500);
+      const nestClicks = await dupeFrame.evaluate(() => window.__clicks);
+      check('a checkbox in a NESTED shadow root is reached and clicked trusted',
+        nestHit.clicked === true && nestClicks.length === 1 &&
+        nestClicks[0].tag === 'nested-C' && nestClicks[0].isTrusted === true,
+        `${JSON.stringify(nestHit)} ${JSON.stringify(nestClicks)}`);
 
       // Positive case: a page with no challenge markers must still pass, or
       // the fix would have broken real JS-challenge detection.
