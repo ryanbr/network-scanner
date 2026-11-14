@@ -75,6 +75,7 @@ function loadInternals() {
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
     'clickInShadowDOM, attemptChallengeSolveWithTimeout, quickCloudflareDetection, ' +
+    'readChallengeMarkers, ' +
     'FAST_TIMEOUTS, TIMEOUTS, ' +
     'buildOutcomeString, CHALLENGE_HTTP_STATUSES };\n';
   const m = new Module(CF_PATH, null);
@@ -739,20 +740,34 @@ const DETACHED = 'Attempted to use detached Frame';
           `isCompleted=${rc.isCompleted} (false means it is waiting for a Turnstile token)`);
         await recap.close();
 
-        // The kinds themselves, since the rule hangs on them. `page` must be
-        // claimed on POSITIVE evidence: the default fixture is an interstitial
-        // that never defines _cf_chl_opt, so inferring "widget" from its
-        // absence would reclassify it and strand the solve checks above.
+        // The kind the MODULE assigns, asked of the module's own predicate.
+        // The first version of this check re-implemented the predicate inline
+        // here and asserted facts about the FIXTURE instead -- that it carries
+        // interstitial markup and no _cf_chl_opt -- so it could not fail when
+        // lib/cloudflare.js changed, and a mutation dropping the interstitial
+        // term from the kind expression passed 110/110. Decoration, caught by
+        // the mutation pass.
+        //
+        // `page` must be claimed on POSITIVE evidence: the default fixture is
+        // an interstitial that never defines _cf_chl_opt, so inferring "widget"
+        // from its absence would reclassify it. Completion cannot see that
+        // difference -- kind only changes the answer when domClear is true, and
+        // domClear true implies no markers, hence no interstitial term -- so
+        // the predicate is where it has to be checked.
         const inter = await browser.newPage();
         await inter.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
-        const kinds = await inter.evaluate(() => ({
-          interstitial: !document.querySelector('.cf-challenge-running, .cf-challenge-container, script[src*="/cdn-cgi/challenge-platform/"]') ? 'no' : 'yes',
-          chlOpt: typeof window._cf_chl_opt === 'object' && window._cf_chl_opt !== null
-        }));
-        check('the interstitial fixture is a page despite having no _cf_chl_opt',
-          kinds.interstitial === 'yes' && kinds.chlOpt === false,
-          `interstitial=${kinds.interstitial} chlOpt=${kinds.chlOpt}`);
+        const marks = await inter.evaluate(I.readChallengeMarkers);
+        eq('the interstitial fixture is classified page, not widget', marks.kind, 'page');
+        check('...and it really has no _cf_chl_opt, so the kind came from the markup',
+          await inter.evaluate(() => typeof window._cf_chl_opt !== 'object' || window._cf_chl_opt === null),
+          'the fixture defines _cf_chl_opt, so this check proves nothing');
         await inter.close();
+
+        // The widget fixture, from the same predicate.
+        const wf = await browser.newPage();
+        await wf.goto(`http://127.0.0.1:${PORT}/widget-form`, { waitUntil: 'domcontentloaded' });
+        eq('the login-form fixture is classified widget', (await wf.evaluate(I.readChallengeMarkers)).kind, 'widget');
+        await wf.close();
       }
 
       // --- a localized challenge page -----------------------------------
