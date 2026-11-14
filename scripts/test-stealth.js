@@ -707,6 +707,124 @@ function formatResult(target, result) {
         return bad;
       });
 
+      // The WebGL context wrapper's IDENTITY and receiver handling. It
+      // proxies every real context, so anything it gets wrong here is wrong
+      // for every WebGL page: a fresh Proxy per getContext call and a fresh
+      // bound function per property read made two strict-equality probes
+      // false that are true in every browser, and reading through
+      // Reflect.get with the proxy as receiver invoked native accessors with
+      // the wrong `this`, so three ordinary property reads threw instead of
+      // answering. Skipped when the browser has no WebGL at all, which is a
+      // legitimate configuration rather than a failure.
+      const glIssues = await page.evaluate(() => {
+        const bad = [];
+        const c = document.createElement('canvas');
+        c.width = 300; c.height = 150;
+        let g = null;
+        try { g = c.getContext('webgl'); } catch (e) { bad.push(`getContext('webgl') threw ${e.name}`); return bad; }
+        if (!g) return bad;
+
+        // Identity: the same context object, and the same function object.
+        if (c.getContext('webgl') !== c.getContext('webgl')) bad.push('getContext returns a different object each call');
+        if (g.drawArrays !== g.drawArrays) bad.push('a context method returns a different function each read');
+        if (g.getParameter !== g.getParameter) bad.push('getParameter returns a different function each read');
+
+        // Reads that must answer rather than throw, with the real values.
+        const read = (prop, expected) => {
+          let v;
+          try { v = g[prop]; } catch (e) { bad.push(`gl.${prop} threw ${e.name}: ${String(e.message).slice(0, 40)}`); return; }
+          if (expected !== undefined && v !== expected) bad.push(`gl.${prop} = ${JSON.stringify(v)}, expected ${JSON.stringify(expected)}`);
+        };
+        read('drawingBufferWidth', 300);
+        read('drawingBufferHeight', 150);
+        let canvasProp;
+        try { canvasProp = g.canvas; } catch (e) { bad.push(`gl.canvas threw ${e.name}`); }
+        if (canvasProp !== undefined && canvasProp !== c) bad.push('gl.canvas is not the canvas it came from');
+
+        // Names, which a bound function and an anonymous expression both get
+        // wrong ('bound drawArrays' and '' respectively).
+        if (g.drawArrays.name !== 'drawArrays') bad.push(`gl.drawArrays.name = ${JSON.stringify(g.drawArrays.name)}`);
+        if (g.getParameter.name !== 'getParameter') bad.push(`gl.getParameter.name = ${JSON.stringify(g.getParameter.name)}`);
+        if (!/\[native code\]/.test(String(g.drawArrays))) bad.push('gl.drawArrays does not report [native code]');
+
+        // A canvas that already has a context answers null for an incompatible
+        // type. Mocking that handed the page a truthy context whose methods
+        // are all no-ops.
+        const second = c.getContext('webgl2');
+        if (second !== null) bad.push(`getContext('webgl2') after 'webgl' returned ${Object.prototype.toString.call(second)}, expected null`);
+
+        // The context still has to work, and still has to carry the spoof.
+        try {
+          const buf = g.createBuffer();
+          g.bindBuffer(g.ARRAY_BUFFER, buf);
+        } catch (e) { bad.push(`an ordinary WebGL call threw ${e.name}`); }
+        if (g.getParameter(37445) !== 'Google Inc. (ANGLE)' && g.getParameter(37445) !== null) {
+          // only flag a value that is neither the spoof nor the clean answer
+          bad.push(`UNMASKED_VENDOR_WEBGL = ${JSON.stringify(g.getParameter(37445))}`);
+        }
+
+        // The context must be the REAL one, not a wrapper. Three probes a
+        // Proxy cannot pass, whatever its traps do: a native method called
+        // through the prototype brand-checks its receiver, and the method a
+        // context hands out IS the prototype's own function object.
+        try {
+          WebGLRenderingContext.prototype.isContextLost.call(g);
+        } catch (e) {
+          bad.push(`WebGLRenderingContext.prototype.isContextLost.call(gl) threw ${e.name} — the context is wrapped`);
+        }
+        if (g.drawArrays !== WebGLRenderingContext.prototype.drawArrays) {
+          bad.push('gl.drawArrays is not the prototype\'s own function — the context is wrapped');
+        }
+        if (g.getParameter !== WebGLRenderingContext.prototype.getParameter) {
+          bad.push('gl.getParameter is not the prototype\'s own function — the context is wrapped');
+        }
+
+        // The spoof's own methods must look native: a function EXPRESSION is a
+        // constructor and carries an own `prototype`, so these read
+        // length,name,prototype against a native method's length,name, and
+        // `new gl.getParameter(1)` constructed where the native rejects it.
+        for (const m of ['getParameter', 'getExtension', 'getSupportedExtensions']) {
+          const fn = WebGLRenderingContext.prototype[m];
+          const own = Object.getOwnPropertyNames(fn).sort().join(',');
+          if (own !== 'length,name') bad.push(`${m} ownProps=${own}, expected length,name`);
+          let constructed = false;
+          try { new fn(); constructed = true; } catch (e) { /* native: not a constructor */ }
+          if (constructed) bad.push(`new ${m}() constructed — a native method is not a constructor`);
+        }
+
+        // OffscreenCanvas contexts go through the same prototypes and must
+        // answer these the SAME way. They used to differ, because only the
+        // HTMLCanvasElement path was proxied, which let one page compare the
+        // two and see the wrapper.
+        if (typeof OffscreenCanvas === 'function') {
+          let og = null;
+          try { og = new OffscreenCanvas(300, 150).getContext('webgl'); } catch (e) { /* unsupported */ }
+          if (og) {
+            try {
+              WebGLRenderingContext.prototype.isContextLost.call(og);
+            } catch (e) {
+              bad.push(`the same call on an OffscreenCanvas context threw ${e.name}`);
+            }
+            if (og.drawArrays !== WebGLRenderingContext.prototype.drawArrays) {
+              bad.push('an OffscreenCanvas context does not hand out the prototype\'s own method');
+            }
+            // ...and the spoof has to reach it, including a parameter only the
+            // prototype table carries (VERSION), which is what proved the old
+            // per-context proxy was redundant.
+            if (og.getParameter(37445) !== g.getParameter(37445)) {
+              bad.push('OffscreenCanvas and HTMLCanvas disagree on UNMASKED_VENDOR_WEBGL');
+            }
+            if (og.getParameter(7936) !== g.getParameter(7936)) {
+              bad.push('OffscreenCanvas and HTMLCanvas disagree on VERSION');
+            }
+            if (!/Chromium/.test(String(g.getParameter(7936)))) {
+              bad.push(`VERSION = ${JSON.stringify(g.getParameter(7936))}, expected the spoofed Chromium string`);
+            }
+          }
+        }
+        return bad;
+      });
+
       // ...and the registry must not RETAIN those handlers. An implicit removal
       // cannot be observed, so both levels of the registry are weak; a strong
       // map of listeners would hold every fired `once` handler for as long as
@@ -791,6 +909,7 @@ function formatResult(target, result) {
       }
       for (const li of listenerIssues) issues.push(`mousemove listener wrapper: ${li}`);
       for (const gi of gcIssues) issues.push(`mousemove listener wrapper: ${gi}`);
+      for (const wi of glIssues) issues.push(`WebGL context wrapper: ${wi}`);
       // Canvas coherence. Three checks because none of them covers another,
       // both mutations verified: dropping the OffscreenCanvas wrap leaves that
       // path unnoised AND disagreeing, while giving it a SECOND, independent
