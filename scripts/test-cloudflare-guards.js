@@ -44,7 +44,8 @@ function loadInternals() {
     '\nmodule.exports._internals = { safePageEvaluate, checkChallengeCompletion, ' +
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
-    'clickInShadowDOM, attemptChallengeSolveWithTimeout, FAST_TIMEOUTS, TIMEOUTS, ' +
+    'clickInShadowDOM, attemptChallengeSolveWithTimeout, quickCloudflareDetection, ' +
+    'FAST_TIMEOUTS, TIMEOUTS, ' +
     'buildOutcomeString, CHALLENGE_HTTP_STATUSES };\n';
   const m = new Module(CF_PATH, null);
   m.filename = CF_PATH;
@@ -100,7 +101,15 @@ const DETACHED = 'Attempted to use detached Frame';
     eq('cloudflare_bypass set: handling is attempted despite the failure', !!r.skippedNoIndicators, false);
   }
   {
-    // No regression: a SUCCESSFUL detection is still cached per hostname.
+    // A successful detection is still RECORDED per hostname -- but it is no
+    // longer SERVED as a verdict. This check used to assert the opposite (1
+    // evaluate for 2 URLs). That was the regression guard for the
+    // not-cached-on-failure fix, and it pinned behaviour that turned out to
+    // decide one page's fate from another page's reading: the cached verdict's
+    // only consumer is the skip-or-handle branch, so a cached CLEAN reading
+    // skipped handling on a challenged sibling for the full TTL, and a cached
+    // CHALLENGED reading sent a clean sibling through three container
+    // selectors and two legacy ones at SELECTOR_WAIT each. Both measured.
     const cf = loadInternals();
     let calls = 0;
     const page = {
@@ -111,8 +120,56 @@ const DETACHED = 'Attempted to use detached Frame';
     await cf.handleCloudflareProtection(page, 'https://ok.test/a', {}, false);
     page.url = async () => 'https://ok.test/b';
     await cf.handleCloudflareProtection(page, 'https://ok.test/b', {}, false);
-    eq('a clean result is still cached domain-wide (1 evaluate for 2 URLs)', calls, 1);
-    eq('cache holds the one hostname', cf.getCacheStats().size, 1);
+    eq('every URL gets its own detection (2 evaluates for 2 URLs)', calls, 2);
+    eq('the domain is still recorded once', cf.getCacheStats().size, 1);
+  }
+  {
+    // The measured race, in both directions, through the public entry point.
+    const cf = loadInternals();
+    const mkPage = (url, challenged) => ({
+      isClosed: () => false, url: async () => url,
+      frames: () => [], cookies: async () => [],
+      evaluate: async () => challenged
+        ? { hasIndicators: true, title: 'Just a moment...', url, bodySnippet: 'Verify you are human' }
+        : { hasIndicators: false, title: 'Shop', url, bodySnippet: '' }
+    });
+    // clean first, then a CHALLENGED sibling: the challenge must not be skipped
+    await cf.handleCloudflareProtection(mkPage('https://mix.test/clean', false), 'https://mix.test/clean', {}, false);
+    const onChallenged = await cf.handleCloudflareProtection(
+      mkPage('https://mix.test/chal', true), 'https://mix.test/chal', {}, false);
+    check('a clean sibling does not suppress detection on a challenged URL',
+      !onChallenged.skippedNoIndicators,
+      `skippedNoIndicators=${onChallenged.skippedNoIndicators}`);
+
+    // challenged first, then a CLEAN sibling: handling must not be forced
+    const cf2 = loadInternals();
+    await cf2.handleCloudflareProtection(mkPage('https://mix2.test/chal', true), 'https://mix2.test/chal', {}, false);
+    const onClean = await cf2.handleCloudflareProtection(
+      mkPage('https://mix2.test/clean', false), 'https://mix2.test/clean', {}, false);
+    check('a challenged sibling does not force handling on a clean URL',
+      onClean.skippedNoIndicators === true,
+      `skippedNoIndicators=${onClean.skippedNoIndicators}`);
+  }
+  {
+    // domainSeenIndicators is the whole point of still reading the cache: it
+    // carries what the DOMAIN has shown next to what THIS page shows, so the
+    // skip-path log can name the case that used to be mishandled. Dropping it
+    // left every other check green, which means it was unverified surface --
+    // a mutation nothing catches is a missing check, not a safe change.
+    const cf = loadInternals();
+    const mk = (url, challenged) => ({
+      isClosed: () => false, url: async () => url,
+      frames: () => [], cookies: async () => [],
+      evaluate: async () => challenged
+        ? { hasIndicators: true, title: 'Just a moment...', url, bodySnippet: 'Verify you are human' }
+        : { hasIndicators: false, title: 'Shop', url, bodySnippet: '' }
+    });
+    const cold = await cf._internals.quickCloudflareDetection(mk('https://know.test/a', true), false);
+    eq('cold cache: nothing known about the domain yet', cold.domainSeenIndicators, false);
+    eq('cold cache: the page itself is still read', cold.hasIndicators, true);
+    const warm = await cf._internals.quickCloudflareDetection(mk('https://know.test/b', false), false);
+    eq('a clean page on a challenged domain reports the page', warm.hasIndicators, false);
+    eq('...and reports the domain separately', warm.domainSeenIndicators, true);
   }
 
   // =====================================================================
