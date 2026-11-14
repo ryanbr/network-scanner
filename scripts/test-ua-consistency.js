@@ -200,6 +200,7 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
             icuLocale: (() => { try { return Intl.DateTimeFormat().resolvedOptions().locale; } catch (e) { return null; } })(),
             tzOffset: new Date().getTimezoneOffset(),
             navLanguage: navigator.language,
+            navLanguages: (() => { try { return Array.from(navigator.languages); } catch (e) { return null; } })(),
             navPlatform: navigator.platform }));
         })();
       </script></body></html>`);
@@ -363,6 +364,42 @@ const parseCH = (v) => [...v.matchAll(/"([^"]+)";v="([^"]+)"/g)].map(m => [m[1],
 
     check('the page reports a spoofed timezone from the declared set',
       zones.includes(js.tz), `page tz ${js.tz}, declared ${zones.join(', ')}`);
+
+    // navigator.languages against the Accept-Language header THIS scan sent.
+    // A clean browser puts the base language in the header and NOT in the
+    // list: measured, `en-US,en;q=0.9` pairs with ["en-US"]. The spoof used to
+    // report ['en-US', 'en'], which disagreed with our own header -- and with
+    // what the same browser reports inside a worker, where the injection does
+    // not reach. The list is the thing pinned here, since the header already
+    // has its own checks above.
+    const headerLangs = (h['accept-language'] || '').split(',').map(s => s.split(';')[0].trim()).filter(Boolean);
+    check('navigator.languages is a list, not null',
+      Array.isArray(js.navLanguages) && js.navLanguages.length > 0, JSON.stringify(js.navLanguages));
+    check('navigator.languages holds only the full locale, not the base language',
+      Array.isArray(js.navLanguages) && js.navLanguages.length === 1 && js.navLanguages[0] === headerLangs[0],
+      `languages ${JSON.stringify(js.navLanguages)}, header ${JSON.stringify(headerLangs)}`);
+    check('...and the header still carries the base language as its q-fallback',
+      headerLangs.length === 2 && headerLangs[1] === headerLangs[0].split('-')[0],
+      `header ${JSON.stringify(headerLangs)}`);
+    check('navigator.language is the first entry of navigator.languages',
+      Array.isArray(js.navLanguages) && js.navLanguage === js.navLanguages[0],
+      `language ${js.navLanguage}, languages ${JSON.stringify(js.navLanguages)}`);
+
+    // The UA injection's own languages literal is NOT observable above: both
+    // scans here set fingerprint_protection, and applyFingerprintProtection
+    // assigns languages SECOND, overwriting it. Mutation-tested -- appending
+    // the base language in the UA injection alone passes every runtime check
+    // in this file. It is observable for a site that sets userAgent WITHOUT
+    // fingerprint_protection, so pin both assignments in the source rather
+    // than paying for a third real scan to cover one property. This is a text
+    // check and says nothing about behaviour; the runtime checks above cover
+    // the path that these scans actually exercise.
+    const langAssigns = [...fpSrc.matchAll(/const languages = ([^;]+);/g)].map(m => m[1].trim());
+    check('fingerprint.js still has exactly two languages assignments',
+      langAssigns.length === 2, `found ${langAssigns.length}: ${langAssigns.join(' | ')}`);
+    check('neither languages assignment appends the base language',
+      langAssigns.length === 2 && langAssigns.every(a => !/\.split\('-'\)\[0\]/.test(a) && !/\['en-US',\s*'en'\]/.test(a)),
+      langAssigns.join(' | '));
 
     // getTimezoneOffset is derived by the engine from the emulated zone, so it
     // must match an independent computation for that zone -- the DST correctness
