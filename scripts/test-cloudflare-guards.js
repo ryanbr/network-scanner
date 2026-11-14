@@ -563,6 +563,26 @@ const DETACHED = 'Attempted to use detached Frame';
           'document.querySelectorAll(\'script[src*="challenge-platform"]\').forEach(s => s.remove());' +
           `}, ${clearAt});</script></body></html>`);
       }
+      if (req.url.startsWith('/recaptcha-form')) {
+        // A FOREIGN captcha: reCAPTCHA's canonical markup, no Cloudflare
+        // anything. data-sitekey is reCAPTCHA's and hCaptcha's attribute too,
+        // so a widget selector that includes it judges this a Turnstile widget
+        // and waits for a token that cannot exist.
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html><head><title>Sign in</title></head><body><form>' +
+          '<div class="g-recaptcha" data-sitekey="6Lxxxxx"></div></form></body></html>');
+      }
+      if (req.url.startsWith('/widget-form')) {
+        // An ORDINARY page carrying an embedded Turnstile -- a login form. No
+        // interstitial markers at all, so domClear is true from the first look
+        // and says nothing about the widget. ?solved=1 pre-fills the token.
+        const solved = req.url.includes('solved=1');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html><head><title>Sign in</title></head><body><form>' +
+          '<div class="cf-turnstile" data-sitekey="0x4AAA"></div>' +
+          `<input type="hidden" name="cf-turnstile-response" value="${solved ? '0.AAAAtoken' : ''}">` +
+          '</form></body></html>');
+      }
       if (req.url.startsWith('/de-challenge')) {
         // A challenge page in GERMAN: not one of the English strings the text
         // signals look for, and no cf-* class name either. Only Cloudflare's
@@ -685,6 +705,55 @@ const DETACHED = 'Attempted to use detached Frame';
       check('fixture is seen as both a JS and a Turnstile challenge',
         info.isJSChallenge === true && info.isTurnstile === true,
         `js=${info.isJSChallenge} turnstile=${info.isTurnstile}`);
+
+      // --- page versus widget -------------------------------------------
+      {
+        // An embedded widget is judged by its TOKEN alone. Measured before the
+        // kind existed: this exact page reported isCompleted true with an empty
+        // token, because domClear is trivially true on a page that was never an
+        // interstitial -- so the solver would break out of its loop and report
+        // a widget solved that had produced nothing.
+        const unsolved = await browser.newPage();
+        await unsolved.goto(`http://127.0.0.1:${PORT}/widget-form`, { waitUntil: 'domcontentloaded' });
+        const u = await I.checkChallengeCompletion(unsolved);
+        check('an embedded widget with no token is NOT complete', u.isCompleted === false,
+          `isCompleted=${u.isCompleted}`);
+        await unsolved.close();
+
+        // ...and not over-strict: a token means solved.
+        const solved = await browser.newPage();
+        await solved.goto(`http://127.0.0.1:${PORT}/widget-form?solved=1`, { waitUntil: 'domcontentloaded' });
+        const s = await I.checkChallengeCompletion(solved);
+        check('an embedded widget with a token IS complete', s.isCompleted === true,
+          `isCompleted=${s.isCompleted}`);
+        await solved.close();
+
+        // A foreign captcha must not be judged a Turnstile widget. With
+        // [data-sitekey] in the selector this page became kind 'widget' and
+        // could never complete; without it the kind is 'unknown', which keeps
+        // the behaviour this function had before kinds existed.
+        const recap = await browser.newPage();
+        await recap.goto(`http://127.0.0.1:${PORT}/recaptcha-form`, { waitUntil: 'domcontentloaded' });
+        const rc = await I.checkChallengeCompletion(recap);
+        check('a reCAPTCHA page is not treated as a Turnstile widget', rc.isCompleted === true,
+          `isCompleted=${rc.isCompleted} (false means it is waiting for a Turnstile token)`);
+        await recap.close();
+
+        // The kinds themselves, since the rule hangs on them. `page` must be
+        // claimed on POSITIVE evidence: the default fixture is an interstitial
+        // that never defines _cf_chl_opt, so inferring "widget" from its
+        // absence would reclassify it and strand the solve checks above.
+        const inter = await browser.newPage();
+        await inter.goto(`http://127.0.0.1:${PORT}/`, { waitUntil: 'domcontentloaded' });
+        const kinds = await inter.evaluate(() => ({
+          interstitial: !document.querySelector('.cf-challenge-running, .cf-challenge-container, script[src*="/cdn-cgi/challenge-platform/"]') ? 'no' : 'yes',
+          chlOpt: typeof window._cf_chl_opt === 'object' && window._cf_chl_opt !== null
+        }));
+        check('the interstitial fixture is a page despite having no _cf_chl_opt',
+          kinds.interstitial === 'yes' && kinds.chlOpt === false,
+          `interstitial=${kinds.interstitial} chlOpt=${kinds.chlOpt}`);
+        await inter.close();
+      }
 
       // --- a localized challenge page -----------------------------------
       {
