@@ -456,6 +456,39 @@ const DETACHED = 'Attempted to use detached Frame';
       eq('the new counter resets with the others', cfA.getAggregateStats().skippedAfterDomainTimeout, 0);
     }
     {
+      // The flow/orchestrate counts the watcher records now have a reader: a
+      // timeout where the challenge's own traffic NEVER APPEARED is a different
+      // failure from one where it appeared and did not finish. The first says
+      // the challenge never engaged -- our injection broke its script, or the
+      // page was never running one -- and the second says we ran out of budget.
+      const cfO = loadInternals();
+      const B = cfO._internals.buildOutcomeString;
+      const T = { timedOut: true, overallSuccess: true, phishingWarning: {}, verificationChallenge: {} };
+      eq('a timeout with no challenge traffic is reported apart',
+        B(T, null, { trafficSeen: { observed: true, flow: 0, orchestrate: 0, widgetPost: 0 } }),
+        'timeout(no_challenge_traffic)');
+      eq('a timeout with flow traffic is a plain timeout',
+        B(T, null, { trafficSeen: { observed: true, flow: 3, orchestrate: 1, widgetPost: 0 } }), 'timeout');
+      eq('widget posts alone also count as traffic',
+        B(T, null, { trafficSeen: { observed: true, flow: 0, orchestrate: 0, widgetPost: 2 } }), 'timeout');
+      // A watcher that could not attach -- a page-like object with no event
+      // emitter -- reports all zeros, and zeros must not be read as "saw
+      // nothing". The baseline caught exactly this: a stub page's timeout came
+      // out labelled no_challenge_traffic, a conclusion nothing had earned.
+      const noop = cfO._internals.watchChallengeTraffic({});
+      check('a watcher that never attached is marked unobserved', noop.seen.observed === false,
+        `observed=${noop.seen.observed}`);
+      eq('...and its timeout is plain, not no_challenge_traffic',
+        B(T, null, { trafficSeen: noop.seen }), 'timeout');
+      // null is "the watcher was never armed", which is NOT zero traffic and
+      // must not be reported as it -- the paths that return before arming are
+      // the invalid url, the failed detection and the no-indicators skip.
+      eq('an unarmed watcher is not reported as no traffic',
+        B(T, null, { trafficSeen: null }), 'timeout');
+      eq('and an absent evidence argument stays a plain timeout',
+        B(T, null, {}), 'timeout');
+    }
+    {
       // A replay must not rewrite the cache entry it came from: that object is
       // shared by every URL on the domain for the TTL.
       const cfB = loadInternals();
