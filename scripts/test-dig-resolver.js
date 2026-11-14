@@ -186,14 +186,21 @@ async function digArgvFor(spec, { servfail = false } = {}) {
   }
 
   // === .dnsignore skips the lookup entirely ===
-  // The file lives at the repo root and is gitignored. Refuse to touch a real
-  // one rather than risk a user's list.
+  // The real list lives at the repo root and is gitignored, so these checks
+  // used to be SKIPPED whenever one existed — refusing to clobber it, which
+  // is right, but that is every production clone, i.e. the only place the
+  // feature is used (13 checks in a clone without the file, 9 with it). They
+  // now point NWSS_DNSIGNORE_FILE at a temp file instead, so they run
+  // everywhere and the operator's list is never opened: pinned below by
+  // asserting the repo-root file is byte-for-byte untouched across the group.
   {
-    const { loadDnsIgnore } = require('../lib/nettools');
-    const ignoreFile = path.join(__dirname, '..', '.dnsignore');
-    if (fs.existsSync(ignoreFile)) {
-      console.log('  SKIP  .dnsignore checks — a real .dnsignore exists, not overwriting it');
-    } else {
+    const { loadDnsIgnore, getDnsCacheStats } = require('../lib/nettools');
+    const realFile = path.join(__dirname, '..', '.dnsignore');
+    const realBefore = fs.existsSync(realFile) ? fs.readFileSync(realFile) : null;
+    const ignoreFile = path.join(shimDir, 'dnsignore-fixture');
+    const prevEnv = process.env.NWSS_DNSIGNORE_FILE;
+    process.env.NWSS_DNSIGNORE_FILE = ignoreFile;
+    {
       try {
         fs.writeFileSync(ignoreFile, '# test\nignored.example.test\n');
         const loaded = loadDnsIgnore();
@@ -222,9 +229,67 @@ async function digArgvFor(spec, { servfail = false } = {}) {
         await h('xignored.example.test', 'xignored.example.test');
         const near = fs.readFileSync(argvLog, 'utf8').trim();
         check('a name merely ENDING in an entry is not skipped', near.includes('xignored.example.test'), `argv=${JSON.stringify(near)}`);
+
+        // The same fallback, UNLISTED: it must still run. The checks below
+        // assert only that an ignored subdomain is NOT dug, so a change that
+        // disabled the fallback outright — or kept the count while dropping
+        // the lookup — would leave them green. Its reason to exist is an ad
+        // domain live on a subdomain with a dead or parked apex, so dropping
+        // it loses the capture, silently.
+        process.env.NWSS_TEST_DIG_SERVFAIL = 'fb-apex.example.test A';
+        const beforeLive = getDnsCacheStats().digIgnored;
+        fs.writeFileSync(argvLog, '');
+        await h('fb-apex.example.test', 'live-sub.fb-apex.example.test');
+        delete process.env.NWSS_TEST_DIG_SERVFAIL;
+        const liveArgv = fs.readFileSync(argvLog, 'utf8').trim().split('\n').filter(Boolean);
+        check('an unlisted subdomain is still dug after the root fails',
+          liveArgv.some(l => l.includes('live-sub.fb-apex.example.test'))
+            && getDnsCacheStats().digIgnored === beforeLive,
+          `argv=${JSON.stringify(liveArgv)} digIgnored=${getDnsCacheStats().digIgnored}`);
+
+        // The run total the DNS summary prints. UNIQUE domains, not lookups:
+        // the handler runs per request, and the whole point of the list is
+        // domains requested over and over. Two skips above (the entry and a
+        // subdomain of it), and the two that ran dig must not be counted.
+        const ignoredAfterFour = getDnsCacheStats().digIgnored;
+        check('skipped digs are counted for the summary', ignoredAfterFour === 2,
+          `digIgnored=${ignoredAfterFour} (expected 2: the entry and its subdomain)`);
+
+        fs.writeFileSync(argvLog, '');
+        await h('ignored.example.test', 'ignored.example.test');
+        const repeatArgv = fs.readFileSync(argvLog, 'utf8').trim();
+        const ignoredAfterRepeat = getDnsCacheStats().digIgnored;
+        check('a domain skipped twice counts once', ignoredAfterRepeat === 2 && repeatArgv === '',
+          `digIgnored=${ignoredAfterRepeat} argv=${JSON.stringify(repeatArgv)}`);
+        // An entry naming a SUBDOMAIN, with its apex unlisted: the gate sees
+        // only the root (default dig mode digs the apex), so the root dig runs
+        // and the subdomain dig is suppressed further down, in the fallback
+        // that exists for ad domains live on a sub but dead at a parked apex.
+        // That skip used to be invisible — 0 reported while a lookup had been
+        // prevented.
+        fs.writeFileSync(ignoreFile, '# test\nsub.apex-live.example.test\n');
+        const loadedSub = loadDnsIgnore();
+        const before = getDnsCacheStats().digIgnored;
+        process.env.NWSS_TEST_DIG_SERVFAIL = 'apex-live.example.test';
+        fs.writeFileSync(argvLog, '');
+        await h('apex-live.example.test', 'sub.apex-live.example.test');
+        delete process.env.NWSS_TEST_DIG_SERVFAIL;
+        const subArgv = fs.readFileSync(argvLog, 'utf8').trim();
+        const digged = subArgv.split('\n').filter(Boolean);
+        check('a subdomain entry suppresses the fallback dig, and is counted',
+          loadedSub === 1 && getDnsCacheStats().digIgnored === before + 1
+            && digged.length > 0 && !digged.some(l => l.includes('sub.apex-live.example.test')),
+          `entries=${loadedSub} digIgnored ${before}->${getDnsCacheStats().digIgnored} argv=${JSON.stringify(digged)}`);
       } finally {
         fs.rmSync(ignoreFile, { force: true });
+        delete process.env.NWSS_TEST_DIG_SERVFAIL;
+        if (prevEnv === undefined) delete process.env.NWSS_DNSIGNORE_FILE;
+        else process.env.NWSS_DNSIGNORE_FILE = prevEnv;
       }
+      const realAfter = fs.existsSync(realFile) ? fs.readFileSync(realFile) : null;
+      const untouched = realBefore === null ? realAfter === null : (realAfter !== null && realBefore.equals(realAfter));
+      check('the operator\'s own .dnsignore was never written', untouched,
+        realBefore === null ? 'no repo-root file, and none was created' : `${realBefore.length} bytes, unchanged`);
     }
   }
 

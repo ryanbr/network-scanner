@@ -504,7 +504,13 @@ if (dnsCacheMode) {
 // Independent of --dns-cache; no-op when the file is absent.
 {
   const dnsIgnoreCount = loadDnsIgnore();
-  if (dnsIgnoreCount > 0 && !silentMode) {
+  // forceDebug, not just !silentMode: the line is tagged [debug] and is a
+  // parse summary, so an ordinary run printed exactly one debug-tagged line
+  // among none — and the half that shows the list working (`[dig] Skipping X
+  // — matched .dnsignore`) was already behind --debug, so the announcement
+  // was followed by nothing. The run total now goes in the DNS summary below,
+  // which prints without --debug.
+  if (dnsIgnoreCount > 0 && forceDebug && !silentMode) {
     console.log(formatLogMessage('debug', `[dnsignore] Loaded ${dnsIgnoreCount} domain(s) to skip dig confirmation on`));
   }
 }
@@ -7627,13 +7633,23 @@ function setupFrameHandling(page, forceDebug) {
     }
     // DNS cache statistics
     const dnsStats = getDnsCacheStats();
-    if (dnsStats.digHits + dnsStats.digMisses > 0 || dnsStats.whoisHits + dnsStats.whoisMisses > 0) {
+    if (dnsStats.digHits + dnsStats.digMisses > 0 || dnsStats.whoisHits + dnsStats.whoisMisses > 0
+        || dnsStats.digIgnored > 0) {
       const parts = [];
       if (dnsStats.digHits + dnsStats.digMisses > 0) {
         parts.push(`${messageColors.success(dnsStats.digHits)} dig cached, ${messageColors.timing(dnsStats.digMisses)} fresh`);
       }
       if (dnsStats.whoisHits + dnsStats.whoisMisses > 0) {
         parts.push(`${messageColors.success(dnsStats.whoisHits)} whois cached, ${messageColors.timing(dnsStats.whoisMisses)} fresh`);
+      }
+      // DOMAINS, not lookups, and worded that way: a skipped domain can stand
+      // for more than one dig (the root plus the subdomain fallback it would
+      // have reached), so measured against the same scan without the list,
+      // `1 dig skipped` sat next to `2 fresh` and invited the wrong
+      // subtraction. In the outer condition too, so a run where EVERY dig was
+      // skipped still reports instead of printing nothing at all.
+      if (dnsStats.digIgnored > 0) {
+        parts.push(`${messageColors.highlight(dnsStats.digIgnored)} domain(s) skipped (.dnsignore)`);
       }
       console.log(messageColors.info('DNS cache:') + ` ${parts.join(' | ')}`);
       if (dnsStats.freshDig.length > 0) {
