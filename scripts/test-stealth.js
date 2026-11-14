@@ -569,6 +569,94 @@ function formatResult(target, result) {
         })()
       }));
 
+      // The mousemove-timing wrapper's REGISTRATION bookkeeping, which no
+      // amount of reading settles: that block replaces
+      // EventTarget.prototype.addEventListener for every target in the
+      // document, so a bug there leaks listeners for as long as the target
+      // lives. One wrapper must serve each (target, listener, capture) triple,
+      // because that is what lets the spec's own de-duplication and removal
+      // keep working through it. Measured before the fix: 5 identical adds
+      // produced 5 invocations, and 5000 adds of one handler to window plus
+      // the matching remove left 4,999 live listeners, each firing (and
+      // scheduling a setTimeout) on every mousemove.
+      //
+      // Every count is taken on an element this check OWNS, never document or
+      // window: simulateHumanBehavior dispatches synthetic mousemove events at
+      // those, which inflates any count taken there.
+      const listenerIssues = await page.evaluate(async () => {
+        const bad = [];
+        // The wrapper defers by 0-2ms; 60 is clear of that without adding
+        // seconds to the run across both fingerprint profiles.
+        const settle = () => new Promise(r => setTimeout(r, 60));
+        const el = document.createElement('div');
+        document.body.appendChild(el);
+        const fire = async (target) => {
+          target.dispatchEvent(new MouseEvent('mousemove'));
+          await settle();
+        };
+
+        // An identical (target, type, listener, capture) tuple added N times is
+        // ONE listener, and one remove detaches it.
+        let n = 0;
+        const h = () => { n++; };
+        for (let i = 0; i < 5; i++) el.addEventListener('mousemove', h);
+        await fire(el);
+        if (n !== 1) bad.push(`5 identical adds produced ${n} invocation(s), expected 1`);
+        n = 0;
+        el.removeEventListener('mousemove', h);
+        await fire(el);
+        if (n !== 0) bad.push(`${n} listener(s) still live after removeEventListener`);
+
+        // ...and the wrapper still does its job: the call must be DEFERRED,
+        // not synchronous, or the timing jitter the block exists for is gone.
+        let ran = false;
+        const h2 = () => { ran = true; };
+        el.addEventListener('mousemove', h2);
+        el.dispatchEvent(new MouseEvent('mousemove'));
+        const immediate = ran;
+        await settle();
+        if (immediate) bad.push('mousemove listener ran synchronously — timing jitter not applied');
+        if (!ran) bad.push('mousemove listener never ran');
+        el.removeEventListener('mousemove', h2);
+
+        // capture and bubble are SEPARATE registrations; removing one must not
+        // take the other with it.
+        let c = 0;
+        const h3 = () => { c++; };
+        el.addEventListener('mousemove', h3, true);
+        el.addEventListener('mousemove', h3, false);
+        c = 0; await fire(el);
+        if (c !== 2) bad.push(`capture+bubble adds produced ${c} invocation(s), expected 2`);
+        el.removeEventListener('mousemove', h3, false);
+        c = 0; await fire(el);
+        if (c !== 1) bad.push(`removing the bubble listener left ${c} invocation(s), expected 1`);
+        el.removeEventListener('mousemove', h3, true);
+        c = 0; await fire(el);
+        if (c !== 0) bad.push(`${c} invocation(s) after both capture and bubble were removed`);
+
+        // One handler on two targets — the ordinary drag pattern. Removing it
+        // from each must detach both; a listener-keyed registry orphans the
+        // first target's wrapper with nothing able to name it.
+        let t = 0;
+        const h4 = () => { t++; };
+        const a = document.createElement('div');
+        const b = document.createElement('div');
+        document.body.appendChild(a);
+        document.body.appendChild(b);
+        a.addEventListener('mousemove', h4);
+        b.addEventListener('mousemove', h4);
+        b.removeEventListener('mousemove', h4);
+        a.removeEventListener('mousemove', h4);
+        t = 0;
+        a.dispatchEvent(new MouseEvent('mousemove'));
+        b.dispatchEvent(new MouseEvent('mousemove'));
+        await settle();
+        if (t !== 0) bad.push(`${t} invocation(s) after one handler on two targets was removed from both`);
+
+        el.remove(); a.remove(); b.remove();
+        return bad;
+      });
+
       const isFirefox = /Firefox\//.test(f.ua);
       const isSafari = /Version\/.*Safari/.test(f.ua) && !/Chrome\//.test(f.ua);
       const isChrome = /Chrome\//.test(f.ua);
@@ -607,6 +695,7 @@ function formatResult(target, result) {
       if (f.wrapIdentity && f.wrapIdentity.length) {
         issues.push(`wrapped method(s) report the wrong name/length: ${f.wrapIdentity.slice(0, 6).join('; ')}${f.wrapIdentity.length > 6 ? ` (+${f.wrapIdentity.length - 6} more)` : ''}`);
       }
+      for (const li of listenerIssues) issues.push(`mousemove listener wrapper: ${li}`);
       // Canvas coherence. Three checks because none of them covers another,
       // both mutations verified: dropping the OffscreenCanvas wrap leaves that
       // path unnoised AND disagreeing, while giving it a SECOND, independent
