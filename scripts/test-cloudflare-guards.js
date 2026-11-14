@@ -480,7 +480,15 @@ const DETACHED = 'Attempted to use detached Frame';
   if (!puppeteer) {
     console.log('  … skipped (puppeteer not resolvable)');
   } else {
-    const PORT = 8299;
+    // PORT is assigned by the kernel (listen on 0, read it back below), not
+    // fixed. It was 8299, which meant two instances of this suite could never
+    // run at once -- a dev-clone run and a prod-clone run at the same time lost
+    // the race and died on `listen EADDRINUSE: address already in use
+    // 127.0.0.1:8299`, as an unhandled 'error' event with a stack and no
+    // explanation, which reads like a code regression until you find the line.
+    // Anything else holding the port, a fixture left behind by a killed run
+    // included, broke it the same way.
+    let PORT = 0;
     const srv = http.createServer((req, res) => {
       if (req.url.startsWith('/cdn-cgi/challenge-platform/')) {
         res.writeHead(200, { 'Content-Type': 'application/javascript' }); return res.end('// cf');
@@ -584,7 +592,16 @@ const DETACHED = 'Attempted to use detached Frame';
         <script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script>
       </body></html>`);
     });
-    await new Promise(r => srv.listen(PORT, '127.0.0.1', r));
+    // Surface a bind failure as a readable line rather than an unhandled
+    // 'error' event, whatever the cause.
+    await new Promise((resolve, reject) => {
+      srv.once('error', reject);
+      srv.listen(0, '127.0.0.1', resolve);
+    }).catch((err) => {
+      check('the fixture server could bind a port', false, `${err.code || err.name}: ${err.message}`);
+      throw err;
+    });
+    PORT = srv.address().port;
     const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
     try {
       const { _internals: I } = loadInternals();
