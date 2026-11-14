@@ -563,6 +563,22 @@ const DETACHED = 'Attempted to use detached Frame';
           'document.querySelectorAll(\'script[src*="challenge-platform"]\').forEach(s => s.remove());' +
           `}, ${clearAt});</script></body></html>`);
       }
+      if (req.url.startsWith('/de-challenge')) {
+        // A challenge page in GERMAN: not one of the English strings the text
+        // signals look for, and no cf-* class name either. Only Cloudflare's
+        // own state object, which is what makes this detectable at all.
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html lang="de"><head><title>Einen Moment bitte …</title></head><body>' +
+          '<h1>Überprüfung Ihrer Verbindung</h1><p>Bitte warten Sie.</p>' +
+          '<script>window._cf_chl_opt={cH:"tok",cRay:"8f2a1b",cUPMDTk:"/seite?__cf_chl_tk=x"};</script>' +
+          '</body></html>');
+      }
+      if (req.url.startsWith('/de-plain')) {
+        // The control: an ordinary German page must stay undetected, or the new
+        // signal is just a wider net.
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        return res.end('<html lang="de"><head><title>Nachrichten</title></head><body><p>Artikel</p></body></html>');
+      }
       if (req.url.startsWith('/clear-stuck')) {
         // Clearance is set for the host, but THIS page stays on the
         // interstitial -- the sibling race, in one page.
@@ -669,6 +685,23 @@ const DETACHED = 'Attempted to use detached Frame';
       check('fixture is seen as both a JS and a Turnstile challenge',
         info.isJSChallenge === true && info.isTurnstile === true,
         `js=${info.isJSChallenge} turnstile=${info.isTurnstile}`);
+
+      // --- a localized challenge page -----------------------------------
+      {
+        const dePage = await browser.newPage();
+        await dePage.goto(`http://127.0.0.1:${PORT}/de-challenge`, { waitUntil: 'domcontentloaded' });
+        const de = await I.quickCloudflareDetection(dePage, false);
+        check('a German challenge page is detected (no English strings, no cf-* classes)',
+          de.hasIndicators === true, `hasIndicators=${de.hasIndicators}, title=${JSON.stringify(de.title)}`);
+        await dePage.close();
+
+        const plainPage = await browser.newPage();
+        await plainPage.goto(`http://127.0.0.1:${PORT}/de-plain`, { waitUntil: 'domcontentloaded' });
+        const plain = await I.quickCloudflareDetection(plainPage, false);
+        check('an ordinary German page is still not detected',
+          plain.hasIndicators === false, `hasIndicators=${plain.hasIndicators}`);
+        await plainPage.close();
+      }
 
       // --- the clearance re-check, in a real browser -------------------
       {
