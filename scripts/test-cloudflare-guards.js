@@ -145,15 +145,111 @@ const DETACHED = 'Attempted to use detached Frame';
     eq('neither, and no cookie -> not completed',
       (await I.checkChallengeCompletion(mk({ __cfCheck: true, domClear: false, hasToken: false }))).isCompleted, false);
     // document.cookie cannot see an HttpOnly cf_clearance; page.cookies() can.
-    eq('cf_clearance read over CDP -> completed',
+    // This used to assert that the cookie ALONE completes the challenge. It
+    // does not any more, and the reason is a measured race: cf_clearance is set
+    // for the HOST and cookies are shared by every page in the browser context,
+    // while a challenge is per document -- and nwss runs a site's URLs
+    // concurrently in ONE browser. A page whose DOM was still "Just a moment"
+    // with the container present and no token flipped to completed the moment a
+    // SIBLING page acquired clearance. The cookie now buys a re-check, and this
+    // page's own DOM decides.
+    //
+    // The wait between the two reads is shortened here: the control flow under
+    // test is unaffected by its length, and the real 2s would be paid twice per
+    // run of this suite.
+    I.TIMEOUTS.POST_SOLVE_REDIRECT_MS = 10;
+    // A stub whose DOM answers differently on the second read, so the re-check
+    // is distinguishable from the first look.
+    const mkSeq = (payloads, cookies = []) => {
+      let i = 0;
+      return {
+        isClosed: () => false, url: async () => 'https://x.test/',
+        cookies: async () => cookies,
+        evaluate: async () => payloads[Math.min(i++, payloads.length - 1)]
+      };
+    };
+    const CLEARANCE = [{ name: 'cf_clearance', value: 'abc' }];
+    const STILL_CHALLENGED = { __cfCheck: true, domClear: false, hasToken: false };
+    const CLEARED = { __cfCheck: true, domClear: true, hasToken: false };
+
+    eq('cf_clearance alone does NOT complete while this page is still challenged',
       (await I.checkChallengeCompletion(
-        mk({ __cfCheck: true, domClear: false, hasToken: false }, [{ name: 'cf_clearance', value: 'abc' }]))).isCompleted, true);
+        mkSeq([STILL_CHALLENGED, STILL_CHALLENGED], CLEARANCE))).isCompleted, false);
+    eq('cf_clearance + this page clearing on the re-check -> completed',
+      (await I.checkChallengeCompletion(
+        mkSeq([STILL_CHALLENGED, CLEARED], CLEARANCE))).isCompleted, true);
+    // The re-check is subject to the same trap as the first read: a failed
+    // evaluation is a truthy object, and must not read as a solve.
+    eq('a re-check that could not run is not a solve',
+      (await I.checkChallengeCompletion(
+        mkSeq([STILL_CHALLENGED, { error: 'Attempted to use detached Frame' }], CLEARANCE))).isCompleted, false);
+    // ...and the cookie is still read over CDP rather than from the document.
+    {
+      let cookieReads = 0;
+      const counting = {
+        isClosed: () => false, url: async () => 'https://x.test/',
+        cookies: async () => { cookieReads++; return CLEARANCE; },
+        evaluate: async () => STILL_CHALLENGED
+      };
+      await I.checkChallengeCompletion(counting);
+      check('cf_clearance is still read over CDP (page.cookies called)', cookieReads === 1,
+        `page.cookies() called ${cookieReads} time(s)`);
+    }
+    // A predicate carrying no docId at all -- a stub here, or a later refactor
+    // -- must degrade to ONE wait per page, not one per call. Read straight off
+    // the WeakMap, undefined means both "nothing spent yet" and "spent for an
+    // undefined docId", and every call would wait again: the per-selector cost
+    // the gate exists to stop.
+    {
+      I.TIMEOUTS.POST_SOLVE_REDIRECT_MS = 120;
+      const noDocId = {
+        isClosed: () => false, url: async () => 'https://x.test/',
+        cookies: async () => CLEARANCE,
+        evaluate: async () => STILL_CHALLENGED        // no docId field
+      };
+      const t = Date.now();
+      for (let i = 0; i < 3; i++) await I.checkChallengeCompletion(noDocId);
+      const spent = Date.now() - t;
+      check('a predicate without a docId still waits once, not per call',
+        spent < 300, `3 calls took ${spent}ms with a 120ms window`);
+      I.TIMEOUTS.POST_SOLVE_REDIRECT_MS = 10;
+    }
+
+    // No cookie at all must stay on the fast path -- no re-check, no wait.
+    {
+      let evals = 0;
+      const noCookie = {
+        isClosed: () => false, url: async () => 'https://x.test/',
+        cookies: async () => [],
+        evaluate: async () => { evals++; return STILL_CHALLENGED; }
+      };
+      const r = await I.checkChallengeCompletion(noCookie);
+      check('no clearance -> one DOM read, no re-check', r.isCompleted === false && evals === 1,
+        `isCompleted=${r.isCompleted}, evaluate called ${evals} time(s)`);
+    }
     // Comment lines stripped: the fix's own explanation names the dead call.
     const cfCode = fs.readFileSync(CF_PATH, 'utf8').split('\n')
       .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
     check('no executable line tests document.cookie for cf_clearance',
       !/document\.cookie\.includes\('cf_clearance'\)/.test(cfCode),
       'an HttpOnly cookie is invisible to document.cookie, so that term was dead');
+    // The completion check reads the page twice (arrival, then after clearance
+    // shows up). Both reads must run the SAME predicate: two copies of the
+    // selector list is how the pair drifts, and the second copy had already
+    // lost the comment explaining why body.textContent is read once.
+    // Scoped to the function's OWN body: that selector appears in three other
+    // functions for their own reasons, so a file-wide count cannot tell a
+    // duplicate inside this path from legitimate use elsewhere. (It said 4 and
+    // failed on correct code -- a badly specified check invents a defect the
+    // same way a bad mutation invents a coverage gap.)
+    const bodyStart = cfCode.indexOf('async function checkChallengeCompletion(page) {');
+    const after = cfCode.slice(bodyStart + 1);
+    const nextDecl = after.search(/\n(?:async )?function /);
+    const fnBody = nextDecl === -1 ? after : after.slice(0, nextDecl);
+    const hoistedUses = (fnBody.match(/safePageEvaluate\(page, readChallengeMarkers/g) || []).length;
+    check('both completion reads share one hoisted predicate',
+      bodyStart !== -1 && hoistedUses === 2 && !/querySelector/.test(fnBody),
+      `readChallengeMarkers used ${hoistedUses}x in the function body; inline querySelector present: ${/querySelector/.test(fnBody)}`);
   }
 
   // =====================================================================
@@ -303,6 +399,30 @@ const DETACHED = 'Attempted to use detached Frame';
           'document.querySelectorAll(\'script[src*="challenge-platform"]\').forEach(s => s.remove());' +
           `}, ${clearAt});</script></body></html>`);
       }
+      if (req.url.startsWith('/clear-stuck')) {
+        // Clearance is set for the host, but THIS page stays on the
+        // interstitial -- the sibling race, in one page.
+        res.writeHead(200, { 'Content-Type': 'text/html',
+          'Set-Cookie': 'cf_clearance=tok; Path=/; HttpOnly' });
+        return res.end('<html><head><title>Just a moment...</title></head><body>' +
+          '<div class="cf-challenge-container"><p>Verify you are human</p></div></body></html>');
+      }
+      if (req.url.startsWith('/clear-nav')) {
+        // Clearance set AND this page's own redirect lands shortly after: the
+        // legitimate case the cookie fallback existed for. A real NAVIGATION,
+        // not an in-place DOM edit, because that detaches the frame mid-check
+        // and is what a post-solve redirect actually does.
+        res.writeHead(200, { 'Content-Type': 'text/html',
+          'Set-Cookie': 'cf_clearance=tok; Path=/; HttpOnly' });
+        return res.end('<html><head><title>Just a moment...</title></head><body>' +
+          '<div class="cf-challenge-container"><p>Verify you are human</p></div>' +
+          '<script>setTimeout(() => { location.href = "/landed"; }, 200);</script>' +
+          '</body></html>');
+      }
+      if (req.url.startsWith('/landed')) {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><head><title>Real Site</title></head><body><p>content</p></body></html>');
+      }
       if (req.url === '/phish-stuck') {
         // A phishing interstitial whose continue link is an in-page anchor: the
         // click lands, nothing navigates, the warning stays.
@@ -376,6 +496,51 @@ const DETACHED = 'Attempted to use detached Frame';
       check('fixture is seen as both a JS and a Turnstile challenge',
         info.isJSChallenge === true && info.isTurnstile === true,
         `js=${info.isJSChallenge} turnstile=${info.isTurnstile}`);
+
+      // --- the clearance re-check, in a real browser -------------------
+      {
+        // A real redirect must still read as completed. Window generous
+        // relative to the page's 200ms navigation.
+        I.TIMEOUTS.POST_SOLVE_REDIRECT_MS = 1000;
+        const navPage = await browser.newPage();
+        await navPage.goto(`http://127.0.0.1:${PORT}/clear-nav`, { waitUntil: 'domcontentloaded' });
+        const navRes = await I.checkChallengeCompletion(navPage);
+        const landedTitle = await navPage.evaluate(() => document.title);
+        check('clearance + this page\'s own redirect landing -> completed',
+          navRes.isCompleted === true && landedTitle === 'Real Site',
+          `isCompleted=${navRes.isCompleted}, title=${JSON.stringify(landedTitle)}`);
+        await navPage.close();
+
+        // The same cookie must NOT complete a page that stays on the
+        // interstitial, and the wait must be paid ONCE however many times the
+        // selector loops ask. Three calls, one window.
+        I.TIMEOUTS.POST_SOLVE_REDIRECT_MS = 200;
+        const stuckPage = await browser.newPage();
+        await stuckPage.goto(`http://127.0.0.1:${PORT}/clear-stuck`, { waitUntil: 'domcontentloaded' });
+        const tStuck = Date.now();
+        const verdicts = [];
+        for (let i = 0; i < 3; i++) verdicts.push((await I.checkChallengeCompletion(stuckPage)).isCompleted);
+        const elapsed = Date.now() - tStuck;
+        check('a sibling\'s clearance does not complete a page still challenged',
+          verdicts.every(v => v === false), `verdicts=${JSON.stringify(verdicts)}`);
+        // One 200ms wait plus three DOM reads; three waits would be 600ms+.
+        check('the clearance wait is paid once, not once per selector',
+          elapsed < 500, `3 calls took ${elapsed}ms with a 200ms window`);
+
+        // ...but a RELOAD is a new document and must earn a fresh wait. A
+        // wall-clock window could not tell the two apart: RETRY_CONFIG.baseDelay
+        // is 800ms and the ladder reloads between attempts, so attempt 2's first
+        // check lands inside a 2s window and would skip its wait -- losing a
+        // redirect that was about to land, on the last attempt maxAttempts
+        // allows.
+        await stuckPage.reload({ waitUntil: 'domcontentloaded' });
+        const tReload = Date.now();
+        await I.checkChallengeCompletion(stuckPage);
+        const reloadElapsed = Date.now() - tReload;
+        check('a reloaded page earns a fresh clearance wait',
+          reloadElapsed >= 180, `the call after a reload took ${reloadElapsed}ms with a 200ms window`);
+        await stuckPage.close();
+      }
 
       const t0 = Date.now();
       const js = await I.waitForJSChallengeCompletion(page, false);
