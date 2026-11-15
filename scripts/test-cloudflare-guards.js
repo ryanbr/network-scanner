@@ -1031,6 +1031,27 @@ const DETACHED = 'Attempted to use detached Frame';
           '});' +
           '</script></body></html>');
       }
+      if (req.url === '/clearance-challenged' || req.url === '/clearance-clean') {
+        // Both set cf_clearance and embed the widget frame, and NEITHER ever
+        // produces a cf-turnstile-response token, so the completion check
+        // always fails and the clearance fallback is what decides. They differ
+        // only in whether a challenge is still on the page: .cf-turnstile is
+        // what hasTurnstileContainer looks for. The iframe carries no matching
+        // src attribute, so hasTurnstileIframe does not fire for either --
+        // which is what makes the clean one genuinely clean.
+        const challenged = req.url === '/clearance-challenged';
+        res.writeHead(200, { 'Content-Type': 'text/html',
+                             'Set-Cookie': 'cf_clearance=tok; Path=/; HttpOnly' });
+        return res.end('<html><head><title>' + (challenged ? 'Just a moment...' : 'Real Site') + '</title></head>' +
+          '<body style="margin:0;padding:120px 0 0 60px">' +
+          (challenged ? '<div class="cf-turnstile"><span>widget</span></div>' : '<h1>content</h1>') +
+          '<script>' +
+          'var f = document.createElement("iframe");' +
+          'f.width = 300; f.height = 65; f.style.border = "0";' +
+          'document.body.appendChild(f);' +
+          'f.contentWindow.location.replace("/turnstile/if/widget");' +
+          '</script></body></html>');
+      }
       if (req.url === '/closed-widget') {
         // The iframe is CREATED and then NAVIGATED, never given a src
         // attribute that names the widget host -- which is what Turnstile
@@ -1455,6 +1476,79 @@ const DETACHED = 'Attempted to use detached Frame';
       } finally {
         await closedPage.close();
         await closedCtx.close();
+      }
+
+      // --- cf_clearance alone is not a solve -------------------------------
+      // The fallback exists because a managed challenge CAN clear without ever
+      // creating a Turnstile input, so it stays -- but the cookie is per
+      // DOMAIN and one jar is shared across concurrently scanned URLs, so on
+      // its own it says nothing about THIS page. Measured: 46 'treating as
+      // cleared' decisions in one 342-URL run against zero real token
+      // completions in ~1300 URL-visits, and the solved(turnstile) it produced
+      // sat on a page still returning 403 with the challenge re-rendering
+      // afterwards. Both legs matter: the first is the false positive, the
+      // second is the legitimate clear the fix must not cost.
+      for (const [route, label, wantSuccess] of [
+        ['/clearance-challenged', 'a challenge still on the page', false],
+        ['/clearance-clean', 'the challenge gone', true]
+      ]) {
+        const ctx = await browser.createBrowserContext();
+        const cp = await ctx.newPage();
+        try {
+          const cfC = loadInternals();
+          cfC._internals.TIMEOUTS.TURNSTILE_COMPLETION = 1500;
+          await cp.goto(`http://127.0.0.1:${PORT}${route}`, { waitUntil: 'networkidle2' });
+          const cookies = await cp.cookies();
+          check(`precondition: ${route} really sets cf_clearance`,
+            cookies.some(c => c.name === 'cf_clearance'), JSON.stringify(cookies.map(c => c.name)));
+          const r = await cfC._internals.handleEmbeddedIframeChallenge(cp, false);
+          check(`cf_clearance with ${label} -> success=${wantSuccess}`,
+            !!r.success === wantSuccess, JSON.stringify(r));
+        } finally {
+          await cp.close(); await ctx.close();
+        }
+      }
+
+      // An INCONCLUSIVE re-check must not read as cleared: a stub page whose
+      // evaluate throws makes analyzeCloudflareChallenge fail while
+      // cf_clearance is present, which is the state where "we could not look"
+      // could be scored the same as "we looked and it was clean".
+      //
+      // This pins the BEHAVIOUR, not the `!after || !!after.error` term, and
+      // the difference was measured rather than assumed: on this path that
+      // term is DOMINATED. analyzeCloudflareChallenge reports isTurnstile from
+      // FRAME presence as well as from the DOM, and reaching this code requires
+      // a challenges.cloudflare.com frame, so isTurnstile is true here even
+      // when the evaluate failed -- verified by instrumenting the branch, which
+      // printed after={e:"blocked", t:true}. A mutation that drops the error
+      // term therefore changes nothing, and no test can isolate it. The term
+      // stays as defence in depth for a future caller that reaches this with no
+      // frame; it is deliberately NOT claimed as covered.
+      {
+        const cfI = loadInternals();
+        const deadFrame = {
+          url: () => 'https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/x',
+          waitForSelector: () => Promise.reject(new Error('stubbed')),
+          $$: async () => [],
+          evaluate: async () => { throw new Error('evaluation blocked'); },
+          evaluateHandle: async () => { throw new Error('evaluation blocked'); }
+        };
+        const inconclusivePage = {
+          isClosed: () => false,
+          url: () => 'https://inconc.test/a',
+          cookies: async () => [{ name: 'cf_clearance', value: 'tok' }],
+          frames: () => [deadFrame],
+          mainFrame: () => ({ url: () => 'https://inconc.test/a' }),
+          $: async () => null,
+          waitForFunction: () => Promise.reject(new Error('no token')),
+          evaluate: async () => { throw new Error('evaluation blocked'); },
+          mouse: { click: async () => {} },
+          on: () => {}, off: () => {}
+        };
+        cfI._internals.TIMEOUTS.TURNSTILE_COMPLETION = 500;
+        const r = await cfI._internals.handleEmbeddedIframeChallenge(inconclusivePage, false);
+        check('cf_clearance with an INCONCLUSIVE re-check is not a solve',
+          r.success === false, JSON.stringify(r));
       }
 
       // The evaluateHandle fallback, reached only when waitForSelector never
