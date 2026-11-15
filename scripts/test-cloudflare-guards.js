@@ -679,6 +679,42 @@ const DETACHED = 'Attempted to use detached Frame';
         return { ms: Date.now() - t0, warns };
       };
 
+      // No STALE timer after the stall exit wins. Measured in production: the
+      // adaptive setTimeout was only cleared in the .finally() on
+      // performCloudflareHandling, which runs after the handling unwinds --
+      // so when the stall exit resolved the race first, the adaptive timer was
+      // still pending and fired later, logging "Adaptive timeout (25000ms) ...
+      // continuing with scan" against a URL whose outcome had already been
+      // reported and whose scan had moved on.
+      const stale = await (async () => {
+        const cfT2 = loadInternals();
+        // The adaptive deadline must fall BETWEEN the stall exit and this
+        // stub's natural ~500ms completion, or the handling's own .finally()
+        // clears the timer first and the check cannot see the difference. A
+        // first version used a 1200ms deadline -- AFTER that completion -- and
+        // passed with the fix removed, i.e. it was decoration. 300ms budget:
+        // stall exits at ~99ms, the stale timer would fire at 300ms, the
+        // handling finishes at ~500ms. That is the live ordering (handling
+        // still running when the deadline passes) compressed from 25s.
+        cfT2._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = 300;
+        cfT2._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = 300;
+        cfT2._internals.TIMEOUTS.CHALLENGE_STALL_RATIO = 0.33;    // ~99ms of 300
+        cfT2._internals.TIMEOUTS.CHALLENGE_STALL_MIN_MS = 1;
+        cfT2._internals.TIMEOUTS.CHALLENGE_STALL_POLL_MS = 25;
+        const warns = [];
+        const rw = console.warn;
+        console.warn = (...a) => warns.push(a.join(' '));
+        try {
+          await cfT2.handleCloudflareProtection(mkTrafPage([ORCH]), 'https://stale.test/a', { cloudflare_bypass: true }, false);
+          const afterReturn = warns.length;
+          // past the 300ms deadline AND the ~500ms completion
+          await new Promise(r => setTimeout(r, 800));
+          return { afterReturn, later: warns.slice(afterReturn) };
+        } finally { console.warn = rw; }
+      })();
+      check('no stale adaptive-timeout warning after the stall exit wins',
+        stale.later.length === 0, `${stale.later.length} late warn(s): ${stale.later.join(' | ').slice(0, 150)}`);
+
       const stalled = await runStall([ORCH]);
       // 300ms sits between the 100ms stall exit and this stub's ~500ms natural
       // completion, so the check fails if the exit does not fire. An earlier
