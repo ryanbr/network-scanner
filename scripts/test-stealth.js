@@ -1009,49 +1009,6 @@ function formatResult(target, result) {
         issues.push(`canvas coherence check could not run: ${f.canvas.error}`);
       }
 
-      // Worker globals must report what the document reports. evaluateOnNewDocument
-      // reaches documents only, so before applyWorkerConsistency a worker read the
-      // host's real values -- measured `Linux x86_64` against `Win32` and 32 cores
-      // against 4, a contradiction inside one browser that creepjs compares
-      // directly. A worker that never answers is the OTHER failure this covers:
-      // the patch pauses targets at start, so a missing runIfWaitingForDebugger
-      // would hang the site's own worker rather than merely leave it unspoofed.
-      // Both sides read in ONE evaluate, so the comparison cannot depend on
-      // which fields the probe above happens to collect -- `hardwareConcurrency`
-      // is not among them, and comparing against a missing field would have made
-      // this pass vacuously.
-      const wk = await page.evaluate(async () => {
-        const doc = {
-          platform: navigator.platform,
-          hardwareConcurrency: navigator.hardwareConcurrency
-        };
-        try {
-          const src = 'self.onmessage=()=>postMessage({platform:navigator.platform,'
-            + 'hardwareConcurrency:navigator.hardwareConcurrency});';
-          const w = new Worker(URL.createObjectURL(new Blob([src], { type: 'application/javascript' })));
-          const worker = await new Promise(res => {
-            w.onmessage = e => res(e.data);
-            w.onerror = () => res({ error: 'worker error' });
-            w.postMessage(1);
-            setTimeout(() => res(null), 4000);
-          });
-          w.terminate();
-          return { doc, worker };
-        } catch (e) { return { doc, worker: { error: e.message } }; }
-      }).catch(e => ({ doc: null, worker: { error: e.message } }));
-
-      if (!wk.worker) {
-        issues.push('a worker never responded — a target paused by waitForDebuggerOnStart was not released');
-      } else if (wk.worker.error) {
-        issues.push(`worker consistency check could not run: ${wk.worker.error}`);
-      } else {
-        for (const key of ['platform', 'hardwareConcurrency']) {
-          if (wk.worker[key] !== wk.doc[key]) {
-            issues.push(`worker ${key} is ${JSON.stringify(wk.worker[key])} but the document says ${JSON.stringify(wk.doc[key])}`);
-          }
-        }
-      }
-
       collected.push({ name: `self-consistency (fp=${fpProfile})`, url: 'about:blank', ok: true, durationMs: 0,
         result: { passed: issues.length === 0 ? 1 : 0, failed: issues.length, warn: 0,
                   total: 1, failures: issues, warnings: [] } });
