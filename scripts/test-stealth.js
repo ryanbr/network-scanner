@@ -849,16 +849,30 @@ function formatResult(target, result) {
               bad.push('an OffscreenCanvas context does not hand out the prototype\'s own method');
             }
             // ...and the spoof has to reach it, including a parameter only the
-            // prototype table carries (VERSION), which is what proved the old
+            // prototype table carries, which is what proved the old
             // per-context proxy was redundant.
             if (og.getParameter(37445) !== g.getParameter(37445)) {
               bad.push('OffscreenCanvas and HTMLCanvas disagree on UNMASKED_VENDOR_WEBGL');
             }
+            // REPINNED: 7936 is GL_VENDOR (0x1F00), not VERSION. This check
+            // asserted `/Chromium/` on it and so pinned the very bug it was
+            // meant to guard -- the spoof was overriding VENDOR with the
+            // version string, and every getParameter(gl.VENDOR) returned
+            // 'WebGL 1.0 (OpenGL ES 2.0 Chromium)', which no real browser
+            // returns there. Ground truth from an unspoofed Chrome: VENDOR is
+            // 'WebKit' on both webgl and webgl2.
             if (og.getParameter(7936) !== g.getParameter(7936)) {
-              bad.push('OffscreenCanvas and HTMLCanvas disagree on VERSION');
+              bad.push('OffscreenCanvas and HTMLCanvas disagree on GL_VENDOR');
             }
-            if (!/Chromium/.test(String(g.getParameter(7936)))) {
-              bad.push(`VERSION = ${JSON.stringify(g.getParameter(7936))}, expected the spoofed Chromium string`);
+            if (g.getParameter(7936) !== 'WebKit') {
+              bad.push(`GL_VENDOR = ${JSON.stringify(g.getParameter(7936))}, expected "WebKit" (what a real Chrome returns)`);
+            }
+            // VERSION (7938) is left native precisely because it differs per
+            // context -- 'WebGL 1.0 (OpenGL ES 2.0 Chromium)' here and
+            // 'WebGL 2.0 (OpenGL ES 3.0 Chromium)' from a webgl2 context -- so
+            // pinning one string would be a tell from the other.
+            if (!/WebGL 1\.0 \(OpenGL ES 2\.0 Chromium\)/.test(String(g.getParameter(7938)))) {
+              bad.push(`GL_VERSION = ${JSON.stringify(g.getParameter(7938))}, expected the native WebGL 1.0 Chromium string`);
             }
           }
         }
