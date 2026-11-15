@@ -637,6 +637,133 @@ const DETACHED = 'Attempted to use detached Frame';
         dline.includes('timeout(challenge_unanswered)'), dline);
     }
     {
+      // The stall exit: no /flow response means the remaining budget cannot buy
+      // anything, so stop waiting rather than burn it. Measured over 342 URLs,
+      // 32 timeouts sat at flow:0 for the full 25000ms and converted ZERO
+      // times -- 76% of all Cloudflare handling time. Both legs here matter:
+      // a watchdog that fires unconditionally would pass the first on its own.
+      const mkTrafPage = (urls) => ({
+        isClosed: () => false, url: async () => 'https://stall.test/a',
+        frames: () => [], cookies: async () => [],
+        mainFrame: () => ({ url: () => 'https://stall.test/a' }),
+        on: (ev, fn) => {
+          if (ev === 'response') {
+            urls.forEach((u, i) => setTimeout(() => fn({ url: () => u }), 10 + i * 10));
+          }
+        },
+        off: () => {},
+        evaluate: async () => ({ hasIndicators: true, title: 'Just a moment...', url: 'https://stall.test/a', bodySnippet: 'Verify you are human' }),
+        waitForSelector: async () => { await new Promise(r => setTimeout(r, 9000)); throw new Error('nope'); },
+        $: async () => null, click: async () => {}, reload: async () => {}
+      });
+      const ORCH = 'https://stall.test/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1';
+      const FLOW = 'https://stall.test/cdn-cgi/challenge-platform/h/b/flow/ov1/abc';
+
+      const runStall = async (urls) => {
+        const cfS = loadInternals();
+        cfS._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = 3000;
+        cfS._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = 3000;
+        // 0.0333 of the 3000ms test budget is ~100ms, the same exit the
+        // absolute constant used to give -- expressed the way the shipped code
+        // now computes it.
+        cfS._internals.TIMEOUTS.CHALLENGE_STALL_RATIO = 0.0333;
+        cfS._internals.TIMEOUTS.CHALLENGE_STALL_MIN_MS = 1;
+        cfS._internals.TIMEOUTS.CHALLENGE_STALL_POLL_MS = 25;
+        const warns = [];
+        const rw = console.warn;
+        console.warn = (...a) => warns.push(a.join(' '));
+        const t0 = Date.now();
+        try {
+          await cfS.handleCloudflareProtection(mkTrafPage(urls), 'https://stall.test/a', { cloudflare_bypass: true }, false);
+        } finally { console.warn = rw; }
+        return { ms: Date.now() - t0, warns };
+      };
+
+      const stalled = await runStall([ORCH]);
+      // 300ms sits between the 100ms stall exit and this stub's ~500ms natural
+      // completion, so the check fails if the exit does not fire. An earlier
+      // version compared against the 3000ms adaptive timeout, which the stub
+      // never reaches -- it passed at 501ms with no watchdog at all.
+      check('a challenge that never answers stops at the stall threshold',
+        stalled.ms < 300, `took ${stalled.ms}ms; stall was 100ms, natural completion ~500ms`);
+      check('...and says why, naming flow:0',
+        stalled.warns.some(w => /No challenge answer after \d+ms \(flow:0\)/.test(w)),
+        stalled.warns.join(' | ').slice(0, 160));
+
+      // The control, and the reason the threshold is 20000 in production: a
+      // challenge that DID answer must keep its full budget. Real solves were
+      // measured at 2782ms, 2915ms, 12426ms and 18878ms, one of them carrying
+      // flow:0 orch:2 widget:2 -- so a stall rule keyed on anything less than
+      // the absence of flow, or on a shorter clock, trades solves away.
+      // The phishing bypass never posts to /flow -- it clicks a continue link --
+      // so a stall clock that is not keyed to the CHALLENGE stage would cut
+      // every phish-only site short for a reason that does not apply to it.
+      // That regression existed and this is what pins the fix: the stage gate
+      // (timings.challengeStart) is the only thing keeping the exit out of
+      // this path.
+      const phishOnly = await (async () => {
+        const cfP2 = loadInternals();
+        cfP2._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = 3000;
+        cfP2._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = 3000;
+        // 0.0333 of the 3000ms test budget is ~100ms, the same exit the
+        // absolute constant used to give -- expressed the way the shipped code
+        // now computes it.
+        cfP2._internals.TIMEOUTS.CHALLENGE_STALL_RATIO = 0.0333;
+        cfP2._internals.TIMEOUTS.CHALLENGE_STALL_MIN_MS = 1;
+        cfP2._internals.TIMEOUTS.CHALLENGE_STALL_POLL_MS = 25;
+        const warns = [];
+        const rw = console.warn;
+        console.warn = (...a) => warns.push(a.join(' '));
+        const t0 = Date.now();
+        try {
+          await cfP2.handleCloudflareProtection(mkTrafPage([ORCH]), 'https://stall.test/a', { cloudflare_phish: true }, false);
+        } finally { console.warn = rw; }
+        return { ms: Date.now() - t0, warns };
+      })();
+      check('a phish-only site is not cut short by the stall exit',
+        !phishOnly.warns.some(w => /No challenge answer after/.test(w)),
+        phishOnly.warns.join(' | ').slice(0, 160));
+      check('...and it still gets past the stall threshold',
+        phishOnly.ms >= 900, `took ${phishOnly.ms}ms, stall threshold was 100ms`);
+
+      // The exit must SCALE with the budget. Reverting to an absolute constant
+      // passes every other check here, which is why this one exists: the first
+      // version WAS an absolute constant, so raising ADAPTIVE_TIMEOUT_* for a
+      // slow site would have left the exit where it was and made it more
+      // aggressive exactly when more patience had been asked for. Asserted on
+      // the warn text, which carries the computed threshold, rather than on
+      // wall-clock timing, which cannot distinguish 100ms from 400ms reliably
+      // on a loaded box.
+      const runScaled = async (adaptive) => {
+        const cfR = loadInternals();
+        cfR._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = adaptive;
+        cfR._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = adaptive;
+        cfR._internals.TIMEOUTS.CHALLENGE_STALL_RATIO = 0.1;
+        cfR._internals.TIMEOUTS.CHALLENGE_STALL_MIN_MS = 1;
+        cfR._internals.TIMEOUTS.CHALLENGE_STALL_POLL_MS = 25;
+        const warns = [];
+        const rw = console.warn;
+        console.warn = (...a) => warns.push(a.join(' '));
+        try {
+          await cfR.handleCloudflareProtection(mkTrafPage([ORCH]), 'https://stall.test/a', { cloudflare_bypass: true }, false);
+        } finally { console.warn = rw; }
+        const m = warns.join(' ').match(/No challenge answer after (\d+)ms/);
+        return m ? Number(m[1]) : null;
+      };
+      const smallBudget = await runScaled(1000);
+      const largeBudget = await runScaled(4000);
+      check('the stall exit scales with the budget the site was given',
+        smallBudget === 100 && largeBudget === 400,
+        `1000ms budget -> ${smallBudget}ms exit, 4000ms budget -> ${largeBudget}ms exit (ratio 0.1)`);
+
+      const answered = await runStall([ORCH, FLOW]);
+      check('a challenge that DID answer is not cut short',
+        answered.ms > 400, `took ${answered.ms}ms, expected its natural ~500ms completion`);
+      check('...and the stall exit stays silent for it',
+        !answered.warns.some(w => /No challenge answer after/.test(w)),
+        answered.warns.join(' | ').slice(0, 160));
+    }
+    {
       // A replay must not rewrite the cache entry it came from: that object is
       // shared by every URL on the domain for the TTL.
       const cfB = loadInternals();
