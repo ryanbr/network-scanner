@@ -75,7 +75,7 @@ function loadInternals() {
     'waitForJSChallengeCompletion, analyzeCloudflareChallenge, attemptChallengeSolve, ' +
     'runWithRetries, getRetryConfig, performCloudflareHandling, handlePhishingWarning, ' +
     'clickInShadowDOM, attemptChallengeSolveWithTimeout, quickCloudflareDetection, ' +
-    'readChallengeMarkers, watchChallengeTraffic, ' +
+    'readChallengeMarkers, watchChallengeTraffic, handleEmbeddedIframeChallenge, ' +
     'FAST_TIMEOUTS, TIMEOUTS, ' +
     'buildOutcomeString, CHALLENGE_HTTP_STATUSES };\n';
   const m = new Module(CF_PATH, null);
@@ -593,6 +593,50 @@ const DETACHED = 'Attempted to use detached Frame';
         typeof t.phish === 'number' && t.phish >= 0, `phish=${t.phish}`);
     }
     {
+      // The debug line is the one an operator reads, and it was the only one
+      // WITHOUT the traffic counts: forceDebug REPLACES the warn branch rather
+      // than adding to it, and it builds its own string, which never carried
+      // trafficTag. So `timeout(challenge_unanswered)` and
+      // `timeout(no_challenge_traffic)` printed under --debug with none of the
+      // evidence they are derived from. Measured on a live run: 29 outcome
+      // lines under --debug, zero of them carrying cf-traffic=.
+      const cfD = loadInternals();
+      cfD._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = 200;
+      cfD._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = 200;
+      // A page that really emits one challenge-platform orchestrate response
+      // and no flow -- the live shape -- so the label and the counts on the
+      // line are both produced by the module rather than handed to it.
+      const trafPage = {
+        isClosed: () => false, url: async () => 'https://traf.test/a',
+        frames: () => [], cookies: async () => [],
+        mainFrame: () => ({ url: () => 'https://traf.test/a' }),
+        on: (ev, fn) => {
+          if (ev === 'response') {
+            setTimeout(() => fn({
+              url: () => 'https://traf.test/cdn-cgi/challenge-platform/h/b/orchestrate/jsch/v1'
+            }), 5);
+          }
+        },
+        off: () => {},
+        evaluate: async () => ({ hasIndicators: true, title: 'Just a moment...', url: 'https://traf.test/a', bodySnippet: 'Verify you are human' }),
+        waitForSelector: async () => { await new Promise(r => setTimeout(r, 4000)); throw new Error('nope'); },
+        $: async () => null, click: async () => {}, reload: async () => {}
+      };
+      const dlogs = [];
+      const rLog = console.log, rWarn = console.warn;
+      console.log = (...a) => dlogs.push(a.join(' '));
+      console.warn = () => {};
+      try {
+        await cfD.handleCloudflareProtection(trafPage, 'https://traf.test/a', { cloudflare_bypass: true }, true);
+      } finally { console.log = rLog; console.warn = rWarn; }
+      const dline = dlogs.find(l => l.includes('Outcome for https://traf.test/a')) || '';
+      check('the debug outcome line carries the traffic counts',
+        /cf-traffic=flow:0 orch:1 widget:0/.test(dline),
+        dline || `no outcome line among ${dlogs.length} debug log(s)`);
+      check('...and real orchestrate traffic earns the unanswered label end to end',
+        dline.includes('timeout(challenge_unanswered)'), dline);
+    }
+    {
       // A replay must not rewrite the cache entry it came from: that object is
       // shared by every URL on the domain for the TTL.
       const cfB = loadInternals();
@@ -841,6 +885,44 @@ const DETACHED = 'Attempted to use detached Frame';
         return res.end('<html><body style="margin:0;padding:100px 0 0 70px">' +
           '<iframe src="/shadow-dupe-inner" width="400" height="260" style="border:0"></iframe>' +
           '</body></html>');
+      }
+      if (req.url.startsWith('/turnstile/if/widget')) {
+        // The widget's interior in a CLOSED shadow root, which is what
+        // pierce/ cannot cross -- so no selector can reach the checkbox and a
+        // coordinate click is the only way in. Any click anywhere in this
+        // document is recorded and reported to the parent, because what is
+        // being tested is DELIVERY into the frame, not pixel accuracy.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body style="margin:0">' +
+          '<div id="w" style="width:300px;height:65px"></div>' +
+          '<script>' +
+          'var r = document.getElementById("w").attachShadow({mode:"closed"});' +
+          'r.innerHTML = \'<input type="checkbox" id="cb" style="width:24px;height:24px;margin:20px">\';' +
+          'document.addEventListener("click", function(e){' +
+          '  window.__hit = {x:e.clientX, y:e.clientY, trusted:e.isTrusted};' +
+          '  parent.postMessage("cf-widget-ok", "*");' +
+          '});' +
+          '</script></body></html>');
+      }
+      if (req.url === '/closed-widget') {
+        // The iframe is CREATED and then NAVIGATED, never given a src
+        // attribute that names the widget host -- which is what Turnstile
+        // does, and why `iframe[src*="challenges.cloudflare.com"]` found
+        // nothing on 8 of 8 live runs while page.frames() held the frame.
+        // The token input is what the module's completion check reads, filled
+        // only when the click really reaches the widget.
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html><body style="margin:0;padding:120px 0 0 60px">' +
+          '<input type="hidden" name="cf-turnstile-response" value="">' +
+          '<script>' +
+          'window.addEventListener("message", function(e){' +
+          '  if (e.data === "cf-widget-ok") document.querySelector(\'input[name="cf-turnstile-response"]\').value = "tok";' +
+          '});' +
+          'var f = document.createElement("iframe");' +
+          'f.width = 300; f.height = 65; f.style.border = "0";' +
+          'document.body.appendChild(f);' +
+          'f.contentWindow.location.replace("/turnstile/if/widget");' +
+          '</script></body></html>');
       }
       if (req.url === '/shadow-none') {
         res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -1184,6 +1266,69 @@ const DETACHED = 'Attempted to use detached Frame';
       // latter is what page.mouse.click wants.
       check('...and the reported point is MAIN-FRAME, not frame-relative',
         dupeHit.x > 100 && dupeHit.y > 120, `(${dupeHit.x},${dupeHit.y})`);
+
+      // --- a CLOSED shadow root: the coordinate click is the only way in -
+      // The live shape, measured over 8 runs across 4 sites: page.frames()
+      // holds the widget frame every time, `iframe[src*=...]` matches NOTHING
+      // because Turnstile creates the iframe and navigates it rather than
+      // giving it a src that names the host, and no selector reaches the
+      // checkbox because the widget's interior is a CLOSED shadow root, which
+      // pierce/ cannot cross. Nothing was clicked, so nothing was posted to
+      // /flow and the whole adaptive budget burned -- 23 of 26 timeouts in one
+      // measured run. Each precondition is ASSERTED here rather than assumed,
+      // because each is a path that cannot reach this widget, and together
+      // they are the reason a coordinate click has to exist.
+      // An ISOLATED context, not browser.newPage(): the fixture at
+      // /clearance-page sets `cf_clearance=tok` on 127.0.0.1, this fixture is
+      // the same origin, and the browser is shared across every check in this
+      // file -- so a page opened normally here inherits that cookie. The
+      // module's completion check falls back to cf_clearance when no Turnstile
+      // token appears, so the solve assertion below passed on another test's
+      // leftover cookie whether or not anything was ever clicked: verified by
+      // mutation, which failed the two click checks and left the solve one
+      // green. Isolated storage is what gives it teeth.
+      const closedCtx = await browser.createBrowserContext();
+      const closedPage = await closedCtx.newPage();
+      try {
+        await closedPage.goto(`http://127.0.0.1:${PORT}/closed-widget`, { waitUntil: 'networkidle2' });
+
+        const bySrc = await closedPage.$('iframe[src*="challenges.cloudflare.com"]');
+        check('a navigated widget iframe is not findable by its src attribute',
+          bySrc === null, bySrc ? 'the selector matched' : '');
+        if (bySrc) await bySrc.dispose();
+
+        const wf = closedPage.frames().find(f => f.url().includes('/turnstile/if/'));
+        check('...while the frame itself IS in the frame tree', !!wf, String(wf && wf.url()));
+
+        const pierced = await I.clickInShadowDOM(wf, ['input[type="checkbox"]', '.ctp-checkbox', 'label'], false, 300);
+        check('...and pierce/ cannot cross the closed root to the checkbox',
+          pierced.clicked === false && pierced.found === false, JSON.stringify(pierced));
+
+        // Bounded so a regression fails fast instead of waiting out the real
+        // completion budget; restored, since the table is shared.
+        const savedTC = I.TIMEOUTS.TURNSTILE_COMPLETION;
+        I.TIMEOUTS.TURNSTILE_COMPLETION = 3000;
+        let emb;
+        try {
+          emb = await I.handleEmbeddedIframeChallenge(closedPage, false);
+        } finally {
+          I.TIMEOUTS.TURNSTILE_COMPLETION = savedTC;
+        }
+
+        const hit = await wf.evaluate(() => window.__hit || null);
+        check('the coordinate click is delivered INTO the widget frame',
+          !!hit, JSON.stringify(hit));
+        check('...arriving TRUSTED, as a challenge requires',
+          !!hit && hit.trusted === true, JSON.stringify(hit));
+        // The fixture only fills the token when a click really reaches the
+        // widget, so this is the end-to-end claim: click delivered, widget
+        // satisfied, solve reported.
+        check('...and a satisfied widget is reported as a solve',
+          !!emb && emb.success === true, JSON.stringify(emb));
+      } finally {
+        await closedPage.close();
+        await closedCtx.close();
+      }
 
       // The evaluateHandle fallback, reached only when waitForSelector never
       // settles. Stubbed, because pierce/ otherwise wins first.
