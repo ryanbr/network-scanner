@@ -496,8 +496,34 @@ const DETACHED = 'Attempted to use detached Frame';
         'timeout(no_challenge_traffic)');
       eq('a timeout with flow traffic is a plain timeout',
         B(T, null, { trafficSeen: { observed: true, flow: 3, orchestrate: 1, widgetPost: 0 } }), 'timeout');
-      eq('widget posts alone also count as traffic',
+      // Widget traffic alone does NOT earn the unanswered label, and this is
+      // the check that says so: the turnstile script loads on any page
+      // carrying a widget, where there is no interstitial and the token
+      // exchange never goes through /flow, so flow:0 is normal there even for
+      // a widget that answered. A first version of the label included
+      // widgetPost and this assertion was repinned to accommodate it, which
+      // had it backwards -- the pre-existing expectation was correct.
+      eq('widget posts alone do not prove a challenge was delivered',
         B(T, null, { trafficSeen: { observed: true, flow: 0, orchestrate: 0, widgetPost: 2 } }), 'timeout');
+      // The shape a live scan produced on three URLs at the full ceiling.
+      eq('a delivered challenge that never answered is reported apart',
+        B(T, null, { trafficSeen: { observed: true, flow: 0, orchestrate: 1, widgetPost: 1 } }),
+        'timeout(challenge_unanswered)');
+      eq('orchestrate alone is the same case',
+        B(T, null, { trafficSeen: { observed: true, flow: 0, orchestrate: 1, widgetPost: 0 } }),
+        'timeout(challenge_unanswered)');
+      // flow is the discriminator, not the presence of a setup request: one
+      // answer posted with no orchestrate response recorded is still a
+      // challenge that engaged, so it must NOT take the unanswered label.
+      // Without an input on this side, routing every non-zero count to the new
+      // label would pass.
+      eq('a flow request with nothing else stays a plain timeout',
+        B(T, null, { trafficSeen: { observed: true, flow: 2, orchestrate: 0, widgetPost: 0 } }), 'timeout');
+      // Counts from a watcher that never attached are not evidence of
+      // anything, whatever they say -- the same trap no_challenge_traffic
+      // guards against, one case over.
+      eq('unobserved counts do not earn the unanswered label',
+        B(T, null, { trafficSeen: { observed: false, flow: 0, orchestrate: 1, widgetPost: 1 } }), 'timeout');
       // A watcher that could not attach -- a page-like object with no event
       // emitter -- reports all zeros, and zeros must not be read as "saw
       // nothing". The baseline caught exactly this: a stub page's timeout came
@@ -514,6 +540,57 @@ const DETACHED = 'Attempted to use detached Frame';
         B(T, null, { trafficSeen: null }), 'timeout');
       eq('and an absent evidence argument stays a plain timeout',
         B(T, null, {}), 'timeout');
+    }
+    {
+      // The timeout line must say where the time went. Every stage duration is
+      // assigned after its await RETURNS, so on the one path where the
+      // breakdown is the thing you need -- the adaptive timeout, which stops
+      // waiting without cancelling -- all of them were still zero. Measured on
+      // a live scan: three URLs, `q=1ms` against duration=25002ms, the other
+      // 24999ms unattributed.
+      const cfT = loadInternals();
+      cfT._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_WITH_INDICATORS = 150;
+      cfT._internals.TIMEOUTS.ADAPTIVE_TIMEOUT_AUTO_WITH_INDICATORS = 150;
+      const stuckPage = {
+        isClosed: () => false, url: async () => 'https://stuck.test/a',
+        frames: () => [], cookies: async () => [],
+        evaluate: async () => ({ hasIndicators: true, title: 'Just a moment...', url: 'https://stuck.test/a', bodySnippet: 'Verify you are human' }),
+        waitForSelector: async () => { await new Promise(r => setTimeout(r, 5000)); throw new Error('nope'); },
+        $: async () => null, click: async () => {}, reload: async () => {}
+      };
+      const warns = [];
+      const realWarn = console.warn;
+      console.warn = (...a) => warns.push(a.join(' '));
+      try {
+        await cfT.handleCloudflareProtection(stuckPage, 'https://stuck.test/a', { cloudflare_bypass: true }, false);
+      } finally { console.warn = realWarn; }
+      const line = warns.find(l => l.includes('Outcome for https://stuck.test/a')) || '';
+      check('the stage the timeout gave up on is reported', /\bc=\d+ms\(unfinished\)/.test(line),
+        line || `no outcome line in ${warns.length} warn(s)`);
+      // The other direction, which a marker driven by anything but a real
+      // start would fail: phish is off on this config, so the stage never
+      // began and must stay absent rather than appearing as 0ms or unfinished.
+      // ` p=` rather than `p=` so the test cannot be satisfied by `http=`
+      // happening to contain the letter.
+      check('a stage that never started is still absent from the line',
+        !/ p=/.test(line), line);
+
+      // A stage that FINISHED clears its stamp, which is what makes a set
+      // stamp mean "in flight" -- and this case is the sub-millisecond one
+      // that made the distinction necessary. A cancelled signal returns from
+      // the retry ladder with no awaits at all, so the duration here is
+      // legitimately 0, and reading `done > 0` as "finished" reported a
+      // completed stage as unfinished. The phish gate does not test the
+      // signal, so the stage really does run.
+      const t = { quick: 0, phish: 0, challenge: 0, phishStart: 0, challengeStart: 0 };
+      await cfT._internals.performCloudflareHandling(
+        { isClosed: () => false, url: async () => 'https://done.test/', frames: () => [], cookies: async () => [] },
+        'https://done.test/', {}, false,
+        { cfBypassEnabled: false, cfPhishEnabled: true }, t, { cancelled: true });
+      check('a stage that finished clears its in-flight stamp', t.phishStart === 0,
+        `phishStart=${t.phishStart} phish=${t.phish}`);
+      check('...while still recording a duration, even a 0ms one',
+        typeof t.phish === 'number' && t.phish >= 0, `phish=${t.phish}`);
     }
     {
       // A replay must not rewrite the cache entry it came from: that object is
