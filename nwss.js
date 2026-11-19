@@ -5141,6 +5141,20 @@ function setupFrameHandling(page, forceDebug) {
         const gotoOptions = siteConfig.goto_options 
           ? { ...defaultGotoOptions, ...siteConfig.goto_options } : defaultGotoOptions;
 
+        // Surface the clamp -- the goto timeout is capped at DEFAULT_PAGE, so a
+        // site asking for `timeout: 120000` navigates with 35000 and the
+        // resulting "Navigation timeout of 35000 ms exceeded" reads as a bug in
+        // the scanner rather than a ceiling (28 of 31 configs here set a
+        // timeout above it). Mirrors the delay clamp log; unlike `delay` there
+        // is no opt-out key for regular sites, so this names the ceiling rather
+        // than how to lift it.
+        if (forceDebug && gotoOptions.timeout < timeout) {
+          const via = (siteConfig.goto_options && siteConfig.goto_options.timeout !== undefined)
+            ? 'goto_options.timeout'
+            : 'fixed TIMEOUTS.DEFAULT_PAGE ceiling';
+          console.log(formatLogMessage('debug', `navigation timeout ${timeout}ms clamped to ${gotoOptions.timeout}ms (${via}) for ${currentUrl}`));
+        }
+
         // Enhanced navigation with redirect handling - passes existing gotoOptions
         let navigationResult;
         try {
