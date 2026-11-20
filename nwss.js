@@ -5550,7 +5550,7 @@ function setupFrameHandling(page, forceDebug) {
             if (proxyErr) {
               const info = getProxyInfo(siteConfig);
               console.error(formatLogMessage('error', `${PROXY_TAG} ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
-              console.error(formatLogMessage('error', `${PROXY_TAG} Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
+              console.error(formatLogMessage('error', `${PROXY_TAG} Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy? Is the scan exceeding its concurrent-tunnel limit (see the SOCKS5 summary at the end of the run, and proxy_max_tunnels)?`));
             }
           }
           console.error(formatLogMessage('error', `Failed on ${currentUrl}: ${err.message}`));
@@ -6173,7 +6173,7 @@ function setupFrameHandling(page, forceDebug) {
         if (proxyErr) {
           const info = getProxyInfo(siteConfig);
           console.error(formatLogMessage('error', `${PROXY_TAG} ${proxyErr} — proxy: ${info} — URL: ${currentUrl}`));
-          console.error(formatLogMessage('error', `${PROXY_TAG} Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy?`));
+          console.error(formatLogMessage('error', `${PROXY_TAG} Check: is the proxy running? Are credentials correct? Is the target reachable from the proxy? Is the scan exceeding its concurrent-tunnel limit (see the SOCKS5 summary at the end of the run, and proxy_max_tunnels)?`));
         }
       }
 
@@ -7824,17 +7824,31 @@ function setupFrameHandling(page, forceDebug) {
   // and closeAllSocksRelays already logs sockets it had to drain under --debug.
   try {
     const relayStats = getSocksRelayStats();
+    // Two causes, reported apart because they point at opposite ends of the
+    // connection and want opposite fixes. A dial failure means the upstream
+    // refused or dropped us; a queue timeout means our own proxy_max_tunnels
+    // cap was the binding constraint and the upstream was never asked. Pooled,
+    // a run whose failures were 107-to-1 local still advised checking the
+    // provider's quota and credentials, i.e. the wrong end of the connection.
     const failedRelays = relayStats.filter(r => r.errors > 0);
+    const queuedRelays = relayStats.filter(r => r.queueTimeouts > 0);
     const relayErrors = failedRelays.reduce((n, r) => n + r.errors, 0);
+    const relayQueued = queuedRelays.reduce((n, r) => n + r.queueTimeouts, 0);
     if (relayErrors > 0) {
-      console.warn(formatLogMessage('warn', `${relayErrors} SOCKS5 upstream tunnel open(s) failed across ${failedRelays.length} of ${relayStats.length} relay(s) — those requests never reached the proxy`));
+      console.warn(formatLogMessage('warn', `${relayErrors} SOCKS5 upstream tunnel open(s) failed across ${failedRelays.length} of ${relayStats.length} relay(s) — the upstream refused or dropped them`));
       for (const r of failedRelays) {
         console.warn(messageColors.warn('  Relay:') + ` ${r.key} via 127.0.0.1:${r.port} — ${r.errors} failed`);
       }
-      // Legend, same shape as the dig-failure one: the two causes need
-      // different fixes and the count alone doesn't separate them.
       console.warn(messageColors.warn('  ') + `check the upstream's concurrent-tunnel quota and its credentials; --debug names each failure's destination`);
-    } else if (forceDebug && relayStats.length > 0) {
+    }
+    if (relayQueued > 0) {
+      console.warn(formatLogMessage('warn', `${relayQueued} SOCKS5 tunnel open(s) gave up waiting for a proxy_max_tunnels slot across ${queuedRelays.length} of ${relayStats.length} relay(s) — the local cap, not the upstream`));
+      for (const r of queuedRelays) {
+        console.warn(messageColors.warn('  Relay:') + ` ${r.key} via 127.0.0.1:${r.port} — ${r.queueTimeouts} timed out at a cap of ${r.maxTunnels || '?'}`);
+      }
+      console.warn(messageColors.warn('  ') + `raise proxy_max_tunnels toward what the provider actually grants, or lower this site's concurrency or delay so slots free sooner`);
+    }
+    if (relayErrors === 0 && relayQueued === 0 && forceDebug && relayStats.length > 0) {
       console.log(formatLogMessage('debug', `${relayStats.length} SOCKS5 auth relay(s), 0 failed upstream tunnel opens`));
     }
   } catch (relayStatsErr) {

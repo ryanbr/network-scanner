@@ -306,6 +306,16 @@ const check = (name, ok, detail) => {
       check('a failed upstream tunnel open is counted, which is what the summary reports',
         !!stat && stat.errors >= 1,
         stat ? `${stat.errors} error(s) on 127.0.0.1:${stat.port}` : 'relay not in stats');
+      // The two counters must not pool: a dial failure is the upstream's doing,
+      // a queue timeout is our own cap, and the summary gives opposite advice
+      // for each. Pooled, a run that was 107-to-1 local advised checking the
+      // provider's quota. Only the dial direction is checked here -- forcing a
+      // queue timeout means waiting out TUNNEL_QUEUE_TIMEOUT_MS, which is not
+      // worth 20s of suite time; that direction was measured live instead (78
+      // queue timeouts, 1 dial failure, reported as separate lines).
+      check('a dial failure is not counted as a queue timeout',
+        !!stat && stat.queueTimeouts === 0,
+        stat ? `errors ${stat.errors}, queueTimeouts ${stat.queueTimeouts}` : 'relay not in stats');
     } finally {
       upstream.srv.close();
       await closeAllRelays(false);
