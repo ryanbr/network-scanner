@@ -353,6 +353,83 @@ const check = (name, ok, detail) => {
       getProxyIdentity({ proxy: 'ftp://nope:0' }) === 'invalid', 'invalid');
   }
 
+  // The concurrent-tunnel gate (`proxy_max_tunnels`). Providers cap concurrent
+  // tunnels per account and shed rather than refuse past the cap -- measured
+  // against a live one: 150 simultaneous opens gave 100 granted, 40 closed
+  // mid-handshake, 10 replies with an out-of-RFC REP byte, and a shed main
+  // document loses the whole page. Driven through a stub upstream that speaks
+  // just enough SOCKS5 to grant, holds the socket open, and records the high
+  // water mark of simultaneous connections -- the number the gate exists to
+  // bound. The unlimited case is checked too, since a gate that capped by
+  // accident when nobody asked would be the worse bug.
+  {
+    await closeAllRelays(false);
+
+    const stubUpstream = () => {
+      const state = { live: 0, peak: 0, served: 0 };
+      const srv = net.createServer((c) => {
+        state.live++; state.served++;
+        state.peak = Math.max(state.peak, state.live);
+        c.on('close', () => { state.live--; });
+        c.on('error', () => {});
+        let step = 0;
+        c.on('data', () => {
+          // greeting -> "no auth"; request -> granted, then hold the socket.
+          if (step++ === 0) c.write(Buffer.from([0x05, 0x00]));
+          else c.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+        });
+      });
+      return new Promise((res) => srv.listen(0, '127.0.0.1', () => res({ srv, state, port: srv.address().port })));
+    };
+
+    // One local client: SOCKS5 greeting + CONNECT through the relay, held open.
+    const openTunnel = (relayPort) => new Promise((res) => {
+      const c = net.connect(relayPort, '127.0.0.1', () => c.write(Buffer.from([0x05, 0x01, 0x00])));
+      let step = 0;
+      c.on('error', () => res(c));
+      c.on('data', () => {
+        if (step++ === 0) {
+          const h = Buffer.from('held.invalid');
+          c.write(Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x03, h.length]), h, Buffer.from([0x01, 0xBB])]));
+        } else { res(c); }
+      });
+      setTimeout(() => res(c), 5000).unref();
+    });
+
+    const drive = async (maxTunnels, clients) => {
+      const up = await stubUpstream();
+      const upstream = parseProxyUrl(`socks5://u:gate${maxTunnels}@127.0.0.1:${up.port}`);
+      const relayPort = await ensureRelay(upstream, false, maxTunnels);
+      const socks = await Promise.all(Array.from({ length: clients }, () => openTunnel(relayPort)));
+      // Let any queued opens that COULD proceed do so before reading the peak.
+      await new Promise((r) => setTimeout(r, 300));
+      const peak = up.state.peak;
+      const served = up.state.served;
+      // Release ONLY the clients that hold slots. Destroying all of them would
+      // also kill the queued ones, whose handlers then correctly abort instead
+      // of dialling -- which looks like the queue failing to drain.
+      const holders = maxTunnels > 0 ? socks.slice(0, maxTunnels) : socks;
+      for (const c of holders) { try { c.destroy(); } catch (_) {} }
+      await new Promise((r) => setTimeout(r, 500));
+      const afterRelease = up.state.served;
+      for (const c of socks) { try { c.destroy(); } catch (_) {} }
+      await closeAllRelays(false);
+      up.srv.close();
+      return { peak, served, afterRelease };
+    };
+
+    const gated = await drive(2, 5);
+    check('the gate holds concurrent upstream tunnels at the cap',
+      gated.peak === 2, `peak ${gated.peak} simultaneous at a cap of 2 (5 clients)`);
+    check('queued opens are not dropped -- they proceed as slots free',
+      gated.afterRelease > gated.served,
+      `${gated.served} tunnels opened while held, ${gated.afterRelease} after release`);
+
+    const ungated = await drive(0, 5);
+    check('without proxy_max_tunnels nothing is capped (default unchanged)',
+      ungated.peak === 5, `peak ${ungated.peak} simultaneous of 5 clients`);
+  }
+
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness error:', e); process.exit(2); });
