@@ -749,6 +749,119 @@ check('unit', 'storage: a key re-claimed mid-teardown is not counted as a leak',
   return 'warned about 1 of 2; the re-claimed key excluded';
 });
 
+check('unit', 'storage: a key cleared on one origin is still reported leaking on another', async () => {
+  // The seed hook writes on whatever document matched the SITE, so one key can
+  // exist on several of a site's origins at once -- two concurrent URLs landing
+  // on www. and m., which is the case the refcount exists for. Teardown tracked
+  // cleared KEYS rather than (origin, key) pairs, so clearing a key on one
+  // origin marked it cleared everywhere: the leak warning could not fire (it was
+  // reachable only when nothing at all was cleared) and the in-page fallback was
+  // skipped for the same reason, while the copies on every other origin survived
+  // to be inherited by the next URL on that host -- the exact failure this module
+  // exists to prevent, reported as a success.
+  //
+  // Each URL needs its OWN page here, on its own origin. One shared stub would
+  // only ever observe one origin, and an origin a URL was merely aimed at is
+  // deliberately not owed a key (see _landedOrigins) -- so the leak would be
+  // invisible for the right reason and the check would prove nothing.
+  const ORIGIN_A = 'https://www.domain.com';   // a live page remains here
+  const ORIGIN_B = 'https://m.domain.com';     // its page is gone by the end
+  const items = [{ name: 'k1', value: 'v' }, { name: 'k2', value: 'v' }];
+
+  let evaluated = 0;
+  const session = { send: async () => {}, detach: async () => {} };
+  let closedB = false;
+  const pageB = {
+    isClosed: () => closedB,
+    url: () => `${ORIGIN_B}/gate`,
+    target: () => ({ createCDPSession: async () => session }),
+    browser: () => ({ pages: async () => [pageA, pageB] }),
+    evaluate: async () => { evaluated++; return []; }
+  };
+  const pageA = {
+    isClosed: () => false,
+    url: () => `${ORIGIN_A}/gate`,
+    target: () => ({ createCDPSession: async () => session }),
+    browser: () => ({ pages: async () => [pageA, pageB] }),
+    // The fallback must still be ATTEMPTED even though CDP cleared both keys on
+    // origin A: a successful removal somewhere used to suppress it outright.
+    evaluate: async () => { evaluated++; return []; }
+  };
+
+  // Two URLs of the same site, landing on different subdomains.
+  retainSeededStorage('domain.com', items, ORIGIN_A);
+  retainSeededStorage('domain.com', items, ORIGIN_B);
+
+  // The URL on m. finishes first: it only drops a reference, but its origin is
+  // now observed, so the last finisher knows a copy may be sitting there.
+  const first = await captureLogs(() => removeStorage(pageB, items, { site: 'domain.com', host: 'm.domain.com', origin: ORIGIN_B }, false));
+  assertEqual(first.value.removed, 0, 'the first finisher clears nothing while a sibling still holds the keys');
+  closedB = true;   // its page is gone by the time the last URL tears down
+
+  const { output, value } = await captureLogs(() => removeStorage(pageA, items, { site: 'domain.com', host: 'www.domain.com', origin: ORIGIN_A }, false));
+  assertEqual(value.removed, 2, 'both keys are released on the origin that still has a page');
+  assertEqual(evaluated, 1, 'the in-page fallback is attempted for the stranded origin');
+  assertIncludes(output, 'Could not clear 2 seeded localStorage key(s)', 'the copies on the unreachable origin are reported');
+  assertIncludes(output, ORIGIN_B, 'the warning names the origin they were stranded on');
+  assertExcludes(output, ORIGIN_A, 'the origin that was cleared is not named as leaking');
+  return 'cleared on www., reported leaking on m.';
+});
+
+check('unit', 'storage: with no origin ever recorded the leak is still reported', async () => {
+  // Defensive path, and a regression the pair rewrite nearly introduced. The
+  // pair accounting derives everything it owes from the RECORDED origins, so a
+  // site with none owed nothing and the warning disappeared -- where the
+  // name-keyed version still warned. A silent no-op is the worst outcome of the
+  // three, since the keys stay in the profile either way and only the reporting
+  // goes away.
+  //
+  // Reaching it needs a page that is CLOSED (so the in-page fallback is skipped)
+  // and a scope carrying no origin. An open page is no use here: removeStorage
+  // records the final URL's origin when that URL ended on the site, which fills
+  // `origins` in, and an open page that did NOT end on the site takes the quiet
+  // "most likely never written" branch instead -- correctly, in both versions.
+  const items = [{ name: 'k1', value: 'v' }, { name: 'k2', value: 'v' }];
+  const page = {
+    isClosed: () => true,
+    url: () => { throw new Error('page is closed'); },
+    browser: () => ({ pages: async () => [] })
+  };
+
+  // No origin argument, so nothing is ever recorded for the site.
+  retainSeededStorage('nowhere.test', items);
+  const { output } = await captureLogs(() => removeStorage(page, items, { site: 'nowhere.test', host: 'www.nowhere.test' }, false));
+  assertIncludes(output, 'Could not clear 2 seeded localStorage key(s)', 'the keys are still reported as possibly inherited');
+  assertIncludes(output, 'any known origin', 'the unnamed origin renders as "any known origin", not an empty string');
+  return 'warned with no recorded origin';
+});
+
+check('unit', 'storage: an aimed-at origin the scan never landed on is not reported as leaking', async () => {
+  // The routine shape the module header names: the config aims at the apex, the
+  // site 302s to www, and the seed hook -- which writes only on the document
+  // that matched -- therefore never wrote anything on the apex. Owing a key on
+  // every origin in _seedOrigins made teardown warn about inheriting entries
+  // that had never been written, on what is probably most redirecting sites.
+  // Measured before the landed/aimed-at split: "Could not clear 2 seeded
+  // localStorage key(s) for example.test on https://example.test", with both
+  // keys in fact released on www.
+  const APEX = 'https://example.test';
+  const WWW = 'https://www.example.test';
+  const items = [{ name: 'k1', value: 'v' }, { name: 'k2', value: 'v' }];
+  const page = {
+    isClosed: () => false,
+    url: () => `${WWW}/landed`,
+    target: () => ({ createCDPSession: async () => ({ send: async () => {}, detach: async () => {} }) }),
+    browser: () => ({ pages: async () => [] }),
+    evaluate: async () => []
+  };
+
+  retainSeededStorage('example.test', items, APEX);   // aimed at the apex
+  const { output, value } = await captureLogs(() => removeStorage(page, items, { site: 'example.test', host: 'example.test', origin: APEX }, false));
+  assertEqual(value.removed, 2, 'both keys are released on the origin the page actually landed on');
+  assertExcludes(output, 'Could not clear', 'the apex it never landed on is not reported as a leak');
+  return 'no leak claimed for the aimed-at apex';
+});
+
 check('unit', 'css blocking: the selector gate', async () => {
   // One gate for both call sites (pre-navigation and runtime), so they cannot
   // disagree about what counts as configured.
