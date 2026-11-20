@@ -25,7 +25,7 @@
 const fs = require('fs');
 const net = require('net');
 const path = require('path');
-const { parseProxyUrl, prepareSocksRelays } = require('../lib/proxy');
+const { parseProxyUrl, prepareSocksRelays, testProxy, getProxyInfo, getProxyIdentity } = require('../lib/proxy');
 const { ensureRelay, getRelayPort, getRelayStats, closeAllRelays, upstreamKey } = require('../lib/socks-relay');
 
 let failures = 0;
@@ -232,6 +232,125 @@ const check = (name, ok, detail) => {
       console.warn = realWarn;
       await closeAllRelays(false);
     }
+  }
+
+  // An authenticated socks5 upstream is only usable THROUGH its relay -- Chromium
+  // cannot do RFC 1929 itself -- so a missing relay is a broken configuration no
+  // matter how healthy the upstream is. testProxy() is the scan's pre-flight, and
+  // it only TCP-connected to the upstream: with no relay it answered `reachable`,
+  // nwss launched Chromium against the bare upstream with the credentials
+  // stripped, and the batch failed one URL at a time with no line saying why.
+  // Measured before the fix on a dead relay: `Proxy reachable (1ms)` followed by
+  // `ERR_CONNECTION_RESET`. A live local listener stands in for the upstream so
+  // `reachable` stays the honest answer in every case that does not need a relay
+  // -- without those, a guard that simply failed all socks5 would pass too.
+  {
+    await closeAllRelays(false);
+    const upstream = await new Promise(res => {
+      const srv = net.createServer(c => c.destroy());   // open port, not a socks server
+      srv.listen(0, '127.0.0.1', () => res({ srv, port: srv.address().port }));
+    });
+    try {
+      const authCfg = { proxy: `socks5://u:p@127.0.0.1:${upstream.port}` };
+
+      const noRelay = await testProxy(authCfg, 2000);
+      check('an authenticated socks5 proxy with no relay is reported unreachable',
+        noRelay.reachable === false, JSON.stringify(noRelay.error));
+      // The reason has to point at the relay. Reporting it as a dead proxy would
+      // send the reader to check the upstream, which is fine, and leave the real
+      // cause -- relay startup failed, e.g. fd exhaustion -- undiagnosed.
+      check('the reason names the missing relay rather than a dead upstream',
+        /relay/i.test(noRelay.error || '') && !/ECONNREFUSED|timeout/i.test(noRelay.error || ''),
+        noRelay.error);
+
+      const anon = await testProxy({ proxy: `socks5://127.0.0.1:${upstream.port}` }, 2000);
+      check('an anonymous socks5 proxy is still only TCP-tested',
+        anon.reachable === true, `reachable in ${anon.latencyMs}ms`);
+      const httpAuth = await testProxy({ proxy: `http://u:p@127.0.0.1:${upstream.port}` }, 2000);
+      check('an authenticated http proxy is untouched by the guard (page.authenticate handles it)',
+        httpAuth.reachable === true, `reachable in ${httpAuth.latencyMs}ms`);
+
+      await prepareSocksRelays([authCfg], false);
+      const withRelay = await testProxy(authCfg, 2000);
+      check('with the relay up, the pre-flight tests the real upstream again',
+        withRelay.reachable === true, `reachable in ${withRelay.latencyMs}ms`);
+
+      // The guard runs before the TCP connect, so it must not swallow the
+      // diagnosis when the upstream itself is the problem.
+      const deadCfg = { proxy: 'socks5://u:p@127.0.0.1:1' };
+      await prepareSocksRelays([deadCfg], false);
+      const dead = await testProxy(deadCfg, 2000);
+      check('a relayed upstream that is genuinely down still reports its own error',
+        dead.reachable === false && /ECONNREFUSED|timeout/i.test(dead.error || ''), dead.error);
+
+      // The per-relay error counter is the only input to the end-of-run SOCKS5
+      // summary in nwss.js, which replaced getRelayStats having no production
+      // caller at all. It is written on each failed upstream tunnel open and read
+      // nowhere else, so if it stopped counting the summary would go quiet with
+      // nothing failing. Driven with a real SOCKS5 handshake into the relay whose
+      // upstream accepts and immediately closes.
+      const relayPort = getRelayPort(parseProxyUrl(authCfg.proxy));
+      await new Promise(res => {
+        const c = net.connect(relayPort, '127.0.0.1', () => c.write(Buffer.from([0x05, 0x01, 0x00])));
+        let step = 0;
+        c.on('data', () => {
+          if (step++ === 0) {
+            const host = Buffer.from('example.invalid');
+            c.write(Buffer.concat([Buffer.from([0x05, 0x01, 0x00, 0x03, host.length]), host, Buffer.from([0x01, 0xBB])]));
+          } else { c.destroy(); res(); }
+        });
+        c.on('error', () => res());
+        setTimeout(res, 5000).unref();
+      });
+      const stat = getRelayStats().find(r => r.port === relayPort);
+      check('a failed upstream tunnel open is counted, which is what the summary reports',
+        !!stat && stat.errors >= 1,
+        stat ? `${stat.errors} error(s) on 127.0.0.1:${stat.port}` : 'relay not in stats');
+    } finally {
+      upstream.srv.close();
+      await closeAllRelays(false);
+    }
+  }
+
+  // Which browser a task runs on is decided one layer above the relays, by
+  // grouping tasks on a proxy key -- and that key was getProxyInfo(), a DISPLAY
+  // string that renders credentials as a literal '[redacted]@'. Two sites
+  // differing only in password therefore shared a key, shared a batch, and the
+  // second's traffic went through the first's relay under the first's
+  // credentials: the exact defect the relay keying above prevents, reintroduced
+  // where the relay could not see it. Measured before the fix with an upstream
+  // that accepts only one of the two passwords: one relay port, zero rejected
+  // authentications, both urls loaded. After: two relay ports and the wrong
+  // password is actually presented and rejected.
+  {
+    const cfgA = { proxy: 'socks5://user1:passAAA@10.0.0.9:1080' };
+    const cfgB = { proxy: 'socks5://user1:passBBB@10.0.0.9:1080' };
+    const idA = getProxyIdentity(cfgA);
+    const idB = getProxyIdentity(cfgB);
+
+    check('the grouping identity separates two upstreams differing only by password',
+      idA !== idB, `${idA} vs ${idB}`);
+    // The whole point: the display form CANNOT separate them, which is why
+    // grouping must not use it. If this ever stops holding, the check above
+    // would pass for the wrong reason.
+    check('the display form still collapses them (why a separate identity exists)',
+      getProxyInfo(cfgA) === getProxyInfo(cfgB), getProxyInfo(cfgA));
+    check('identical proxy config gives an identical identity',
+      getProxyIdentity({ proxy: 'socks5://user1:passAAA@10.0.0.9:1080' }) === idA, idA);
+    check('the identity holds no cleartext password',
+      !idA.includes('passAAA') && !idB.includes('passBBB'), `${idA}`);
+    // The protocol is part of the launch arg, so it has to be part of the
+    // identity -- socks4 and socks5 to one host:port are different browsers.
+    check('protocol is part of the identity',
+      getProxyIdentity({ proxy: 'socks4://user1:passAAA@10.0.0.9:1080' }) !== idA,
+      getProxyIdentity({ proxy: 'socks4://user1:passAAA@10.0.0.9:1080' }));
+    check('a site with no proxy gets the empty (direct) identity',
+      getProxyIdentity({}) === '' && getProxyIdentity({ proxy: '' }) === '', 'both empty');
+    // Unparseable proxies all group together, but NOT with the direct sites:
+    // getProxyArgs returns [] for them, so they share a browser configuration,
+    // while staying distinct so the invalid-URL warn still fires per batch.
+    check('an unparseable proxy groups separately from direct',
+      getProxyIdentity({ proxy: 'ftp://nope:0' }) === 'invalid', 'invalid');
   }
 
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);

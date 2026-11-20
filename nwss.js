@@ -104,7 +104,7 @@ const { createGhostCursor, ghostMove, ghostClick, ghostRandomMove, resolveGhostC
 // Domain detection cache for performance optimization
 const { createSmartCache } = require('./lib/smart-cache'); // Smart cache system
 const { clearPersistentCache } = require('./lib/smart-cache');
-const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, testProxy, prepareSocksRelays, closeAllSocksRelays } = require('./lib/proxy');
+const { needsProxy, getProxyArgs, applyProxyAuth, getProxyInfo, getProxyIdentity, testProxy, prepareSocksRelays, closeAllSocksRelays, getSocksRelayStats } = require('./lib/proxy');
 // Dry run functionality
 const { initializeDryRunCollections, addDryRunMatch, processDryRunResults, writeDryRunOutput } = require('./lib/dry-run');
 // Enhanced site data clearing functionality
@@ -6399,14 +6399,64 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
 
-  // Helper to get a stable proxy key for grouping browser instances
+  // Stable key for grouping tasks onto one browser instance. This used to be
+  // getProxyInfo(), which is a DISPLAY string rendering credentials as a
+  // literal '[redacted]@' -- so two sites differing only in PASSWORD shared a
+  // key, shared a batch, and the second's traffic went through the first's
+  // relay under the first's credentials. socks-relay keys its relays on the
+  // full credential set precisely to stop that; grouping here on a redacted
+  // string undid it one layer up. getProxyIdentity carries the password as a
+  // hash. It is never printed (it holds the username verbatim) -- the display
+  // form stays getProxyInfo(), tracked separately in currentProxyLabel.
+  //
+  // Memoised per task config. Each task owns its own config object (built at
+  // flatten time), so this is one parse+hash per task rather than one per
+  // comparison in the sort and the boundary scan below.
+  const proxyKeyCache = new Map();
   const proxyKeyFor = (siteConfig) => {
-    if (!needsProxy(siteConfig)) return '';
-    return getProxyInfo(siteConfig);
+    let key = proxyKeyCache.get(siteConfig);
+    if (key === undefined) {
+      key = getProxyIdentity(siteConfig);
+      proxyKeyCache.set(siteConfig, key);
+    }
+    return key;
   };
 
   // Sort tasks so proxy groups are contiguous — direct connections first, then each proxy
   allTasks.sort((a, b) => proxyKeyFor(a.config).localeCompare(proxyKeyFor(b.config)));
+
+  // Batch boundaries: at most RESOURCE_CLEANUP_INTERVAL urls, and NEVER
+  // spanning two proxy identities. A batch used to be a fixed-size slice while
+  // only its FIRST task decided the browser's --proxy-server, which is
+  // browser-wide -- so any proxy group whose size was not a multiple of the
+  // interval put its tail in the same batch as the next group's head, and
+  // those urls were scanned through the wrong proxy. Direct sorts first (''),
+  // so the common shape was proxied urls fetched with no proxy at all, which
+  // leaks the host IP that configuring one exists to hide, while the scan
+  // still reported them Loaded. Measured on config-admiral-m.json (49 urls, so
+  // one batch at the default interval of 80): the relay started, no
+  // --proxy-server reached the launch args, and the 14 urls of the two proxied
+  // sites were fetched direct. Also measured synthetically, one direct site and
+  // one proxied: at --cleanup-interval 2 the upstream logged 0 authentications,
+  // at 1 it logged 7.
+  //
+  // Boundaries are precomputed rather than cut inside the loop so the batch
+  // count is known up front -- the progress and hang-check lines report
+  // N/total, and deriving that from a fixed stride would now be wrong.
+  const batchBounds = [];
+  for (let i = 0; i < totalUrls; ) {
+    const key = proxyKeyFor(allTasks[i].config);
+    let end = Math.min(i + RESOURCE_CLEANUP_INTERVAL, totalUrls);
+    for (let j = i + 1; j < end; j++) {
+      if (proxyKeyFor(allTasks[j].config) !== key) { end = j; break; }
+    }
+    batchBounds.push([i, end]);
+    i = end;
+  }
+  const strideBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
+  if (forceDebug && batchBounds.length > strideBatches) {
+    console.log(formatLogMessage('debug', `${batchBounds.length} batches instead of ${strideBatches}: ${batchBounds.length - strideBatches} extra browser restart(s) so each batch carries a single proxy`));
+  }
 
   // Pre-start local no-auth SOCKS5 relays for any authenticated socks5://
   // upstreams. Done once here (the only async step) so getProxyArgs stays a
@@ -6441,7 +6491,7 @@ function setupFrameHandling(page, forceDebug) {
  const DOMAIN_TIMEOUT_THRESHOLD = 3;
 
  // Enhanced hang detection with browser restart recovery
- let currentBatchInfo = { batchStart: 0, batchSize: 0 };
+ let currentBatchInfo = { batchStart: 0, batchSize: 0, batchIndex: 0, totalBatches: batchBounds.length };
  let lastProcessedCount = 0;
  let hangCheckCount = 0;
  let forceRestartFlag = false; // Flag to trigger restart on next iteration
@@ -6534,8 +6584,10 @@ function setupFrameHandling(page, forceDebug) {
 
    // Debug-only diagnostic snapshot
    if (forceDebug) {
-     const currentBatch = Math.floor(currentBatchInfo.batchStart / RESOURCE_CLEANUP_INTERVAL) + 1;
-     const totalBatches = Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL);
+     // Real batch numbers, not batchStart/interval: batches are cut at proxy
+     // boundaries so they are no longer a fixed stride apart.
+     const currentBatch = currentBatchInfo.batchIndex + 1;
+     const totalBatches = currentBatchInfo.totalBatches || 1;
      console.log(formatLogMessage('debug', `${HANG_CHECK_TAG} Processed: ${processedUrlCount}/${totalUrls} URLs, Batch: ${currentBatch}/${totalBatches}, Current batch size: ${currentBatchInfo.batchSize}`));
      console.log(formatLogMessage('debug', `${HANG_CHECK_TAG} URLs since cleanup: ${urlsSinceLastCleanup}, Recent failures: ${results.slice(-3).filter(r => !r.success).length}/3`));
    }
@@ -6564,14 +6616,17 @@ function setupFrameHandling(page, forceDebug) {
  // Process URLs in batches with exception handling
  let siteGroupIndex = 0;
  let currentProxyKey = '';  // Track active proxy config — '' means direct connection
+ // Redacted display form of currentProxyKey, kept separately because the key
+ // itself holds the proxy username in cleartext and this one gets logged.
+ let currentProxyLabel = 'direct';
  // Map of site-config object -> index in sites[], built once. Per-batch
  // grouping below uses this for O(1) lookup instead of sites.indexOf which
  // walked the array per task (batch=80 * sites=20 was ~1600 cmps per batch).
  const configToIndex = new Map();
  for (let i = 0; i < sites.length; i++) configToIndex.set(sites[i], i);
  try {
-   for (let batchStart = 0; batchStart < totalUrls; batchStart += RESOURCE_CLEANUP_INTERVAL) {
-    const batchEnd = Math.min(batchStart + RESOURCE_CLEANUP_INTERVAL, totalUrls);
+   for (let batchIndex = 0; batchIndex < batchBounds.length; batchIndex++) {
+    const [batchStart, batchEnd] = batchBounds[batchIndex];
     const currentBatch = allTasks.slice(batchStart, batchEnd);
 
 
@@ -6617,8 +6672,8 @@ function setupFrameHandling(page, forceDebug) {
        // monitorBrowserHealth's eventual rejection doesn't surface as an
        // unhandledRejection warning.
        const healthPromise = monitorBrowserHealth(browser, {}, {
-         siteIndex: Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL),
-         totalSites: Math.ceil(totalUrls / RESOURCE_CLEANUP_INTERVAL),
+         siteIndex: batchIndex,
+         totalSites: batchBounds.length,
          urlsSinceCleanup: urlsSinceLastCleanup,
          cleanupInterval: RESOURCE_CLEANUP_INTERVAL,
          forceDebug,
@@ -6652,7 +6707,7 @@ function setupFrameHandling(page, forceDebug) {
     const batchSize = currentBatch.length;
     
     // Update hang detection info
-    currentBatchInfo = { batchStart, batchSize };
+    currentBatchInfo = { batchStart, batchSize, batchIndex, totalBatches: batchBounds.length };
 
     // Check if processing this entire site would exceed cleanup interval OR health check suggests restart
     const wouldExceedLimit = urlsSinceLastCleanup + batchSize >= Math.min(RESOURCE_CLEANUP_INTERVAL, 100);
@@ -6745,7 +6800,7 @@ function setupFrameHandling(page, forceDebug) {
       // Create new browser for next batch (preserve current proxy config)
       const restartProxyArgs = currentProxyKey ? getProxyArgs(currentBatch[0].config, forceDebug) : [];
       browser = await createBrowser(restartProxyArgs);
-      if (forceDebug) console.log(formatLogMessage('debug', `New browser instance created for batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1}`));
+      if (forceDebug) console.log(formatLogMessage('debug', `New browser instance created for batch ${batchIndex + 1}`));
       
       // Reset cleanup counter and add delay
       urlsSinceLastCleanup = 0;
@@ -6758,9 +6813,13 @@ function setupFrameHandling(page, forceDebug) {
     if (batchProxyKey !== currentProxyKey) {
       const debug = forceDebug || currentBatch[0].config.proxy_debug || currentBatch[0].config.socks5_debug;
       if (debug) {
-        const from = currentProxyKey || 'direct';
-        const to = batchProxyKey || 'direct';
-        console.log(formatLogMessage('proxy', `Switching proxy: ${from} → ${to}`));
+        const from = currentProxyLabel;
+        const to = batchProxyKey ? getProxyInfo(currentBatch[0].config) : 'direct';
+        // Two upstreams that differ only in credentials render identically
+        // here, because the display form redacts them -- say so, rather than
+        // print `X → X` and read as a spurious restart.
+        const why = from === to ? ' (same host, different credentials)' : '';
+        console.log(formatLogMessage('proxy', `Switching proxy: ${from} → ${to}${why}`));
       }
 
       try {
@@ -6798,12 +6857,13 @@ function setupFrameHandling(page, forceDebug) {
 
       browser = await createBrowser(proxyArgs);
       currentProxyKey = batchProxyKey;
+      currentProxyLabel = batchProxyKey ? getProxyInfo(currentBatch[0].config) : 'direct';
       urlsSinceLastCleanup = 0;
       await fastTimeout(TIMEOUTS.BROWSER_STABILIZE_DELAY);
     }
     
     if (forceDebug) {
-      console.log(formatLogMessage('debug', `Processing batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1}: ${batchSize} URL(s) (total processed: ${processedUrlCount})`));
+      console.log(formatLogMessage('debug', `Processing batch ${batchIndex + 1}: ${batchSize} URL(s) (total processed: ${processedUrlCount})`));
     }
     
     // Log start of concurrent processing for hang detection
@@ -7163,7 +7223,7 @@ function setupFrameHandling(page, forceDebug) {
       }, {});
       
       if (Object.keys(errorSummary).length > 0) {
-        console.log(formatLogMessage('debug', `Batch ${Math.floor(batchStart / RESOURCE_CLEANUP_INTERVAL) + 1} error summary:`));
+        console.log(formatLogMessage('debug', `Batch ${batchIndex + 1} error summary:`));
         Object.entries(errorSummary).forEach(([errorType, count]) => {
           console.log(formatLogMessage('debug', `  ${errorType}: ${count} error(s)`));
         });
@@ -7751,6 +7811,36 @@ function setupFrameHandling(page, forceDebug) {
     }
   }
   
+  // SOCKS5 auth-relay summary. lib/socks-relay.js counts every failed upstream
+  // tunnel open per relay, explicitly so this can be reported without a
+  // forceDebug re-run -- but nothing ever called getRelayStats(), so those
+  // counts were collected and discarded, the same way the Cloudflare outcome
+  // tallies were until the summary above started printing them. Read BEFORE
+  // closeAllSocksRelays(), which clears the relay map. Warn level and NOT
+  // gated on --silent, matching the dig-failure report: a failed tunnel open
+  // is a request that never left the machine, which a quiet run still needs.
+  // activeConnections is deliberately not reported -- by this point Chromium
+  // is gone, so the only field that still means anything is the error count,
+  // and closeAllSocksRelays already logs sockets it had to drain under --debug.
+  try {
+    const relayStats = getSocksRelayStats();
+    const failedRelays = relayStats.filter(r => r.errors > 0);
+    const relayErrors = failedRelays.reduce((n, r) => n + r.errors, 0);
+    if (relayErrors > 0) {
+      console.warn(formatLogMessage('warn', `${relayErrors} SOCKS5 upstream tunnel open(s) failed across ${failedRelays.length} of ${relayStats.length} relay(s) — those requests never reached the proxy`));
+      for (const r of failedRelays) {
+        console.warn(messageColors.warn('  Relay:') + ` ${r.key} via 127.0.0.1:${r.port} — ${r.errors} failed`);
+      }
+      // Legend, same shape as the dig-failure one: the two causes need
+      // different fixes and the count alone doesn't separate them.
+      console.warn(messageColors.warn('  ') + `check the upstream's concurrent-tunnel quota and its credentials; --debug names each failure's destination`);
+    } else if (forceDebug && relayStats.length > 0) {
+      console.log(formatLogMessage('debug', `${relayStats.length} SOCKS5 auth relay(s), 0 failed upstream tunnel opens`));
+    }
+  } catch (relayStatsErr) {
+    if (forceDebug) console.log(formatLogMessage('debug', `SOCKS5 relay stats summary failed: ${relayStatsErr.message}`));
+  }
+
   // Run the same cleanup the SIGINT/SIGTERM emergency handler does, so normal
   // scan completion isn't left depending on process.exit(0) to override
   // lingering setInterval handles (the cloudflare detection cache schedules
