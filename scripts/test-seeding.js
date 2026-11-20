@@ -862,6 +862,27 @@ check('unit', 'storage: an aimed-at origin the scan never landed on is not repor
   return 'no leak claimed for the aimed-at apex';
 });
 
+check('unit', 'storage: an unclearable leak names the aimed-at origin when none was observed', async () => {
+  // Companion to the two above. Nothing is OWED on an origin the scan was only
+  // aimed at, so when a leak is reported with no observed origin to name, the
+  // aimed-at ones are still the best answer to "where would they be?" -- they
+  // are where to go looking. Keeping them out of the message entirely cost the
+  // specificity the name-keyed version had, which reported `unreachable` and so
+  // always had a concrete origin to print: "on any known origin" where it used
+  // to say "on https://www.one.test".
+  const AIMED = 'https://www.one.test';
+  const items = [{ name: 'k1', value: 'v' }];
+  // Closed, so nothing can be cleared and no final URL can be observed.
+  const page = { isClosed: () => true, url: () => { throw new Error('closed'); }, browser: () => ({ pages: async () => [] }) };
+
+  retainSeededStorage('one.test', items, AIMED);
+  const { output } = await captureLogs(() => removeStorage(page, items, { site: 'one.test', host: 'www.one.test', origin: AIMED }, false));
+  assertIncludes(output, 'Could not clear 1 seeded localStorage key(s)', 'the leak is still reported');
+  assertIncludes(output, AIMED, 'the aimed-at origin is named as where to look');
+  assertExcludes(output, 'any known origin', 'the vaguer phrasing is only for having no origin at all');
+  return 'named the aimed-at origin';
+});
+
 check('unit', 'css blocking: the selector gate', async () => {
   // One gate for both call sites (pre-navigation and runtime), so they cannot
   // disagree about what counts as configured.
