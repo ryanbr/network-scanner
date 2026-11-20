@@ -462,15 +462,29 @@ const dnsPrecheckTimeoutMs = 4000;
 // ALIVE and are deliberately excluded. host -> reason (first seen).
 const showDeadDomains = args.includes('--show-dead-domains');
 const _deadDomains = new Map();
-function recordDeadDomain(urlOrHost, reason) {
-  // Populate unconditionally — the pre-check skip reads _deadDomains to drop
-  // repeat URLs on a host already proven dead this run, which must work whether
-  // or not --show-dead-domains is set. The end-of-scan REPORT is separately
+// Twin of _deadDomains keyed by CONNECTION MODE as well as host, and the only
+// one the pre-check skip consults. _deadDomains stays host-keyed because it
+// backs the --show-dead-domains REPORT, where one line per host is what you
+// want. The skip cannot share it: a host reached both through a proxy and
+// directly in one scan (which this repo's own configs do, deliberately -- the
+// direct clone of a proxied site exists to recover the URLs the proxy cannot
+// tunnel) would otherwise have its direct attempt skipped on the strength of
+// the PROXIED attempt failing, never trying the connection that works. Keyed
+// `${mode}\n${host}`, mode being the proxy identity ('' for direct), so each
+// mode only ever skips on evidence it gathered itself.
+const _deadByMode = new Map();
+function recordDeadDomain(urlOrHost, reason, mode = '') {
+  // Populate unconditionally — the pre-check skip reads _deadByMode to drop
+  // repeat URLs on a host already proven dead this run IN THIS MODE, which must
+  // work whether or not --show-dead-domains is set. The end-of-scan REPORT is separately
   // gated on showDeadDomains, so the flag still controls output, not recording.
   if (!urlOrHost) return;
   let host = urlOrHost;
   try { host = new URL(urlOrHost).hostname; } catch { /* already a bare host */ }
-  if (host && !_deadDomains.has(host)) _deadDomains.set(host, reason);
+  if (!host) return;
+  if (!_deadDomains.has(host)) _deadDomains.set(host, reason);
+  const modeKey = `${mode}\n${host}`;
+  if (!_deadByMode.has(modeKey)) _deadByMode.set(modeKey, reason);
 }
 
 // Per-scan cache of negative DNS lookups. OS resolvers don't always cache
@@ -5565,7 +5579,7 @@ function setupFrameHandling(page, forceDebug) {
           // rest of a live host's URLs.
           const deadNav = /ERR_NAME_NOT_RESOLVED|ERR_ADDRESS_UNREACHABLE/.exec(err.message || '');
           if (deadNav) {
-            recordDeadDomain(currentUrl, deadNav[0]);
+            recordDeadDomain(currentUrl, deadNav[0], getProxyIdentity(siteConfig));
             // Corroborate-then-persist to the negative cache (.dnsnegcache with
             // --dns-cache → cross-scan skip; else in-memory). Chrome resolves via
             // the possibly-flaky SYSTEM resolver, so its ERR_NAME_NOT_RESOLVED may
@@ -5574,7 +5588,10 @@ function setupFrameHandling(page, forceDebug) {
             // ERR_ADDRESS_UNREACHABLE is routing (the host resolves), so the
             // resolve succeeds and it's correctly not cached. Fire-and-forget:
             // off the critical path; saveDiskCache flushes on exit.
-            if (dnsPrecheckEnabled && deadNav[0] === 'ERR_NAME_NOT_RESOLVED') {
+            // Not for a proxied site: the corroborating resolve runs locally, so it
+            // would leak the hostname AND could confirm "dead" for a host that is only
+            // unresolvable from here. Leave it reported but uncached.
+            if (dnsPrecheckEnabled && !needsProxy(siteConfig) && deadNav[0] === 'ERR_NAME_NOT_RESOLVED') {
               let navHost = '';
               try { navHost = new URL(currentUrl).hostname; } catch {}
               if (navHost && !/^[\d.:]+$|^\[/.test(navHost) && !dnsNegativeCache.has(navHost)) {
@@ -5584,7 +5601,7 @@ function setupFrameHandling(page, forceDebug) {
                     const code = (e && (e.code || e.message)) || '';
                     if (isNonExistenceError(code)) {
                       dnsNegativeCacheSet(navHost, code);
-                      recordDeadDomain(navHost, code);
+                      recordDeadDomain(navHost, code, getProxyIdentity(siteConfig));
                       if (forceDebug) console.log(formatLogMessage('debug', `Dead domain confirmed by --dns resolver (${code}) — caching ${navHost} (skips next run with --dns-cache)`));
                     }
                   }
@@ -6923,20 +6940,47 @@ function setupFrameHandling(page, forceDebug) {
        // dns.lookup calls sit queued and blow the timeout while never
        // actually starting — wrongly skipping live domains. c-ares isn't
        // threadpool-bound so it's immune to that contention.
-       if (dnsPrecheckEnabled && taskDomain && !/^[\d.:]+$|^\[/.test(taskDomain)) {
-         // Already proven dead earlier THIS run — either a pre-check NXDOMAIN or
-         // a prior URL's navigation hit ERR_NAME_NOT_RESOLVED / ERR_ADDRESS_UNREACHABLE
-         // (recordDeadDomain populates _deadDomains for both). Skip the repeat
-         // instead of paying another fail-open navigation on a multi-URL dead
-         // host (e.g. dlstreams.top?id=39/54/347). In-scan only (NOT persisted):
-         // Chrome resolves via the system resolver, so a nav-level failure could
-         // be a system-resolver glitch on a live host — a false "dead" must not
-         // carry across runs. Cheap: a Map lookup, no DNS resolve.
-         if (_deadDomains.has(taskDomain)) {
+       // A PROXIED task is never pre-checked here. This resolve goes through the
+       // LOCAL resolver, which both discloses the hostname the proxy exists to hide
+       // and answers the wrong question: what resolves from here says nothing about
+       // what resolves at the upstream, so a local NXDOMAIN would skip a URL the
+       // proxy could have loaded. Chrome's own lookups for these sites are already
+       // forced proxy-side by --host-resolver-rules (see proxy_remote_dns in
+       // lib/proxy.js), so this was the one path still leaking them.
+       // The task's connection MODE ('' when direct), from the same identity
+       // function the batch grouping uses, so "same mode" here means "same browser
+       // and same credentials" and nothing coarser. Never logged: it carries the
+       // proxy username and a password hash (see getProxyIdentity in lib/proxy.js).
+       const taskMode = proxyKeyFor(task.config);
+       const taskProxied = taskMode !== '';
+       const taskPrecheckable = dnsPrecheckEnabled && taskDomain && !/^[\d.:]+$|^\[/.test(taskDomain);
+       // Already proven dead earlier THIS run, by a navigation or a pre-check that
+       // used THIS mode -- either a pre-check NXDOMAIN or a navigation hitting
+       // ERR_NAME_NOT_RESOLVED / ERR_ADDRESS_UNREACHABLE. Skip the repeat instead of
+       // paying another fail-open navigation on a multi-URL dead host (e.g.
+       // dlstreams.top?id=39/54/347). Applies to proxied tasks too: the evidence was
+       // gathered through their own proxy, so it answers the question being asked.
+       // In-scan only (NOT persisted): a nav-level failure could be a resolver
+       // glitch on a live host, and a false "dead" must not carry across runs.
+       if (taskPrecheckable) {
+         const deadReason = _deadByMode.get(`${taskMode}\n${taskDomain}`);
+         if (deadReason !== undefined) {
            dnsPrecheckSkips++;
-           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check: ${taskDomain} already dead this run (${_deadDomains.get(taskDomain)}) — skipping`));
-           return { url: task.url, rules: [], success: false, error: `DNS: ${_deadDomains.get(taskDomain)}`, skipped: true };
+           if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check: ${taskDomain} already dead this run (${deadReason}) — skipping`));
+           return { url: task.url, rules: [], success: false, error: `DNS: ${deadReason}`, skipped: true };
          }
+       }
+       // Everything below this point is LOCAL-resolver evidence (negative cache,
+       // dig/whois positive index, the resolve itself), which a proxied task must
+       // neither consult nor create: it would disclose the hostname the proxy exists
+       // to hide, and answer the wrong question -- what resolves from here says
+       // nothing about what resolves at the upstream, so a local NXDOMAIN would skip
+       // a URL the proxy could have loaded. Chrome's own lookups for these sites are
+       // already forced proxy-side by --host-resolver-rules (proxy_remote_dns).
+       if (taskPrecheckable && taskProxied && forceDebug) {
+         console.log(formatLogMessage('debug', `DNS pre-check skipped (proxied site; local resolution would leak the hostname and answer the wrong question): ${taskDomain}`));
+       }
+       if (taskPrecheckable && !taskProxied) {
          const cached = dnsNegativeCache.get(taskDomain);
          if (cached && Date.now() - cached.timestamp < DNS_NEGATIVE_CACHE_TTL_MS) {
            dnsPrecheckSkips++;
@@ -6976,7 +7020,7 @@ function setupFrameHandling(page, forceDebug) {
            if (isNonExistenceError(errCode)) {
              dnsBreaker.record(false); // resolver answered NXDOMAIN — healthy
              dnsNegativeCacheSet(taskDomain, errCode);
-             recordDeadDomain(taskDomain, errCode);
+             recordDeadDomain(taskDomain, errCode, taskMode);
              dnsPrecheckSkips++;
              if (forceDebug) console.log(formatLogMessage('debug', `DNS pre-check failed: ${taskDomain} — ${errCode}`));
              return { url: task.url, rules: [], success: false, error: `DNS: ${errCode}`, skipped: true };
