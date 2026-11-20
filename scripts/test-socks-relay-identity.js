@@ -440,6 +440,25 @@ const check = (name, ok, detail) => {
       ungated.peak === 5, `peak ${ungated.peak} simultaneous of 5 clients`);
   }
 
+  // Every siteConfig key has to be registered with the validator, or
+  // normalizeSiteConfig -- which runs on EVERY scan, not just under
+  // --validate-config -- reports it as a typo and states that the "value will
+  // be ignored at runtime". Measured after proxy_max_tunnels shipped
+  // unregistered: each gated run printed
+  // `unknown siteConfig key 'proxy_max_tunnels' - did you mean 'proxy'?` while
+  // the gate was demonstrably working, which is advice to delete a setting that
+  // works. Checked against the shipped source rather than an export, the way
+  // the drain budget above is read, because the set is module-private.
+  {
+    const validatorSrc = fs.readFileSync(path.join(__dirname, '..', 'lib', 'validate_rules.js'), 'utf8');
+    const setBody = validatorSrc.slice(validatorSrc.indexOf('KNOWN_SITE_CONFIG_KEYS'));
+    const registered = setBody.slice(0, setBody.indexOf(']);'));
+    for (const key of ['proxy_max_tunnels']) {
+      check(`${key} is registered with the siteConfig validator`,
+        new RegExp(`'${key}'`).test(registered), 'present in KNOWN_SITE_CONFIG_KEYS');
+    }
+  }
+
   console.log(failures === 0 ? `\nAll ${checks} check(s) passed` : `\n${failures} of ${checks} check(s) FAILED`);
   process.exit(failures === 0 ? 0 : 1);
 })().catch(e => { console.error('harness error:', e); process.exit(2); });
