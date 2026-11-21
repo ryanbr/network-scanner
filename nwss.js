@@ -1264,6 +1264,7 @@ VPN Options (requires sudo, affects system routing — not isolated per-site dur
                                                true/false - Close extra windows after URL group completes (default: false)
                                                "realtime" - Continuously cleanup oldest pages when threshold exceeded
                                                "all" - Aggressive cleanup of all content pages after group
+                                                       (both modes spare a page still marked as processing)
   window_cleanup_threshold: <number>           For realtime mode: max pages to keep open (default: 8)
 
 Referrer Header Options:
@@ -6317,11 +6318,21 @@ function setupFrameHandling(page, forceDebug) {
         }
       }
 
+      // Mark the page idle as teardown starts. This used to sit INSIDE the
+      // `if (cdpSessionManager)` below, which has nothing to do with page
+      // usage: cdpSessionManager stays null until the CDP setup at ~3410, while
+      // updatePageUsage(page, true) already fired at ~3250, so a URL that threw
+      // between those two lines left the page flagged isProcessing forever. The
+      // page is normally closed further down this finally, which hides it --
+      // but if that close also fails, the page lingers flagged, and both
+      // cleanup paths in lib/browserhealth.js now refuse to reclaim an
+      // actively-processing page. Clearing it unconditionally removes the
+      // window rather than teaching the cleanups to second-guess the flag.
+      if (page && !page.isClosed()) {
+        updatePageUsage(page, false);
+      }
+
       if (cdpSessionManager) {
-        // Mark page as idle when cleanup starts
-        if (page && !page.isClosed()) {
-          updatePageUsage(page, false);
-        }
         await cdpSessionManager.cleanup();
       }
       
