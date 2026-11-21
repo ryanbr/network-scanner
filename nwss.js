@@ -5143,7 +5143,7 @@ function setupFrameHandling(page, forceDebug) {
         // Enhanced navigation options for Puppeteer 23.x
         const defaultGotoOptions = {
           waitUntil: defaultWaitUntil,
-          timeout: Math.min(timeout, TIMEOUTS.DEFAULT_PAGE), // Cap at default page timeout
+          timeout, // the site's own timeout, unclamped -- see the note below
           // Puppeteer 23.x: Fixed referrer header handling
           ...(siteConfig.referrer_headers && (() => {
             const referrerUrl = getReferrerForUrl(currentUrl, siteConfig.referrer_headers, siteConfig.referrer_disable, forceDebug);
@@ -5155,18 +5155,23 @@ function setupFrameHandling(page, forceDebug) {
         const gotoOptions = siteConfig.goto_options 
           ? { ...defaultGotoOptions, ...siteConfig.goto_options } : defaultGotoOptions;
 
-        // Surface the clamp -- the goto timeout is capped at DEFAULT_PAGE, so a
-        // site asking for `timeout: 120000` navigates with 35000 and the
-        // resulting "Navigation timeout of 35000 ms exceeded" reads as a bug in
-        // the scanner rather than a ceiling (28 of 31 configs here set a
-        // timeout above it). Mirrors the delay clamp log; unlike `delay` there
-        // is no opt-out key for regular sites, so this names the ceiling rather
-        // than how to lift it.
+        // The goto timeout used to be Math.min(timeout, TIMEOUTS.DEFAULT_PAGE).
+        // That ceiling entered as Math.min(timeout, 30000) "for faster
+        // failures" and was only renamed by the magic-numbers refactor, so a
+        // config asking for `timeout: 120000` navigated with 35000 and reported
+        // "Navigation timeout of 35000 ms exceeded" -- a number present in no
+        // config. 0e28987 logged the clamp instead of moving it, to measure how
+        // often it bit; it bites always (every site in every config in this tree
+        // asks for more than 35000) and a live run lost 2 of 13 URLs to it in a
+        // single round. The per-URL budget was already sized for the UNCLAMPED
+        // value -- PER_URL_TIMEOUT_MS adds its 30s margin to task.config.timeout,
+        // not to the capped one -- so this ceiling was the one place a site's
+        // configured number silently did not apply.
+        //
+        // What is left below is an OVERRIDE, not a clamp: only an explicit
+        // goto_options.timeout can now shorten a navigation.
         if (forceDebug && gotoOptions.timeout < timeout) {
-          const via = (siteConfig.goto_options && siteConfig.goto_options.timeout !== undefined)
-            ? 'goto_options.timeout'
-            : 'fixed TIMEOUTS.DEFAULT_PAGE ceiling';
-          console.log(formatLogMessage('debug', `navigation timeout ${timeout}ms clamped to ${gotoOptions.timeout}ms (${via}) for ${currentUrl}`));
+          console.log(formatLogMessage('debug', `navigation timeout ${timeout}ms overridden to ${gotoOptions.timeout}ms by goto_options.timeout for ${currentUrl}`));
         }
 
         // Enhanced navigation with redirect handling - passes existing gotoOptions
